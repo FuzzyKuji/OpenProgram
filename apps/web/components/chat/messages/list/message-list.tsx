@@ -40,6 +40,7 @@ import { SystemAccessWaits } from "../runtime/system-access-waits";
 import { MessageRail } from "../navigation/message-rail";
 import { ConversationFind } from "../navigation/conversation-find";
 import { AgentBranchBanner } from "../cards/agent-branch-banner";
+import { WorktreeBranchMarker } from "../cards/worktree-branch-marker";
 import { BranchedFromBanner } from "../cards/branched-from-banner";
 import { SelectionQuote } from "../editing/quote-to-chat";
 import { TranscriptRows, coveringOf, useOriginalsToggle, usePlacedDecisions } from "./transcript-rows";
@@ -48,7 +49,8 @@ import { BotViewContext } from "./transcript-view-scope";
 import { timeBreaks } from "@/lib/chat/transcript/bot-view";
 import { useBotView } from "@/lib/chat/transcript/use-bot-view";
 import { useBotViewTransition } from "./use-bot-view-transition";
-import { PendingReplyIndicator, TranscriptSkeleton, WorkspaceAlignmentBanner } from "./rows/list-states";
+import { OperationStatusIndicator, PendingReplyIndicator, TranscriptSkeleton } from "./rows/list-states";
+import { operationStatusText } from "@/lib/chat/run/run-operation";
 
 const JUMP_LATEST_FADE_MS = 280;
 
@@ -238,6 +240,9 @@ export const MessageList = memo(function MessageList({
   // this guard the user sees two stacked "Agentic" rows: the real
   // placeholder bubble + the standalone, double-rendering.
   const showPending = runningTask !== null && lastRole === "user";
+  // An operation that is not a reply (/compact, a rewind, a turn's own
+  // compaction) is named in the indicator's place.
+  const operationText = operationStatusText(runningTask, text);
   const timeLabels = useMemo(() => timeBreaks(ids.flatMap((id) => {
     const message = selectRow(sessionId, id)(useSessionStore.getState());
     return message ? [message] : [];
@@ -259,7 +264,7 @@ export const MessageList = memo(function MessageList({
       <SelectionQuote key={sessionId} sessionId={sessionId} />
       <BranchedFromBanner />
       <AgentBranchBanner />
-      <WorkspaceAlignmentBanner sessionId={sessionId} />
+      <WorktreeBranchMarker />
       {paintRows ? (
         <MessageRail hiddenKey={[...hiddenCovered].join("\n")} onSeek={setRailTarget} />
       ) : null}
@@ -274,7 +279,9 @@ export const MessageList = memo(function MessageList({
           onMeasured={notifyMeasured}
         />
       ) : null}
-      {paintRows && showPending ? (
+      {paintRows && operationText && !botView ? (
+        <OperationStatusIndicator label={operationText} timestamp={runningTask?.started_at} />
+      ) : paintRows && showPending ? (
         botView ? <BotTyping /> : <PendingReplyIndicator timestamp={runningTask?.started_at} />
       ) : null}
       {paintRows ? <DecisionOutputs key={`decisions-${sessionId}`} sessionId={sessionId} placed={placedDecisionAnchors} /> : null}

@@ -6,8 +6,8 @@
 <thead><tr><th scope="col">检查</th><th scope="col">回答</th><th scope="col">方式</th></tr></thead>
 <tbody>
 <tr><th scope="row">身份</th><td>谁在请求</td><td>每个请求带认证主体和固定的能力上限；嵌套 Agent 永远不能扩大它</td></tr>
-<tr><th scope="row">权限</th><td>这次操作能否运行</td><td>在会话模式下做统一判定；模式可在轮次中途改变，下一次工具检查即采用。见<a href="permission-decision.zh.html">权限判定与拒绝</a>。</td></tr>
-<tr><th scope="row">沙箱</th><td>已批准的进程能碰什么</td><td>Seatbelt（macOS）或 bubblewrap（Linux）。对话的 Sandbox 开关打开时才生效。</td></tr>
+<tr><th scope="row">权限</th><td>这次操作能否运行</td><td>在执行所属分支的模式下做统一判定；模式可在轮次中途改变，下一次工具检查即采用。见<a href="permission-decision.zh.html">权限判定与拒绝</a>。</td></tr>
+<tr><th scope="row">沙箱</th><td>已批准的进程能碰什么</td><td>Seatbelt（macOS）或 bubblewrap（Linux）。这一轮所在对话分支的 Sandbox 开关打开时才生效。</td></tr>
 </tbody>
 </table>
 <p class="note">同一契约覆盖 Web、CLI、ACP、频道、嵌套 Agent、定时任务和续接。</p>
@@ -18,7 +18,6 @@
 <tbody>
 <tr><th scope="row">已认证的本地入口</th><td>在持久接纳前把完整 Owner 身份附到 <code translate="no">TurnRequest</code>。审计主体和执行请求是两个值；只有接纳主体不能授权工具。</td></tr>
 <tr><th scope="row">已配对频道</th><td>保持配对等级</td></tr>
-<tr><th scope="row">浏览器 MCP 授权</th><td>可使用 <code translate="no">mcp_browser</code></td></tr>
 <tr><th scope="row">嵌套请求</th><td>继承，不能扩大</td></tr>
 <tr><th scope="row">身份缺失或未知</th><td>按拒绝处理，带稳定原因代码</td></tr>
 <tr><th scope="row">恢复</th><td>绝不从来源标签或模型文本重建 Owner 身份。没有身份的旧请求必须经认证入口重新提交。</td></tr>
@@ -54,14 +53,14 @@
 </table>
 
 <h2 id="modes">模式解析</h2>
-<p>先取对话设置，再取项目默认，最后 Bypass permissions（<code translate="no">DEFAULT_PERMISSION</code>）。解析后的模式用于接纳和界面确认。<a href="permission-decision.zh.html#modes">各模式</a>与判定一起定义。</p>
+<p>先取这一轮所在对话分支的设置，再取项目默认，最后 Bypass permissions（<code translate="no">DEFAULT_PERMISSION</code>）。解析后的模式用于接纳和界面确认。<a href="permission-decision.zh.html#modes">各模式</a>与判定一起定义。</p>
 
 <h2 id="permission-lifecycle">权限的实时变更</h2>
 <table class="stack fixed">
 <thead class="sr"><tr><th scope="col">方面</th><th scope="col">规则</th></tr></thead>
 <tbody>
-<tr><th scope="row">状态</th><td><code translate="no">SessionStore</code> 持有带版本的 <code translate="no">permission_state</code> 字典，含模式和 Owner 主体。原子比较并设置防止旧客户端覆盖新选择。没有并行的审批数据库或通用策略引擎。</td></tr>
-<tr><th scope="row">设置命令</th><td>WebSocket；认证 Owner，校验会话范围，返回权威模式和版本。冲突保持为错误。</td></tr>
+<tr><th scope="row">状态</th><td><code translate="no">SessionStore</code> 为各分支持有带版本的 <code translate="no">permission_state</code> 字典，含模式和 Owner 主体。原子比较并设置防止旧客户端覆盖新选择。没有并行的审批数据库或通用策略引擎。</td></tr>
+<tr><th scope="row">设置命令</th><td>WebSocket；认证 Owner，校验会话和分支范围，返回权威模式、版本及分支身份。冲突保持为错误。</td></tr>
 <tr><th scope="row">生效点</th><td>服务器确认时，与进行中的模型请求无关。之后每次普通审批检查都采用，包括同一批次的后续调用。单次调用在分派期间保持判定；已授权调用不中断。无需重启或下一条消息。</td></tr>
 <tr><th scope="row">Web 和 App</th><td>立即用已确认版本发送，只有版本未知时才先读。请求中的选择与已确认的模式分开显示；旧确认和水合快照不能替换新状态；传输错误保持可见。</td></tr>
 <tr><th scope="row">未发送的草稿</th><td>在本地存选择，不创建会话；首次提交时带上</td></tr>
@@ -92,7 +91,7 @@
 <tr><th scope="row"><code translate="no">workspace-write</code></th><td>可写工作根，屏蔽受保护读取，过滤凭据环境变量，<code translate="no">sandbox.network</code> 未开时断网</td></tr>
 <tr><th scope="row"><code translate="no">danger-full-access</code></th><td>主机用户权限</td></tr>
 <tr><th scope="row">后端缺失</th><td>默认拒绝；显式 <code translate="no">warn</code> 是已确认的回退</td></tr>
-<tr><th scope="row">Sandbox 开关</th><td>会话覆盖，解析进不可变的轮次快照。变更影响之后的轮次，不影响当前进程、其他会话、定时任务或继承的子级策略。普通审批不会关闭它。</td></tr>
+<tr><th scope="row">Sandbox 开关</th><td>分支覆盖，解析进不可变的轮次快照。变更影响之后的轮次，不影响当前进程、其他会话、定时任务或继承的子级策略。普通审批不会关闭它。</td></tr>
 <tr><th scope="row">定时命令和提示</th><td>触发时使用所属对话的设置</td></tr>
 </tbody>
 </table>
@@ -168,7 +167,7 @@
 <thead class="sr"><tr><th scope="col">模块</th><th scope="col">职责</th></tr></thead>
 <tbody>
 <tr><th scope="row"><code translate="no">permissions/authority.py</code></th><td>身份和能力上限</td></tr>
-<tr><th scope="row"><code translate="no">permissions/state.py</code></th><td>带版本的会话状态、Owner 校验、原子更新</td></tr>
+<tr><th scope="row"><code translate="no">permissions/state.py</code></th><td>带版本的分支状态、Owner 校验、原子更新</td></tr>
 <tr><th scope="row"><code translate="no">permissions/policy.py</code></th><td>统一判定和显式规则</td></tr>
 <tr><th scope="row"><code translate="no">permissions/classifier.py</code></th><td>Auto 风险分类；只有 JSON 布尔 <code translate="no">true</code> 才允许执行</td></tr>
 <tr><th scope="row"><code translate="no">permissions/approval.py</code></th><td>审批清单、精确消费等待、工具执行</td></tr>

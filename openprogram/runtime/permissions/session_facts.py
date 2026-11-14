@@ -59,7 +59,7 @@ class SessionFacts:
         """The turn request an execution was admitted with."""
         raise RuntimeError("conversation turns are unavailable")
 
-    def web_use_available(self, surface_context: dict | None) -> bool:
+    def browser_pages_available(self, surface_context: dict | None) -> bool:
         """Whether the turn's surface grants the built-in browser Pages."""
         return False
 

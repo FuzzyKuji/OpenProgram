@@ -620,7 +620,8 @@ def run_ink_tui(
             tty_out, tty_err = owned_out, owned_err
             owns_tty_fds = True
             log_fd = os.open(
-                str(log_path), os.O_WRONLY | os.O_CREAT | os.O_APPEND
+                str(log_path),
+                os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_BINARY", 0),
             )
             try:
                 os.dup2(log_fd, 1)

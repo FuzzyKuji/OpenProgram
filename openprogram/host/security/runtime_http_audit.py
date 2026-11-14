@@ -146,13 +146,12 @@ BOUNDARY_MANIFEST = (
         ),
     ),
     BoundaryExclusion(
-        path="programs/applications/browser/chrome.py",
+        path="programs/applications/browser/app_endpoint.py",
         boundary_owner="browser-control",
-        reason="browser bootstrap/navigation is outside Runtime URL fetch policy",
-        kinds=frozenset({"socket.create_connection", "urllib.request.build_opener"}),
+        reason="the loopback probe of the App's own CDP endpoint is outside Runtime URL fetch policy",
+        kinds=frozenset({"urllib.request.build_opener"}),
         call_counts=(
-            ("socket.create_connection", 1),
-            ("urllib.request.build_opener", 2),
+            ("urllib.request.build_opener", 1),
         ),
     ),
     BoundaryExclusion(
@@ -192,12 +191,6 @@ BOUNDARY_MANIFEST = (
         reason="the worker probes its own /healthz on a fixed numeric 127.0.0.1 port, with no proxy",
         kinds=frozenset({"urllib.request.build_opener"}),
         call_counts=(("urllib.request.build_opener", 1),),
-    ),
-    BoundaryExclusion(
-        path="extensions/mcp/server/service.py",
-        boundary_owner="owner-control-plane",
-        reason="stdio MCP calls the authenticated loopback OpenProgram worker",
-        kinds=frozenset({"urllib.request.build_opener"}),
     ),
     BoundaryExclusion(
         path="interfaces/cli/ink.py",

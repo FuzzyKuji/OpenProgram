@@ -33,6 +33,11 @@ def invocation(tmp_path, monkeypatch):
     monkeypatch.setattr('openprogram.runtime.execution.default_store', lambda: executions)
     monkeypatch.setattr('openprogram.runtime.execution.default_control_service', lambda: control)
     (tmp_path / 'state').mkdir()
+    # The turns these tests run record the last used model in config.json;
+    # in the worker's shared home that record would make every later test's
+    # new conversation start pinned to this test's model.
+    from openprogram.state import paths
+    monkeypatch.setattr(paths, 'get_state_dir', lambda: tmp_path / 'state')
     monkeypatch.setattr(manager, '_state_root', lambda: tmp_path / 'state')
     manager.create('main', name='Default', make_default=True)
     manager.create('research', name='Research')

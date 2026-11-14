@@ -123,20 +123,35 @@ class _WriterStatusStore:
         *,
         retryable: bool,
     ) -> bool:
-        """Record one failure; True when it starts a failure streak or
-        changes its reason, which is when someone should hear about it."""
+        """Record one failure; True when nothing will retry it and it starts
+        a failure streak, changes its reason, or is the first time this
+        reason stops being retried: that is when someone should hear about
+        it, since a retryable failure is retried on its own.
+
+        Once a reason has stopped being retried, it reads as stopped until
+        a write succeeds or the reason changes: several conversations
+        failing for one cause, each a little behind the other, keep saying
+        "stopped" rather than flipping back to "retrying" between them, and
+        that one cause is announced once.
+        """
+        code = _normalize_reason_code(reason_code)
         with _STATUS_WRITE_LOCK, _status_file_lock(self.path):
             payload = self.load()
             previous = payload.get("last_failure") or {}
-            news = (
-                payload.get("last_outcome") != "failure"
-                or previous.get("reason_code") != _normalize_reason_code(reason_code)
+            same_streak = (
+                payload.get("last_outcome") == "failure"
+                and previous.get("reason_code") == code
+            )
+            stopped_before = same_streak and previous.get("retryable") is False
+            retryable = bool(retryable) and not stopped_before
+            news = not retryable and (
+                not same_streak or previous.get("retryable") is True
             )
             payload["last_outcome"] = "failure"
             payload["last_failure"] = {
                 "at": _now(),
-                "reason_code": _normalize_reason_code(reason_code),
-                "retryable": bool(retryable),
+                "reason_code": code,
+                "retryable": retryable,
             }
             self._save(payload)
         return news
@@ -162,10 +177,8 @@ def record_failure(
     except Exception as exc:  # noqa: BLE001 - status cannot fail a write
         logger.debug("memory writer status failure was not persisted: %s", exc)
         return
-    # A retryable failure is retried on its own; only one nothing will
-    # retry is worth interrupting someone for.
-    if news and not retryable:
-        _announce_failure(reason_code, retryable=retryable)
+    if news:
+        _announce_failure(reason_code, retryable=False)
 
 
 def _announce_failure(
@@ -249,6 +262,42 @@ def pending_turn_count(memory_dir: Path, session_store: Any | None = None) -> in
     return total
 
 
+def retry_summary(memory_dir: Path) -> dict[str, Any]:
+    """The idle-session watcher's retries for conversations that write to
+    this memory, as the status shows them.
+
+    ``waiting`` sessions are offered again at ``next_attempt_at``;
+    ``stopped`` ones failed ``max_identical_failures`` times on the same
+    input and wait for their conversation to change.
+    """
+    from ..session_watcher import SESSION_MAX_ATTEMPTS, retries_for
+
+    entries = retries_for(memory_dir)
+    waiting = [e for e in entries.values() if not e.get("stopped")]
+    stopped = [e for e in entries.values() if e.get("stopped")]
+
+    def stamp(value: Any) -> str | None:
+        if not isinstance(value, (int, float)):
+            return None
+        return datetime.fromtimestamp(value, timezone.utc).isoformat()
+
+    return {
+        "waiting": len(waiting),
+        "stopped": len(stopped),
+        "next_attempt_at": stamp(min(
+            (e["next_at"] for e in waiting), default=None,
+        )),
+        "max_attempts": max(
+            (e["attempts"] for e in entries.values()), default=0,
+        ),
+        "max_identical_failures": SESSION_MAX_ATTEMPTS,
+        "reason_codes": sorted({
+            _normalize_reason_code(e.get("reason_code"))
+            for e in entries.values()
+        }),
+    }
+
+
 def status(memory_dir: Path) -> dict[str, Any]:
     result = _WriterStatusStore(memory_dir).load()
     try:
@@ -256,7 +305,64 @@ def status(memory_dir: Path) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001 - status remains queryable
         logger.debug("memory pending count unavailable: %s", exc)
         result["pending_turns"] = None
+    # Both appear only while there is something to say, so a healthy
+    # writer reads the same as it always has.
+    try:
+        retries = retry_summary(memory_dir)
+    except Exception as exc:  # noqa: BLE001 - status remains queryable
+        logger.debug("memory retry state unavailable: %s", exc)
+        retries = None
+    if retries and (retries["waiting"] or retries["stopped"]):
+        result["retries"] = retries
+    # Topic files that are not text: the one thing a file can hold that
+    # memory cannot read. Each stays out of memory on its own.
+    not_text = unreadable_topics(memory_dir)
+    if not_text:
+        result["not_text"] = not_text
+    paused = writing_paused(memory_dir)
+    if paused:
+        result["paused"] = paused
     return result
+
+
+def unreadable_topics(memory_dir: Path) -> list[str]:
+    """Topic files (``topics/...``) whose bytes do not decode as text."""
+    from ..markdown.parser import NOT_TEXT, read_topic_tree
+
+    try:
+        problems = read_topic_tree(Path(memory_dir) / "topics").problems
+    except Exception:  # noqa: BLE001 - status remains queryable
+        return []
+    return sorted(
+        f"topics/{relative}" for relative, problem in problems.items()
+        if problem == NOT_TEXT
+    )
+
+
+def writing_paused(memory_dir: Path) -> dict[str, Any] | None:
+    """Why every conversation's writing into this memory is paused, from
+    the watcher's record: this memory's own stop, or the writer's sign-in.
+    None while nothing is paused."""
+    try:
+        from ..session_watcher import load_state, _same_dir
+
+        state = load_state()
+    except Exception:  # noqa: BLE001 - status remains queryable
+        return None
+    for scope, stops in (
+        ("credential", state.get("credentials") or {}),
+        ("workspace", {
+            key: stop for key, stop in (state.get("workspaces") or {}).items()
+            if _same_dir(key, memory_dir)
+        }),
+    ):
+        for stop in stops.values():
+            return {
+                "scope": scope,
+                "reason_code": _normalize_reason_code(stop.get("reason_code")),
+                "reason": str(stop.get("reason") or ""),
+            }
+    return None
 
 
 __all__ = [

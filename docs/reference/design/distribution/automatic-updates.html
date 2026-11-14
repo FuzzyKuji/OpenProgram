@@ -62,7 +62,8 @@
 <tbody>
 <tr><th scope="row">macOS</th><td><code translate="no">OpenProgram-&lt;version&gt;-mac-&lt;arch&gt;.dmg</code>, falling back to <code translate="no">-unsigned.dmg</code>. Saved to a location the user picks. The running App is never replaced</td></tr>
 <tr><th scope="row">Windows</th><td>Only when the release needs a newer shell: <code translate="no">OpenProgram-&lt;version&gt;-win-&lt;arch&gt;.exe</code>, or <code translate="no">-unsigned.exe</code> on an App built unsigned. Opens the per-user NSIS wizard</td></tr>
-<tr><th scope="row">Linux</th><td>Only when the release needs a newer shell. deb: saved and opened. AppImage: replaces the running file and restarts when its folder is writable</td></tr>
+<tr><th scope="row">Linux deb</th><td>Only when the release needs a newer shell. The App sits under <code translate="no">/opt</code>, which it cannot write, so it replaces nothing itself: the <code translate="no">.deb</code> is saved where the user picks and opened with the system's package installer, which asks for the administrator password</td></tr>
+<tr><th scope="row">Linux AppImage</th><td>Only when the release needs a newer shell. Downloaded beside the running file, verified, made executable and renamed over it in one step; the running copy keeps its old file open, and the App restarts from the new one. In a folder it cannot write, the file is saved where the user picks</td></tr>
 </tbody>
 </table>
 
@@ -106,6 +107,9 @@
 <tr><th scope="row">Network path</th><td>Chromium's network stack, so the system proxy applies. On API 403, 429, 5xx or no answer: the <code translate="no">releases/latest</code> redirect plus <code translate="no">release-manifest.json</code>. If that fails too, an optional <code translate="no">update-source.json</code>, only with an Ed25519 signature from a built-in key</td></tr>
 <tr><th scope="row">Renderer IPC</th><td>Exposes only state, check, boolean settings, download, open release, subscribe. Accepts no URL, path, hash, repository or command. Public state strips asset name, URL and SHA-256. Closing a window aborts nothing</td></tr>
 <tr><th scope="row">Downloaded files</th><td>Random exclusive temporary files, short writes handled, deleted on any mismatch. CLI verifies in a new version directory and rejects archive path traversal. A launcher failure keeps the old <code translate="no">current</code></td></tr>
+<tr><th scope="row">Signed Windows line</th><td>A signed App accepts only an installer with a valid Authenticode signature from its own publisher: the same certificate, or the same subject after a renewal. The publisher comes from the App's own file. If that read failed or timed out, or the App's signature is damaged, it is read again before the comparison; with no publisher known, the installer is refused</td></tr>
+<tr><th scope="row">Unsigned Windows line</th><td>An App built unsigned accepts an installer that is <code translate="no">NotSigned</code> and matches the size and SHA-256 in <code translate="no">release-manifest.json</code>. That catches a damaged, truncated or substituted download. It does not prove the publisher: the manifest is unsigned and trusted through HTTPS to the fixed hosts, so whoever can publish a release there can publish an installer. A signed App never takes this line</td></tr>
+<tr><th scope="row">What the update signature covers</th><td><code translate="no">update-manifest.json.sig</code> covers the version-store files: version, base, toolchain and <code translate="no">repo.bundle</code>. It does not cover App installers or <code translate="no">release-manifest.json</code></td></tr>
 <tr><th scope="row">Installer child process</th><td>Pinned repository and version. Allowed environment only: PATH, HOME, temp, locale, proxy, XDG, OpenProgram state. No provider or API credentials, no archive or checksum overrides. <code translate="no">--json</code> emits one JSON document</td></tr>
 </tbody>
 </table>
@@ -180,7 +184,7 @@
 <tr><th scope="row">Release gate</th><td>Every stable release passes runtime, CLI, Desktop, manifest and checksum checks before publication. These prove what was published, not behaviour on a running client</td></tr>
 <tr><th scope="row">Installed client</th><td>Open: discovery, opening the installer, long runs and sleep/resume, operated on a real install; Authenticode with a real certificate on an official runner; real GitHub responses, a real proxy</td></tr>
 <tr><th scope="row">Version-store assets and replay</th><td>Implemented, tested with a local directory as the release source. <code translate="no">pytest -q tests/component/self_update/official/test_replay.py</code></td></tr>
-<tr><th scope="row">Version-store release path</th><td>Implemented and passing end to end on macOS against a local server imitating GitHub (update, resume, go back, refusals). Installed copies trust the official signing key. Not yet in service: the Release workflow's asset steps have not run, and Linux activation needs one more run</td></tr>
+<tr><th scope="row">Version-store release path</th><td>Implemented and passing end to end on macOS against a local server imitating GitHub (update, resume, go back, refusals). Installed copies trust the official signing key. The Release workflow has published signed update files for Linux only, in v1.1.0; its macOS and Windows asset steps failed in that run and have not run since. Linux activation needs one more run</td></tr>
 <tr><th scope="row">Upgrading from v0.6.6 or earlier</th><td>No updater before v0.7.0: install the current DMG once by hand. CLI and server rerun the public installer once</td></tr>
 </tbody>
 </table>

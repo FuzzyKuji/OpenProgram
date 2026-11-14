@@ -4,7 +4,7 @@
 (stores, memory, settings) are what the runtime is built on. When they need
 something only the runtime has, the runtime hands it down: a parameter
 from its caller, a hook or port it fills in when it loads
-(``models.cache_edits``, ``state.memory.writer_agent``,
+(``state.memory.writer_agent``,
 ``state.store.current``, ``state.execution_facts``, ``state.event_sink``;
 see ``runtime.lower_layers``), or a table it owns
 (``runtime.agent.provider_runtimes``). There are no exceptions, at module

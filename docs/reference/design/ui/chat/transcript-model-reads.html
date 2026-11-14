@@ -58,7 +58,7 @@
 <thead><tr><th scope="col">Part</th><th scope="col">Rule</th></tr></thead>
 <tbody>
 <tr><th scope="row">Request and reply</th><td>Same <code translate="no">load_session</code> with <code translate="no">history_before</code>, <code translate="no">history_after</code>, <code translate="no">history_around</code> or <code translate="no">history_latest</code>, values being any row id. 25 turns or 512 KiB. Bodies come fresh from the store. Reply <code translate="no">session_history_page { id, turns, window, request_id, action }</code>.</td></tr>
-<tr><th scope="row">Cursor</th><td>A cursor no longer on the branch returns <code translate="no">cursor_not_on_branch</code> and the client does one first read. A head that only advanced is not a mismatch.</td></tr>
+<tr><th scope="row">Cursor</th><td>A cursor no longer on the branch returns <code translate="no">cursor_not_on_branch</code> and the client does one first read. A saved reading position on that row is forgotten, so the first read does not ask for it again. A head that only advanced is not a mismatch.</td></tr>
 <tr><th scope="row">Placement</th><td>The client places a page by <code translate="no">window.start</code>, never at the tail: a page that is neither adjacent to nor overlapping the held span is dropped. Restore by message id before paint. Evict whole pages.</td></tr>
 <tr><th scope="row">Anchors</th><td>Anchors are saved only from server rows, never local ones.</td></tr>
 </tbody>

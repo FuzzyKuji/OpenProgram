@@ -112,6 +112,7 @@
 <thead class="sr"><tr><th scope="col">Reference</th><th scope="col">Verified against</th><th scope="col">Measured</th></tr></thead>
 <tbody>
 <tr><th scope="row">Commands and flags</th><td>Lines starting <code translate="no">openprogram</code>, split with <code translate="no">shlex</code>, walked through <code translate="no">build_parser()</code></td><td>505 commands, 113 flags</td></tr>
+<tr><th scope="row">Removed verbs and flags</th><td>A verb or flag the range removed, written as a whole code span. A flag other commands keep counts only on a page that names its command. A top-level verb counts where the page writes <code translate="no">openprogram</code> with it or lists it among two or more other top-level verbs, because such a word often names an application or a target too.</td><td>Only in a range that changes the parser</td></tr>
 <tr><th scope="row">Repository paths</th><td>Tracked file or directory; git-ignored build output counts; patterns skipped</td><td>1004</td></tr>
 <tr><th scope="row">Partial paths and bare file names</th><td>On product pages, a source suffix and a known top segment must resolve somewhere. On any page, one that resolved before this change and no longer does.</td><td>1310 and 1080; 7 product and 229 record hits unresolved before the rule</td></tr>
 <tr><th scope="row">Modules</th><td>Dotted <code translate="no">openprogram.*</code> that resolves to a file, or an attribute of one; domains excluded</td><td>134</td></tr>

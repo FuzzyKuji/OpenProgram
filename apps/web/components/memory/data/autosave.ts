@@ -8,9 +8,11 @@ export interface DraftState {
   restoring: boolean;
   error: string;
   warning: string;
+  /** The last save left only headings, so the server keeps no file for it. */
+  removed: boolean;
 }
 export class MemoryDraft {
-  state: DraftState = { content: "", base: "", original: "", loaded: false, saving: false, restoring: false, error: "", warning: "" };
+  state: DraftState = { content: "", base: "", original: "", loaded: false, saving: false, restoring: false, error: "", warning: "", removed: false };
   listeners = new Set<() => void>();
   timer: ReturnType<typeof setTimeout> | undefined;
   loading: Promise<void> | undefined;
@@ -54,6 +56,10 @@ export class MemoryDraft {
           base: valid ? draft.base : data.content,
           original: valid ? draft.original ?? draft.base : data.content,
           loaded: true, error: valid && draft.base !== data.content ? "This memory changed elsewhere. Review the latest version before retrying." : "",
+          // A file held aside opens saying what keeps it out of memory.
+          warning: data.warning || "",
+          // What the server answers with is a file it keeps.
+          removed: false,
         });
         if (valid && !this.state.error) this.schedule();
       } catch (error) { this.publish({ error: String(error) }); }
@@ -92,6 +98,7 @@ export class MemoryDraft {
         base: result.content,
         content: this.state.content === content ? result.content : this.state.content,
         warning: result.warning || "",
+        removed: result.removed === true,
       });
       this.persist();
     } catch (error) { this.publish({ error: error instanceof Error ? error.message : String(error) }); }

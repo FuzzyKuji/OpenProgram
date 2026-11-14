@@ -219,8 +219,8 @@
 <tbody>
 <tr><th scope="row"><code translate="no">head_id</code></th><td>活动分支尖。对话写入把它推进到真实节点，绝不指向占位符或摘要；悬空 head 渲染为空。带 caller 的节点不推进它</td></tr>
 <tr><th scope="row"><code translate="no">get_branch(session_id, head_id)</code></th><td>从 head 沿 predecessor 走到终点</td></tr>
-<tr><th scope="row"><code translate="no">list_branches(session_id)</code></th><td>predecessor 图的叶子：user、LLM 轮次、顶层 Program 操作（caller 为空或 <code translate="no">ROOT</code>），并行的各成一片。内部子节点和 runtime、attach、context 行不结束分支尖。已合并和非对话节点不计入，没有主分支尖回退</td></tr>
-<tr><th scope="row">分支名</th><td>会话 meta，<code translate="no">branches: {head_id: name}</code></td></tr>
+<tr><th scope="row"><code translate="no">list_branches(session_id)</code></th><td>可见的对话末端及保留的分支引用。Rewind 隐藏撤回的后缀，同时保留兄弟引用，包括停在共同祖先或 ROOT 上的引用。同一位置的引用由分支身份区分。内部执行行不创建对话末端</td></tr>
+<tr><th scope="row">分支名</th><td>会话元数据：分支引用的标签保存各自名称；<code translate="no">branches</code> 保留当前消息位置的兼容投影</td></tr>
 </tbody>
 </table>
 
@@ -253,12 +253,12 @@
 <tr><th scope="row">函数内误用工具</th><td>在用户轮开头给情境指引并限制递归深度，不改工具列表（<a href="../execution/agentic-self-recursion.zh.html">自递归</a>）</td></tr>
 <tr><th scope="row">记录</th><td>哈希变化时（开始、工具集变化、计划模式切换）：追加 <code translate="no">role=code</code>、<code translate="no">name="context/system_prompt"</code>、<code translate="no">caller=ROOT</code>、output 为全文的节点。渲染固定使用主干上最新的一个</td></tr>
 <tr><th scope="row"><code translate="no">context/*</code> 名称</th><td>保留并对聊天隐藏，<code translate="no">context/summary</code> 例外，它是真实对话内容</td></tr>
-<tr><th scope="row">记忆预取</th><td>当前 user 节点线上消息的前缀块，存于其 <code translate="no">memory_prefetch</code> 元数据。不老化；系统和工具段字节稳定</td></tr>
+<tr><th scope="row">记忆预取</th><td>当前 user 节点线上消息的前缀块，存为其 <code translate="no">turn_context</code> 元数据里的 <code translate="no">memory_prefetch</code> 一项（<a href="../../context/composition.zh.html#l2">组合</a>）。系统和工具段字节稳定</td></tr>
 <tr><th scope="row">图片和文件</th><td>节点内容，按引用保存；正文在附件目录，渲染时加载</td></tr>
 </tbody>
 </table>
 
-<h2 id="s8">压缩与老化</h2>
+<h2 id="s8">压缩</h2>
 <figure>
 <svg class="fig-wide" viewBox="0 0 680 196" role="img" aria-label="链 P、a、b、c、d、e 由 predecessor 边相连。摘要 S 以 P 为 predecessor，按 id 覆盖 a、b、c。不改任何边，HEAD 留在 e。包含 a 到 c 全部节点的链渲染 S、d、e，其他链渲染原文。">
   <defs><marker id="cp-a" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path class="head" d="M0 0L8 4L0 8z"/></marker></defs>
@@ -291,10 +291,10 @@
 <thead class="sr"><tr><th scope="col">Item</th><th scope="col">Detail</th></tr></thead>
 <tbody>
 <tr><th scope="row"><code translate="no">metadata.covers_ids</code></th><td>用 id，因为兄弟分支的 seq 交错。WebUI 载荷把被覆盖轮次的 caller 子树也加入（<a href="rendering.zh.html#s9">渲染 §9</a>）</td></tr>
-<tr><th scope="row">下一个摘要</th><td>吸收上一个；<code translate="no">extra_meta._last_summary_id</code> 标记活动的那个</td></tr>
+<tr><th scope="row">下一个摘要</th><td>吸收生效的那个，由 <code translate="no">nodes.active_summary_for_chain</code> 按链选出；图构建器按同样的选择折叠每个分支</td></tr>
 <tr><th scope="row">完整规范</th><td><a href="../../context/compaction.zh.html">压缩</a></td></tr>
-<tr><th scope="row">老化边界</th><td>只在轮次提交时推进；每次调用滚动的边界会破坏缓存前缀</td></tr>
-<tr><th scope="row">重放</th><td>每个 llm 节点记录 <code translate="no">metadata.render_manifest = {policy_version, aged_before_seq, spilled: [...]}</code>。重放按它进行，同一张图任何时候渲染出相同字节</td></tr>
+<tr><th scope="row">旧工具结果</th><td>从不老化：在压缩覆盖它那一轮之前，都按那一轮发出的样子渲染，所以两次压缩之间缓存前缀只增长</td></tr>
+<tr><th scope="row">重放</th><td>渲染只读存下的节点，同一张图任何时候渲染出相同字节；旧版本写下的 <code translate="no">render_manifest</code> 不再读取</td></tr>
 <tr><th scope="row">溢出</th><td>大节点在记录时溢出，一次且确定，绝不在渲染时</td></tr>
 <tr><th scope="row">单一管线</th><td>DAG 渲染是唯一上下文路径；出错时本轮明确失败</td></tr>
 </tbody>
@@ -314,15 +314,13 @@
 </table>
 
 <h2>实现状态</h2>
-<p><a href="#s2">数据模型</a>到<a href="#s8">压缩与老化</a>及图所有权已在代码中，并有回归覆盖。</p>
+<p><a href="#s2">数据模型</a>到<a href="#s8">压缩</a>及图所有权已在代码中，并有回归覆盖。</p>
 <details>
 <summary>消融开关</summary>
 <table class="stack">
 <thead><tr><th scope="col">变量</th><th scope="col">调整</th><th scope="col">读取时机</th></tr></thead>
 <tbody>
-<tr><th scope="row"><code translate="no">OPENPROGRAM_TOOL_AGING</code></th><td>工具老化开关</td><td>导入时</td></tr>
-<tr><th scope="row"><code translate="no">OPENPROGRAM_TOOL_AGING_TAIL_TURNS</code></th><td>保留的尾部轮数</td><td>导入时</td></tr>
-<tr><th scope="row"><code translate="no">OPENPROGRAM_TOOL_AGING_MAX_RESULT_CHARS</code></th><td>结果大小上限</td><td>导入时</td></tr>
+<tr><th scope="row"><code translate="no">OPENPROGRAM_NODE_RENDER_CAP</code></th><td>既不是工具结果也不是消息的新节点（摘要、程序的返回值）的转存大小；已有节点保留记录时的上限</td><td>导入时</td></tr>
 <tr><th scope="row"><code translate="no">OPENPROGRAM_NODE_SPILL</code></th><td>大节点溢出</td><td>导入时</td></tr>
 <tr><th scope="row"><code translate="no">OPENPROGRAM_EXPOSE_DEFAULT</code></th><td>未指定 <code translate="no">expose=</code> 时的含义；显式指定优先</td><td>调用时</td></tr>
 </tbody>
@@ -340,7 +338,6 @@
 <tr><th scope="row"><code translate="no">openprogram/runtime/context/render.py</code></th><td><code translate="no">render_dag_messages</code></td></tr>
 <tr><th scope="row"><code translate="no">openprogram/runtime/context/components.py</code></th><td>系统提示词组装器</td></tr>
 <tr><th scope="row"><code translate="no">openprogram/runtime/context/system_prompt_node.py</code></th><td><code translate="no">context/system_prompt</code> 记录、<code translate="no">context/*</code> 隐藏</td></tr>
-<tr><th scope="row"><code translate="no">openprogram/runtime/context/aging.py</code></th><td>只进不退的边界、渲染清单</td></tr>
 <tr><th scope="row"><code translate="no">openprogram/runtime/context/persistence.py</code></th><td>摘要节点</td></tr>
 <tr><th scope="row"><code translate="no">openprogram/runtime/conversation/turn_runtime/__init__.py</code></th><td>聊天入口</td></tr>
 <tr><th scope="row"><code translate="no">openprogram/runtime/agent/runtime/</code></th><td>函数体内的模型调用</td></tr>

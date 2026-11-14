@@ -25,10 +25,18 @@
 <h2 id="data-flow">从选择器到请求</h2>
 <ol>
 <li><code translate="no">get_thinking_config_for_model</code>（<code translate="no">interfaces/server/thinking_effort.py</code>）用模型的 <code translate="no">thinking_levels</code> 生成选项。</li>
-<li><code translate="no">_normalize_thinking</code>（<code translate="no">runtime/conversation/session_config.py</code>）按 <code translate="no">VALID_THINKING</code> 校验，按会话保存。</li>
-<li><code translate="no">reasoning_from_config</code> 把它作为 <code translate="no">SimpleStreamOptions.reasoning</code> 交给本轮。</li>
+<li><code translate="no">_normalize_thinking</code>（<code translate="no">runtime/conversation/session_config.py</code>）按 <code translate="no">VALID_THINKING</code> 校验，按会话分支保存。新分支创建时继承一次，切换时恢复对应分支的选择。</li>
+<li><code translate="no">reasoning_from_config</code> 把它作为 <code translate="no">SimpleStreamOptions.reasoning</code> 交给本轮，由 <code translate="no">normalize_reasoning_level</code> 限制在模型的档位之内（见下）。</li>
 <li>提供商的 <code translate="no">stream_simple()</code> 调用 <code translate="no">translate_reasoning(provider, model, level)</code>，把结果写进请求字段，例如 <code translate="no">{"output_config": {"effort": "high"}}</code>。</li>
 </ol>
+
+<h2 id="missing-level">模型没有的档位</h2>
+<p>为别的模型保存的档位，或 <code translate="no">--effort</code> 要的档位，可能不在模型的 <code translate="no">thinking_levels</code> 里。<code translate="no">normalize_reasoning_level</code>（<code translate="no">thinking_spec.py</code>）发送它有的最近一档：</p>
+<ul>
+<li>先找更强的下一档，没有再找更弱的：在从 <code translate="no">low</code> 起步的模型上，<code translate="no">minimal</code> 发送 <code translate="no">low</code>；</li>
+<li>档位表以外的名字：用模型的默认档位。</li>
+</ul>
+<p class="note">照 Pi 的 <code translate="no">clampThinkingLevel</code>。回落到默认档位可能把最轻的档位变成中间档；<code translate="no">translate_reasoning</code> 对 Anthropic 的 <code translate="no">minimal</code> 也是这样映射到 <code translate="no">low</code>。</p>
 
 <h2 id="deriving-levels">模型显示哪些档位</h2>
 <p><code translate="no">models/listing/listing.py</code> 的 <code translate="no">list_models_for_provider()</code> 取第一个有结果的来源。选择器和 <code translate="no">list_enabled_models</code> 都经过它。</p>
@@ -50,6 +58,7 @@
 <thead class="sr"><tr><th scope="col">情况</th><th scope="col">结果</th></tr></thead>
 <tbody>
 <tr><th scope="row"><code translate="no">wire_format</code> 缺失或为 <code translate="no">none</code></th><td><code translate="no">None</code></td></tr>
+<tr><th scope="row">档位 <code translate="no">off</code>（或 <code translate="no">none</code>）</th><td>override 的 <code translate="no">off</code>（<code translate="no">null</code> 即 <code translate="no">None</code>），否则它映射表里的，否则服务商映射表里的：OpenAI Responses 上是 <code translate="no">none</code>，所以关掉思考会像 Pi 和 Codex 那样发 <code translate="no">effort: "none"</code>，而不是让服务端按默认强度推理。比 <code translate="no">none</code> 早的模型（o 系列、gpt-5 到 gpt-5-pro）映射为 <code translate="no">null</code>。<code translate="no">off</code> 从不作为选择器里的档位</td></tr>
 <tr><th scope="row">模型覆盖项的映射为空</th><td><code translate="no">None</code>：会推理，但不发强度参数</td></tr>
 <tr><th scope="row">档位在覆盖项映射里</th><td>对应的值</td></tr>
 <tr><th scope="row">提供商映射对该档位的值在覆盖项的值里</th><td>该值，所以 Anthropic 的 <code translate="no">minimal</code> 变成 <code translate="no">low</code></td></tr>

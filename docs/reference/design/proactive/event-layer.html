@@ -86,6 +86,7 @@ class Event:
 
 <pre translate="no"><code>{"hooks": {"turn.stop": [{"command": "python check_done.py", "timeout": 30}]}}</code></pre>
 <p class="note">The top-level <code translate="no">hooks</code> key of <code translate="no">config.json</code>. <code translate="no">install_config_hooks()</code> registers gate kinds as synchronous shell gates and notify kinds as background runners (daemon thread, exit code ignored). Edits apply at the next worker restart.</p>
+<p class="note">The command runs in <code translate="no">/bin/sh</code> on macOS and Linux and in bash on Windows, falling back to PowerShell with one notice when there is none. An entry may say <code translate="no">"shell": "powershell"</code>, or give <code translate="no">args</code> to run <code translate="no">command</code> directly with no shell (<a href="../distribution/windows-command-shell.html#hook-shell">which shell runs a hook</a>). The event arrives on standard input as UTF-8 JSON.</p>
 
 <details>
 <summary>The <code translate="no">turn.stop</code> continuation loop</summary>

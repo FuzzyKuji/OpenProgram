@@ -492,17 +492,17 @@ def test_write_session_marks_a_batch_without_internal_index_rebuilds(
 
 
 @pytest.mark.parametrize(
-    ("update_fields", "expected_output", "expect_status", "expect_spill"),
+    ("update_fields", "expected_output", "expect_status"),
     [
-        ({"output": "final output"}, "final output", False, False),
-        ({"metadata": {"status": "completed"}}, "placeholder", True, False),
+        ({"output": "final output"}, "final output", False),
+        ({"metadata": {"status": "completed"}}, "placeholder", True),
         (
             {"output": "final output", "metadata": {"status": "completed"}},
-            "final output", True, False,
+            "final output", True,
         ),
         (
             {"output": LARGE_OUTPUT, "metadata": {"status": "completed"}},
-            LARGE_OUTPUT, True, True,
+            LARGE_OUTPUT, True,
         ),
     ],
     ids=["output-only", "metadata-only", "output-and-metadata", "large-output"],
@@ -514,7 +514,6 @@ def test_graphstore_update_keeps_fields_across_an_interleaved_external_append(
     update_fields: dict,
     expected_output: str,
     expect_status: bool,
-    expect_spill: bool,
 ):
     from openprogram.runtime.context.session_db import SessionDB
     from openprogram.state.store.session.session_node_writer import SessionNodeWriter
@@ -561,12 +560,9 @@ def test_graphstore_update_keeps_fields_across_an_interleaved_external_append(
     assert nodes["pointer"]["existing"] == "preserved"
     if expect_status:
         assert nodes["pointer"]["status"] == "completed"
-    if expect_spill:
-        stamp = nodes["pointer"].get("spilled")
-        assert stamp is not None
-        assert Path(stamp["path"]).read_text(encoding="utf-8") == LARGE_OUTPUT
-    else:
-        assert nodes["pointer"].get("spilled") is None
+    # An assistant reply is never spilled at write time, however long: it
+    # is kept whole and sent whole.
+    assert nodes["pointer"].get("spilled") is None
 
 
 def test_force_processes_head_first_and_skips_a_short_abandoned_branch(

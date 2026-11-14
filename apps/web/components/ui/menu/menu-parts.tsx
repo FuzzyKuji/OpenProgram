@@ -21,6 +21,7 @@ import type { SolarIconName } from "@/components/solar-icons/bodies";
 import { CHECK_SLOT_PAD, MENU_KEY, MENU_KEY_PLATE, MENU_KEY_TIP } from "@/components/ui/menu/menu-styles";
 import { Kbd } from "@/components/ui/kbd";
 import { MenuCheck } from "@/components/ui/menu/menu-check";
+import { isMacPlatform } from "@/lib/shortcut-keys";
 import { cn } from "@/lib/utils";
 
 /** A key a row answers to. `mod` is ⌘ on macOS and Ctrl elsewhere; a key
@@ -35,9 +36,7 @@ export interface MenuKeys {
 
 export type MenuGlyph = SolarIconName;
 
-export function isMacPlatform(): boolean {
-  return typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
-}
+export { isMacPlatform };
 
 /** The key as the system writes it: ⌥⇧⌘T on macOS, Ctrl+Alt+Shift+T
  *  elsewhere. */

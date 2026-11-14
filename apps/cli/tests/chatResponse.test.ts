@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { handleChatResponse } from '../src/screens/repl/wsHandlers/handleChatResponse.js';
+import { compactionOperation, handleChatResponse, selectBranch } from '../src/screens/repl/wsHandlers/handleChatResponse.js';
+import { cancelOperation } from '../src/screens/repl/cancelExecution.js';
 import {
   handleRunningTaskEnvelope,
   type WsEventsCtx,
@@ -9,6 +10,33 @@ import type { Turn } from '../src/components/Turn.js';
 
 
 describe('handleChatResponse', () => {
+  it('draws only the selected branch while another branch runs out of view', () => {
+    const setStreaming = vi.fn();
+    const finishTurn = vi.fn();
+    const ctx = {
+      conversationId: 'session-b',
+      setStreaming,
+      setCommitted: vi.fn(),
+      finishTurn,
+    } as unknown as WsEventsCtx;
+    selectBranch('session-b', 'branch_b');
+
+    handleChatResponse(
+      { type: 'error', session_id: 'session-b', branch_id: 'branch_a', content: 'left behind' },
+      ctx,
+      vi.fn(),
+    );
+    expect(setStreaming).not.toHaveBeenCalled();
+    expect(finishTurn).not.toHaveBeenCalled();
+
+    handleChatResponse(
+      { type: 'error', session_id: 'session-b', branch_id: 'branch_b', content: 'shown' },
+      ctx,
+      vi.fn(),
+    );
+    expect(finishTurn).toHaveBeenCalledOnce();
+  });
+
   it('commits local command output and finishes the turn', () => {
     let committed: Turn[] = [];
     const finishTurn = vi.fn();
@@ -135,5 +163,66 @@ describe('handleRunningTaskEnvelope', () => {
 
     expect(executionIdRef.current).toBe('exec-a');
     expect(executionVersionRef.current).toBe(7);
+  });
+});
+
+describe('compaction frames', () => {
+  const ctxWith = () => {
+    const pushed: string[] = [];
+    let activity: { verb: string; startedAt: number } | null = null;
+    const ctx = {
+      conversationId: 's',
+      pushSystem: (text: string) => pushed.push(text),
+      setActivity: (update: unknown) => {
+        activity = typeof update === 'function'
+          ? (update as (a: typeof activity) => typeof activity)(activity)
+          : (update as typeof activity);
+      },
+    } as unknown as WsEventsCtx;
+    return { ctx, pushed, activity: () => activity };
+  };
+
+  it('/compact shows progress, then its result, and ends the spinner', () => {
+    const { ctx, pushed, activity } = ctxWith();
+    handleChatResponse({ type: 'compaction_started', session_id: 's' }, ctx, vi.fn());
+    expect(activity()?.verb).toBe('Compacting context');
+    handleChatResponse({
+      type: 'compaction_finished', session_id: 's', user_initiated: true,
+      tokens_before: 52_000, tokens_after: 8_000, summarised_count: 40,
+    }, ctx, vi.fn());
+    expect(pushed).toEqual(['Context compacted: 52.0k → 8.0k tokens, 40 messages summarized.']);
+    expect(activity()).toBeNull();
+  });
+
+  it('/compact names its operation so the stop key can end it, and says it stopped', () => {
+    const { ctx, pushed, activity } = ctxWith();
+    handleChatResponse({
+      type: 'compaction_started', session_id: 's', user_initiated: true, op_id: 'op-7',
+    }, ctx, vi.fn());
+    expect(compactionOperation('s')).toBe('op-7');
+    const sent: unknown[] = [];
+    cancelOperation({ send: (req) => { sent.push(req); } }, 's', compactionOperation('s')!);
+    expect(sent).toEqual([{ action: 'operation.cancel', session_id: 's', op_id: 'op-7' }]);
+    handleChatResponse({
+      type: 'compaction_failed', session_id: 's', user_initiated: true, cancelled: true,
+      error: 'Compaction cancelled; history unchanged',
+    }, ctx, vi.fn());
+    expect(compactionOperation('s')).toBeUndefined();
+    expect(pushed).toEqual(['Compaction stopped; context unchanged.']);
+    expect(activity()).toBeNull();
+  });
+
+  it('a refused or failed compaction says why', () => {
+    const { ctx, pushed } = ctxWith();
+    handleChatResponse({
+      type: 'compaction_failed', session_id: 's', user_initiated: true, code: 'run_active',
+      kind: 'reply', error: 'A reply is being written on this branch; try again after it ends.',
+    }, ctx, vi.fn());
+    // A turn's own compaction that fails says nothing: the history is
+    // unchanged and a later request tries again.
+    handleChatResponse({ type: 'compaction_failed', session_id: 's', error: 'timeout' }, ctx, vi.fn());
+    expect(pushed).toEqual([
+      'A reply is being written on this branch; try again after it ends.',
+    ]);
   });
 });

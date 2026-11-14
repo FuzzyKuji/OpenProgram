@@ -128,9 +128,11 @@ class Runtime(HistoryOperations, QuestionsOperations, ExecutionOperations, Provi
         # SimpleStreamOptions.reasoning. CLI subclasses override however their
         # backend expects (flags, env vars, etc).
         self.thinking_level: str = "off"
-        # Stable id across successive exec() calls — provider uses it as
-        # prompt_cache_key (Codex) so repeat prefixes hit the cache.
+        # This Runtime's own id. It names no conversation, so the provider
+        # is not given it as a cache key: see ``_provider_session_id``.
+        # A caller that assigns ``session_id`` names the key itself.
         self.session_id = f"op-{_uuid.uuid4().hex[:16]}"
+        self._own_session_id = self.session_id
 
         self.provider_id: Optional[str] = None
 

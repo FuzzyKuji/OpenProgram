@@ -19,13 +19,40 @@ than as the user's words. ``resource_link`` becomes a bare path mention.
 ``tool_call`` (in_progress), tool end → ``tool_call_update``
 (completed/failed).
 
-**Permissions.** OpenProgram's approval gate registers a ``kind="approval"``
-question on the shared QuestionRegistry and blocks. Subscribing to
-``question.asked`` on the event bus catches those, forwards them as ACP
-``session/request_permission``, and answers with the canonical execution wait
-command. Nothing about the gate itself changes,
-so authority checks, hard constraints, permission rules and the
-``allow_always`` rule-persistence path all behave exactly as in the web UI.
+**Working directory.** The session's first ``session/prompt`` creates the
+conversation bound to the client's ``cwd`` as its project, the way
+``openprogram --print`` binds the directory it runs in
+(``working_directory_project``), so tools start there. Binding registers the
+folder as a project (shown again if it was hidden) and writes its identity
+marker, ``<cwd>/.openprogram/project.json``; a thread opened and never
+prompted leaves nothing behind. The home folder needs no binding; a folder
+that cannot be opened as a project runs unbound, with a warning on stderr.
+
+**Permissions.** OpenProgram's approval gate opens a durable
+``kind="approval"`` wait and suspends the turn's execution. The wait's
+``question.asked`` frame reaches the prompt's event sink (or, for a turn
+resumed after an earlier answer, the event bus); either is forwarded as ACP
+``session/request_permission`` and answered with the canonical execution wait
+command, which resumes the execution. ``session/prompt`` stays open until
+that execution ends, so the editor sees the whole turn, resumed rounds
+included. A client that answers the request with an error, or not within ten
+minutes (sooner when the wait expires sooner), declines it, and the turn goes on without the operation.
+Questions other than approvals have no ACP form and are declined at once.
+The prompt also reads the execution's open waits while it is suspended, so
+a wait whose frame never reached it is handled the same way. A wait for
+system access cannot be granted from an editor: the turn is cancelled and
+the prompt answers with an error naming the access it needs. A turn that
+stops where nothing here can move it on (paused by someone else, needing
+reconciliation, or suspended with no open wait) ends the prompt with an
+error rather than keeping it open.
+Nothing about the gate itself changes, so authority checks, hard
+constraints, permission rules and the ``allow_always`` rule-persistence path
+all behave exactly as in the web UI.
+
+**Ends.** A turn that fails (a provider error, say) answers
+``session/prompt`` with a JSON-RPC error carrying the reason, not a stop
+reason, whichever round failed: a resumed round's error is read from the
+attempt that ran it. A cancelled turn ends with ``cancelled``.
 
 An ACP connection is a local editor driven by the person at the keyboard,
 so turns carry ``local_owner_authority()`` — owner tier, interactive. That
@@ -40,6 +67,7 @@ import logging
 import os
 import sys
 import threading
+import time
 import uuid
 from typing import Any
 
@@ -74,6 +102,16 @@ _TOOL_KINDS: dict[str, str] = {
 _ALLOW_ONCE = "allow_once"
 _ALLOW_ALWAYS = "allow_always"
 _REJECT_ONCE = "reject_once"
+
+# How often a prompt re-reads its execution while a resumed turn runs.
+_FOLLOW_POLL_S = 0.1
+# How long a cancelled prompt waits for its execution to stop.
+_CANCEL_GRACE_S = 30.0
+# The permission request's limit when the wait carries no expiry.
+_PERMISSION_TIMEOUT_S = 600.0
+# How long a suspended execution may sit with no open wait (an answer being
+# applied takes far less) before the prompt reports it stuck.
+_STALL_S = 10.0
 
 
 def _tool_kind(name: str) -> str:
@@ -125,9 +163,16 @@ def _blocks_to_attachments(blocks: list) -> list[dict]:
 class _Session:
     """Per-session ACP state: where it runs and what's cancellable."""
 
-    def __init__(self, session_id: str, cwd: str) -> None:
+    def __init__(self, session_id: str, cwd: str, *, created: bool = False) -> None:
         self.id = session_id
         self.cwd = cwd
+        # The conversation exists (a loaded one, or after the first prompt).
+        self.created = created
+        # The conversation's project is ``cwd``: tools already start there.
+        self.bound = False
+        # Why the prompt ends with an error although its turn was cancelled
+        # (a wait the editor cannot answer).
+        self.stop_error: str | None = None
         self.cancel_event = threading.Event()
         self.execution_id: str | None = None
         self.execution_status_version: int | None = None
@@ -142,6 +187,8 @@ class _Session:
         # cancel must resolve them or the tool gate sits on its Event for
         # the full 300s timeout.
         self.open_questions: dict[str, str] = {}
+        # A wait's frame can come by the prompt's sink and by the event bus.
+        self.seen_questions: set[str] = set()
         self.lock = threading.Lock()
 
 
@@ -167,7 +214,7 @@ class ACPServer:
         self._permission_mode = resolve_mode(permission_mode)
         self._sessions: dict[str, _Session] = {}
         self._lock = threading.Lock()
-        self._unsubscribe = None
+        self._unsubscribe: list = []
         self._client_caps: dict = {}
 
     # -- lifecycle --------------------------------------------------------
@@ -177,11 +224,11 @@ class ACPServer:
         try:
             self._conn.serve_forever()
         finally:
-            if self._unsubscribe is not None:
+            for unsubscribe in self._unsubscribe:
                 try:
-                    self._unsubscribe()
+                    unsubscribe()
                 except Exception:
-                    _log.debug("ACP question unsubscribe failed", exc_info=True)
+                    _log.debug("ACP event unsubscribe failed", exc_info=True)
 
     # -- method dispatch --------------------------------------------------
 
@@ -225,9 +272,25 @@ class ACPServer:
         if not os.path.isabs(cwd):
             raise RPCError(INVALID_PARAMS, "cwd must be an absolute path")
         sid = "acp_" + uuid.uuid4().hex[:10]
+        # The conversation, and the project binding that writes a marker
+        # into ``cwd``, wait for the first prompt.
         with self._lock:
             self._sessions[sid] = _Session(sid, cwd)
         return {"sessionId": sid}
+
+    def _create_conversation(self, sid: str, cwd: str) -> bool:
+        """Create the conversation bound to ``cwd``; True when it is bound.
+
+        The binding is the one ``openprogram --print`` makes for the
+        directory it runs in, so the session's tools start in ``cwd``.
+        """
+        from openprogram.interfaces.cli.print_turn import working_directory_project
+        from openprogram.runtime.context.session_db import default_db
+
+        project_id = working_directory_project(cwd)
+        default_db().create_session(sid, self._agent_id, title="", source="acp",
+                                    project_id=project_id)
+        return project_id is not None
 
     def _session_load(self, params: dict) -> dict:
         sid = params.get("sessionId")
@@ -240,7 +303,8 @@ class ACPServer:
         if db.get_session(sid) is None:
             raise RPCError(INVALID_PARAMS, f"unknown session: {sid}")
         with self._lock:
-            self._sessions[sid] = _Session(sid, cwd)
+            self._sessions[sid] = _Session(sid, cwd, created=True)
+        # A loaded conversation keeps the project it was created in.
         # The spec has the agent replay the conversation as session/update
         # notifications before answering, so the editor can render history.
         for msg in db.get_branch(sid):
@@ -259,6 +323,9 @@ class ACPServer:
         sess = self._sessions.get(params.get("sessionId") or "")
         if sess is None:
             return None
+        return self._cancel(sess, "prompt_cancel")
+
+    def _cancel(self, sess: _Session, reason: str) -> None:
         with sess.lock:
             execution_id = sess.execution_id
             if execution_id is None:
@@ -266,14 +333,14 @@ class ACPServer:
                     return None
                 sess.cancel_requested = True
                 if not sess.cancel_reason:
-                    sess.cancel_reason = "prompt_cancel"
+                    sess.cancel_reason = reason
                 if not sess.cancel_command_id:
                     sess.cancel_command_id = f"acp-cancel:{uuid.uuid4().hex}"
                 return None
             if sess.cancel_in_flight:
                 return None
             sess.cancel_requested = True
-            sess.cancel_reason = sess.cancel_reason or "prompt_cancel"
+            sess.cancel_reason = sess.cancel_reason or reason
             if not sess.cancel_command_id:
                 sess.cancel_command_id = f"acp-cancel:{uuid.uuid4().hex}"
             expected_version = sess.execution_status_version
@@ -337,20 +404,27 @@ class ACPServer:
             raise RPCError(INVALID_PARAMS, "prompt has no text content")
 
         from openprogram.runtime.permissions.authority import local_owner_authority
-        from openprogram.runtime.agent.turn_request import TurnRequest
         from openprogram.runtime.conversation.production_driver import CanonicalAgentAdapter
+        from openprogram.runtime.conversation.turn_input import build_turn_request
+
+        if not sess.created:
+            try:
+                sess.bound = self._create_conversation(sess.id, sess.cwd)
+            except Exception as exc:
+                raise RPCError(INTERNAL_ERROR,
+                               f"the session could not be set up in {sess.cwd}: {exc}") from exc
+            sess.created = True
 
         user_msg_id = uuid.uuid4().hex[:12]
-        request = TurnRequest(
-            session_id=sess.id,
-            user_text=text,
-            agent_id=self._agent_id,
-            source="acp",
-            permission_mode=self._permission_mode,
+        # A bound session already works in ``cwd``; otherwise (the home
+        # folder, or a folder that could not be bound) it stays writable.
+        extra_dirs = [] if sess.bound else [sess.cwd]
+        request = build_turn_request(
+            sess.id, text, agent_id=self._agent_id, source="acp", msg_id=user_msg_id,
+            authority=local_owner_authority(),
+            permission={"permission_mode": self._permission_mode},
             attachments=_blocks_to_attachments(blocks) or None,
-            additional_working_dirs=[sess.cwd],
-            user_msg_id=user_msg_id,
-            **local_owner_authority(),
+            additional_working_dirs=extra_dirs,
         )
         adapter = CanonicalAgentAdapter(
             event_sink=lambda env: self._on_event(sess, env),
@@ -362,6 +436,7 @@ class ACPServer:
             sess.cancel_requested = False
             sess.cancel_reason = ""
             sess.cancel_command_id = ""
+            sess.stop_error = None
             sess.cancel_event.clear()
         try:
             admission = adapter.admit(
@@ -389,18 +464,87 @@ class ACPServer:
                         sess.execution_status_version = None
                 return {"stopReason": "cancelled"}
         try:
-            _active, result = asyncio.run(adapter.activate(admission))
+            activated = asyncio.run(adapter.activate(admission))
+            result = activated[1] if activated else None
+            # An approval suspends the execution and ends this attempt; the
+            # answer resumes it in a new one. The prompt lasts as long as
+            # the execution does.
+            final, stuck = self._follow(sess, adapter.store, execution_id)
         finally:
             with sess.lock:
                 if sess.execution_id == execution_id:
                     sess.execution_id = None
                     sess.execution_status_version = None
 
+        if sess.stop_error:
+            raise RPCError(INTERNAL_ERROR, sess.stop_error,
+                           {"reason": "system_access_required"})
         if sess.cancel_event.is_set():
             return {"stopReason": "cancelled"}
-        if result.failed:
-            return {"stopReason": "refusal"}
-        return {"stopReason": "end_turn"}
+        if stuck:
+            raise RPCError(INTERNAL_ERROR, stuck, {
+                "reason": getattr(final, "reason_code", None) or "execution_stalled",
+                "status": getattr(getattr(final, "status", None), "value", None),
+            })
+        return _stop(result, final, _last_failure(adapter.store, execution_id))
+
+    def _follow(self, sess: _Session, store, execution_id: str):
+        """Wait for the execution to end.
+
+        Returns its last record and, when the prompt must end while the
+        execution has not, why. While the execution is suspended its open
+        waits are read from the store and handled like their frames, so a
+        wait whose frame never arrived cannot hold the prompt open. A
+        cancelled prompt waits at most :data:`_CANCEL_GRACE_S`.
+        """
+        from openprogram.runtime.execution.model import (
+            TERMINAL_EXECUTION_STATUSES,
+            ExecutionStatus,
+        )
+        from openprogram.runtime.execution.waits import DurableWaitStore, question_frame_data
+
+        waits = DurableWaitStore(store)
+        stop_by = None
+        idle_since: tuple[int, float] | None = None
+        while True:
+            record = store.get_execution(execution_id)
+            if record is None or record.status in TERMINAL_EXECUTION_STATUSES:
+                return record, None
+            with sess.lock:
+                if sess.execution_id == execution_id and not sess.cancel_in_flight:
+                    sess.execution_status_version = record.status_version
+            if sess.cancel_event.is_set() or sess.stop_error:
+                stop_by = stop_by or time.monotonic() + _CANCEL_GRACE_S
+                if time.monotonic() >= stop_by:
+                    return record, None
+            elif record.status is ExecutionStatus.RECONCILIATION_REQUIRED:
+                return record, ("the turn stopped and needs reconciliation "
+                                f"({record.reason_code or 'unknown'}); open it in OpenProgram")
+            elif record.status is ExecutionStatus.PAUSED:
+                if record.reason_code not in ("wait_open", "system_access_required"):
+                    return record, (f"the turn was paused ({record.reason_code or 'no reason'}); "
+                                    "continue it in OpenProgram")
+                open_waits = waits.list_open(execution_id=execution_id)
+                for wait in open_waits:
+                    self._forward_question(sess, {
+                        **question_frame_data(wait, session_id=sess.id,
+                                              expected_version=record.status_version),
+                        "required_capabilities": list(
+                            wait.request.get("required_capabilities") or []),
+                    })
+                if open_waits:
+                    idle_since = None
+                else:
+                    # Between an answer and the resumed attempt the
+                    # execution is briefly suspended with no open wait.
+                    if idle_since is None or idle_since[0] != record.status_version:
+                        idle_since = (record.status_version, time.monotonic())
+                    elif time.monotonic() - idle_since[1] >= _STALL_S:
+                        return record, ("the turn is suspended with nothing left to answer "
+                                        "and did not resume; open it in OpenProgram")
+            else:
+                idle_since = None
+            time.sleep(_FOLLOW_POLL_S)
 
     # -- events → session/update -----------------------------------------
 
@@ -412,6 +556,9 @@ class ACPServer:
             _log.debug("acp notify failed", exc_info=True)
 
     def _on_event(self, sess: _Session, env: dict) -> None:
+        if env.get("type") in ("question.asked", "system_access.waiting"):
+            self._forward_question(sess, env.get("data") or {})
+            return
         if env.get("type") != "chat_response":
             return
         data = env.get("data") or {}
@@ -460,19 +607,66 @@ class ACPServer:
 
     def _subscribe_questions(self) -> None:
         from openprogram.runtime.events import get_event_bus
+        from openprogram.runtime.events.bus import WS_FRAME_EVENT
 
-        self._unsubscribe = get_event_bus().subscribe(
-            self._on_question, types={"question.asked"})
+        bus = get_event_bus()
+        self._unsubscribe = [
+            bus.subscribe(self._on_question, types={"question.asked"}),
+            # A turn resumed after an answer streams through the shared
+            # event stream, not the sink of the prompt that started it.
+            bus.subscribe(self._on_frame, types={WS_FRAME_EVENT}),
+        ]
 
-    def _on_question(self, event) -> None:
-        data = getattr(event, "payload", None) or {}
-        if data.get("kind") != "approval":
-            return  # runtime.ask / form questions have no ACP equivalent
+    def _on_frame(self, event) -> None:
+        frame = (getattr(event, "payload", None) or {}).get("frame")
+        if not isinstance(frame, dict):
+            return
+        data = frame.get("data")
+        if not isinstance(data, dict):
+            return
         sess = self._sessions.get(data.get("session_id") or "")
         if sess is None:
             return
+        if frame.get("type") == "chat_response":
+            # Only while a prompt is open: the editor has no thread to show
+            # a turn it did not start.
+            with sess.lock:
+                active = sess.execution_id is not None
+            if not active:
+                return
+        self._on_event(sess, frame)
+
+    def _on_question(self, event) -> None:
+        data = getattr(event, "payload", None) or {}
+        sess = self._sessions.get(data.get("session_id") or "")
+        if sess is None:
+            return
+        self._forward_question(sess, data)
+
+    def _forward_question(self, sess: _Session, data: dict) -> None:
         qid = data.get("id")
         if not qid:
+            return
+        with sess.lock:
+            if qid in sess.seen_questions:
+                return
+            sess.seen_questions.add(qid)
+        if data.get("kind") == "system_access":
+            # Only the user, in the system's settings, can grant it, and only
+            # a worker resumes the turn after; an editor has no way to.
+            threading.Thread(target=self._refuse_system_access, args=(sess, data),
+                             daemon=True).start()
+            return
+        if data.get("kind") != "approval":
+            # runtime.ask / form questions have no ACP form. Declining lets
+            # the tool report that no one answered instead of the turn
+            # waiting on a question nobody is shown.
+            if data.get("execution_id"):
+                threading.Thread(
+                    target=self._resolve_wait,
+                    args=(data, data["execution_id"], "execution.wait.decline", None),
+                    daemon=True,
+                ).start()
             return
         execution_id = data.get("execution_id") or ""
         if not execution_id:
@@ -505,6 +699,19 @@ class ACPServer:
             daemon=True,
         ).start()
 
+    def _refuse_system_access(self, sess: _Session, data: dict) -> None:
+        execution_id = data.get("execution_id") or ""
+        with sess.lock:
+            if not execution_id or execution_id != sess.execution_id:
+                return
+            needed = data.get("required_capabilities") or []
+            sess.stop_error = (
+                "the turn needs system access an editor cannot grant"
+                + (f" ({', '.join(map(str, needed))})" if needed else "")
+                + "; grant it in OpenProgram and send the prompt again"
+            )
+        self._cancel(sess, "system_access_unavailable")
+
     def _ask_permission(
         self, sess: _Session, data: dict,
         expected_execution_id: str | None = None,
@@ -524,6 +731,11 @@ class ACPServer:
             ):
                 return
         tool = data.get("tool") or "?"
+        expires_at = data.get("expires_at")
+        timeout = (max(1.0, float(expires_at) - time.time())
+                   if isinstance(expires_at, (int, float)) and expires_at > 0
+                   else _PERMISSION_TIMEOUT_S)
+        resp = None
         try:
             resp = self._conn.request("session/request_permission", {
                 "sessionId": sess.id,
@@ -542,10 +754,13 @@ class ACPServer:
                     {"optionId": _REJECT_ONCE, "name": "Reject",
                      "kind": "reject_once"},
                 ],
-            })
+            }, timeout=timeout)
         except Exception:
-            _log.debug("acp permission request failed", exc_info=True)
-            return
+            # The client does not take permission requests, answered with
+            # an error, did not answer in time or hung up: the operation is
+            # declined, so the turn goes on without it instead of waiting.
+            _log.warning("ACP permission request for %s not answered; declining",
+                         tool, exc_info=True)
         finally:
             with sess.lock:
                 sess.open_questions.pop(qid, None)
@@ -564,24 +779,77 @@ class ACPServer:
             {"answer": "允许", "scope": "always" if choice == _ALLOW_ALWAYS else "once"}
             if action == "execution.wait.answer" else None
         )
+        self._resolve_wait(data, expected_execution_id, action, value)
+
+    def _resolve_wait(self, data: dict, execution_id: str, action: str, value) -> None:
+        """Answer or decline one durable wait through the control service."""
         try:
             from openprogram.runtime.permissions.authority import local_owner_authority
             from openprogram.runtime.execution import (
                 default_control_service, default_store, submit_wait_command,
             )
-            execution = default_store().get_execution(expected_execution_id)
+            execution = default_store().get_execution(execution_id)
             if execution is None:
                 return
             asyncio.run(submit_wait_command(
                 default_control_service(), action=action,
                 command_id=f"acp-wait:{uuid.uuid4().hex}",
-                execution_id=expected_execution_id,
+                execution_id=execution_id,
                 expected_version=execution.status_version,
-                actor=local_owner_authority(), wait_id=qid,
+                actor=local_owner_authority(), wait_id=data.get("id"),
                 generation=int(data.get("wait_generation") or 0), value=value,
             ))
         except Exception:
+            # A wait already settled (cancelled, expired) refuses the command.
             _log.debug("ACP question resolution failed", exc_info=True)
+
+
+def _last_failure(store, execution_id: str) -> str | None:
+    """The failure the execution's last attempt recorded, if any.
+
+    A turn resumed after a permission answer fails in a later attempt than
+    the one the prompt started; its error lives only on that attempt.
+    """
+    try:
+        from openprogram.runtime.execution.attempts import AttemptStore
+
+        attempts = AttemptStore(store).list_for_execution(execution_id)
+    except Exception:
+        _log.debug("attempts of %s not read", execution_id, exc_info=True)
+        return None
+    for attempt in sorted(attempts, key=lambda a: a.generation, reverse=True):
+        if attempt.failure_text:
+            return attempt.failure_text
+    return None
+
+
+def _stop(result, final, last_failure: str | None = None) -> dict:
+    """The ``session/prompt`` answer for a turn that ended uncancelled.
+
+    A failed turn is a JSON-RPC error, so the client shows why it failed
+    instead of an ordinary stop. ``result`` is the first attempt's; when it
+    did not fail, the error is the one ``last_failure`` read from the
+    attempt that did.
+    """
+    from openprogram.runtime.execution.model import ExecutionStatus
+
+    status = getattr(final, "status", None)
+    if status in (ExecutionStatus.CANCELLED, ExecutionStatus.INTERRUPTED):
+        return {"stopReason": "cancelled"}
+    failed_result = result is not None and getattr(result, "failed", False)
+    if failed_result or status is ExecutionStatus.FAILED:
+        reason = getattr(final, "reason_code", None)
+        message = ((getattr(result, "error", None) if failed_result else None)
+                   or last_failure
+                   or (f"the turn failed ({reason})" if reason else "the turn failed"))
+        data = {"reason": (getattr(result, "error_reason", None) if failed_result else None)
+                or reason}
+        if failed_result and getattr(result, "error_retryable", None) is not None:
+            data["retryable"] = bool(result.error_retryable)
+        raise RPCError(INTERNAL_ERROR, str(message), data)
+    if result is None and final is None:
+        raise RPCError(INTERNAL_ERROR, "the turn ended without a result")
+    return {"stopReason": "end_turn"}
 
 
 def _locations(raw_input) -> list[dict]:

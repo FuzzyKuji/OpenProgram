@@ -54,6 +54,9 @@ export interface ControlsClusterProps {
   pendingImagesCount: number;
   pendingDocsCount: number;
   webSearchEnabled: boolean;
+  /** Whether web search follows the Agent or was set on this branch (and
+   *  the Agent's default); unknown leaves the tooltip without that line. */
+  webSearchOrigin?: { follows: boolean; inherited: unknown } | null;
   toggleWebSearch(): void;
   fastEnabled: boolean;
   fastSupported: boolean;
@@ -86,6 +89,7 @@ export function ControlsCluster({
   pendingImagesCount,
   pendingDocsCount,
   webSearchEnabled,
+  webSearchOrigin = null,
   toggleWebSearch,
   fastEnabled,
   fastSupported,
@@ -228,7 +232,10 @@ export function ControlsCluster({
                 <HoverTip label={<TipBody title={text("Web search on", "网页搜索已开启")} detail={text(
                   "With a provider that has its own web search (ChatGPT, OpenAI, Claude, Gemini), the model searches through the provider; otherwise it uses the local web_search tool and the search backend set in Settings. Click to turn off.",
                   "模型的提供商自带网页搜索时（ChatGPT、OpenAI、Claude、Gemini）由提供商搜索；否则使用本地 web_search 工具和设置里配置的搜索后端。点击关闭。",
-                )} />}>
+                ) + (webSearchOrigin ? " " + (webSearchOrigin.follows
+                  ? text("Follows the Agent.", "跟随 Agent。")
+                  : text(`Set on this branch · Agent default: ${webSearchOrigin.inherited ? "on" : "off"}.`,
+                         `本分支已设置 · Agent 默认：${webSearchOrigin.inherited ? "开" : "关"}。`)) : "")} />}>
                   <ToolChip
                     icon={<WebSearchIcon size={16} />}
                     label={text("Web Search", "网页搜索")}

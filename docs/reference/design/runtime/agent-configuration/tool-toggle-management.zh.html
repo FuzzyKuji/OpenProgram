@@ -1,18 +1,18 @@
 <title>工具开关和工具集</title>
-<meta name="description" content="一轮的工具集如何确定：Agent 配置、会话意图和延迟加载。">
+<meta name="description" content="一轮的工具集如何确定：Agent 配置、分支意图和延迟加载。">
 <h1>工具开关和工具集</h1>
-<p>Agent 决定会话能调用哪些工具。会话只保存意图，绝不保存展开后的列表，所以新工具能进入所有旧会话。</p>
+<p>所选 Agent 决定分支能调用哪些工具。每个分支只保存意图，绝不保存展开后的列表，新工具仍通过 Agent 模板提供。分支在创建时继承意图，此后独立修改。</p>
 
 <h2 id="who-chooses">谁来选</h2>
 <table class="stack">
 <thead><tr><th scope="col">位置</th><th scope="col">设置</th><th scope="col">存储</th></tr></thead>
 <tbody>
 <tr><th scope="row">Agents → 能力 → 程序</th><td>范围：全部、指定、命名的访问预设或无。另有禁用名称和 <code translate="no">web_search</code> 默认值。</td><td>Agent 配置，<code translate="no">tools: {mode, allowed, preset, disabled, web_search}</code></td></tr>
-<tr><th scope="row">输入框网页搜索开关</th><td>在 Agent 工具集上叠加或去掉 <code translate="no">web_search</code></td><td>会话 meta，<code translate="no">web_search</code></td></tr>
-<tr><th scope="row">带 <code translate="no">allowed-tools</code> 的 <code translate="no">/skill &lt;name&gt;</code></th><td>把本轮收窄到技能的允许清单</td><td>会话 meta，<code translate="no">tools_override</code>（<code translate="no">list[str]</code>）</td></tr>
+<tr><th scope="row">输入框网页搜索开关</th><td>在 Agent 工具集上叠加或去掉 <code translate="no">web_search</code></td><td>分支配置，<code translate="no">web_search</code></td></tr>
+<tr><th scope="row">带 <code translate="no">allowed-tools</code> 的 <code translate="no">/skill &lt;name&gt;</code></th><td>把本轮收窄到技能的允许清单</td><td>分支配置，<code translate="no">tools_override</code>（<code translate="no">list[str]</code>）</td></tr>
 </tbody>
 </table>
-<p class="note">输入框没有工具开关和按聊天的预设。不用工具的聊天使用程序设为无的 Agent。聊天动作只从消息读 <code translate="no">web_search</code>，不读 <code translate="no">tools</code> 或 <code translate="no">tools_profile</code>。</p>
+<p class="note">输入框没有工具开关和按聊天的预设。不用工具的聊天使用程序设为无的 Agent。聊天动作只从消息读 <code translate="no">web_search</code>，不读 <code translate="no">tools</code> 或 <code translate="no">tools_profile</code>。消息不带 <code translate="no">web_search</code> 时（CLI、TUI），已存的意图不变。</p>
 
 <h2 id="priority-chain">优先级</h2>
 <p><code translate="no">runtime/conversation/model_tools.py</code> 的 <code translate="no">resolve_tools(agent_profile, override, source)</code>；override 由 <code translate="no">session_config.py</code> 的 <code translate="no">tools_override_from_config(cfg)</code> 产生。</p>
@@ -36,7 +36,7 @@
 <tr><th scope="row">禁用或隐藏</th><td>无</td><td>无</td><td>否</td></tr>
 </tbody>
 </table>
-<p class="note">目录只给名称，最多 80 个，其余显示数量，所以延迟工具再多也不会变大。</p>
+<p class="note">目录逐个列出内置延迟工具的名称，每个 MCP 服务器或应用一行命名空间，总共不超过 4 KiB，其余显示数量，所以延迟工具再多也不会变大（<a href="../../function/deferred-tools.zh.html#catalog">延迟工具</a>）。</p>
 
 <table class="stack fixed">
 <thead class="sr"><tr><th scope="col">分组</th><th scope="col">成员</th></tr></thead>
@@ -44,7 +44,7 @@
 <tr><th scope="row">常驻</th><td><code translate="no">DEFAULT_TOOLS</code> 减 <code translate="no">DEFERRED_DEFAULT_TOOLS</code>，加 <code translate="no">tool_search</code> 和 <code translate="no">job_output</code>。<code translate="no">tool_search</code> 永不延迟：它是唯一的加载入口。</td></tr>
 <tr><th scope="row"><code translate="no">DEFERRED_DEFAULT_TOOLS</code></th><td>记忆工具、<code translate="no">scheduler</code>、<code translate="no">exit_plan_mode</code>（计划模式提示词会点名）、<code translate="no">send_message</code>、<code translate="no">skill</code>、<code translate="no">save_routine</code>。默认可用，体积大且少用。</td></tr>
 <tr><th scope="row">其他已暴露工具</th><td><code translate="no">full</code> 中不属于 <code translate="no">DEFAULT_TOOLS</code> 的全部</td></tr>
-<tr><th scope="row">应用入口</th><td>延迟；应用在窗口中打开时常驻</td></tr>
+<tr><th scope="row">应用入口</th><td>延迟，应用在窗口中打开时也是：打开不加载任何工具</td></tr>
 <tr><th scope="row">显式网页搜索</th><td>提升一份常驻副本，不用 <code translate="no">tool_search</code> 就能发送。共享注册表不变。</td></tr>
 <tr><th scope="row">按名称给的工具列表</th><td>列表里没有 <code translate="no">tool_search</code> 时，全部以常驻发送</td></tr>
 </tbody>
@@ -56,15 +56,12 @@
 <thead class="sr"><tr><th scope="col">部分</th><th scope="col">行为</th></tr></thead>
 <tbody>
 <tr><th scope="row"><code translate="no">apply_default_deferral()</code></th><td>在 <code translate="no">programs/__init__.py</code> 导入时运行一次，给每个条目默认层级。幂等。之后注册的条目在注册时获得层级。</td></tr>
-<tr><th scope="row"><code translate="no">split_tools_for_dispatch(tools)</code></th><td>按层级和已加载集合分成 <code translate="no">(provider_tools, catalog)</code></td></tr>
-<tr><th scope="row">已加载集合</th><td>按会话初始化的 ContextVar（<code translate="no">install_loaded_deferred</code>），由 <code translate="no">tool_search</code> 内部扩充（<code translate="no">mark_deferred_loaded</code>）</td></tr>
-<tr><th scope="row"><code translate="no">freeze_turn_tools</code></th><td>在每个轮次边界记录延迟成员。轮内只有显式发现能扩充。</td></tr>
-<tr><th scope="row">发现</th><td><code translate="no">tool_search</code> 把允许的名称加入已加载集合和本轮共享成员集合，下一次供应商请求带上真实 schema。只在工具结果里返回 schema 不够：有些供应商只接受请求数组里的工具。</td></tr>
-<tr><th scope="row">原地修改</th><td>工具 worker 继承 ContextVar 的值；替换 worker 的值到不了供应商协程</td></tr>
+<tr><th scope="row"><code translate="no">split_tools_for_dispatch(tools, loaded)</code></th><td>按层级和本次请求的已加载集合分成 <code translate="no">(provider_tools, catalog)</code></td></tr>
+<tr><th scope="row">已加载集合</th><td>不单独存放。每次请求从自己的消息里读出（<code translate="no">shared/tool_loads.py</code> 的 <code translate="no">loaded_tools(messages)</code>）：工具结果上的加载记录（<code translate="no">details.loads</code>），加上其中压缩摘要携带的名字（<code translate="no">carried_tool_names</code>）。嵌套运行读它自己的消息，分支读它自己的历史，编辑后重发的轮次读编辑点之前的历史。</td></tr>
+<tr><th scope="row">发现</th><td><code translate="no">tool_search</code> 在结果上写加载记录（<code translate="no">record_loads</code>），下一次供应商请求带上真实 schema。guide 或打开的应用只说出工具名和加载方法，不加载任何工具。只在工具结果里返回 schema 不够：有些供应商只接受请求数组里的工具。</td></tr>
 <tr><th scope="row">执行</th><td>使用本轮已解析、带权限包装的工具，不重新查注册表。没有发现时数组稳定；发现可能改变缓存前缀。</td></tr>
-<tr><th scope="row">检查点</th><td>每个持久安全点记录 <code translate="no">loaded_deferred_tools</code>，名称必须属于已解析的工具约定。续跑先校验约定未变，再恢复名称，不重放搜索。旧检查点恢复空集合。工具结果文本绝不当作授权或加载状态。</td></tr>
-<tr><th scope="row">轮次之外</th><td><code translate="no">release_turn_tools()</code> 读实时已加载集合</td></tr>
-<tr><th scope="row">目录</th><td>上下文组件 <code translate="no">deferred_catalog</code>（<code translate="no">runtime/context/components.py</code> 的 <code translate="no">_build_deferred_catalog</code>），预算的字符串就是发送的字符串。没有延迟工具时为空。</td></tr>
+<tr><th scope="row">检查点</th><td>续跑不需要已加载的名字：恢复的请求从它带着的消息里读出。journal 里旧的 <code translate="no">loaded_deferred_tools</code> 字段不再写入，也不再用来加载。工具结果文本绝不当作授权或加载状态。</td></tr>
+<tr><th scope="row">目录</th><td>对话自己的回合把它作为 <code translate="no">turn_context</code> 的 <code translate="no">deferred_catalog</code> 段放在用户消息旁：没有基线时发完整列表，之后只发新增和移除。自带系统提示的调用（Agent 方法、<code translate="no">runtime.exec</code>）仍把它写在那份提示里（<code translate="no">runtime/context/components.py</code> 的 <code translate="no">_build_deferred_catalog</code>）。没有延迟工具时为空。</td></tr>
 <tr><th scope="row"><code translate="no">_estimate_one_tool</code></th><td>在 <code translate="no">runtime/context/budget.py</code>。常驻：描述、参数和少量包装。延迟：名称加换行。两种误差方向相反，所以 <code translate="no">test_budget.py</code> 分别对照真实分词结果，误差 15% 内。</td></tr>
 </tbody>
 </table>
@@ -117,7 +114,7 @@
 <tr><th scope="row"><code translate="no">interfaces/server/ws_actions/chat/turn.py</code></th><td><code translate="no">tools_flag</code> 初始为 <code translate="no">None</code>；<code translate="no">/skill</code> 设置它；新 Agent 对话清空两者。这里不展开任何东西。</td></tr>
 <tr><th scope="row"><code translate="no">runtime/conversation/model_tools.py</code></th><td><code translate="no">resolve_tools</code> dict 分支的 <code translate="no">_overlay_web_search</code>（web_search 不在 <code translate="no">DEFAULT_TOOLS</code>）</td></tr>
 <tr><th scope="row"><code translate="no">programs/_host/runtime.py</code></th><td>上述延迟机制、<code translate="no">tool_search</code>、<code translate="no">deferred_catalog_text</code></td></tr>
-<tr><th scope="row"><code translate="no">runtime/agent/loop/</code></th><td>每轮调用 <code translate="no">freeze_turn_tools</code>；按名称对完整列表解析调用，轮内加载的工具可分发</td></tr>
+<tr><th scope="row"><code translate="no">runtime/agent/loop/</code></th><td>每次请求从消息读出已加载集合（<code translate="no">streaming.py</code>）；按名称对完整列表解析调用，轮内加载的工具可分发</td></tr>
 </tbody>
 </table>
 <table class="stack fixed">

@@ -1,7 +1,7 @@
 <title>Installation, packaging, release and upgrade</title>
 <meta name="description" content="Who installs OpenProgram how, what every release contains, and how installs are verified, upgraded and removed.">
 <h1>Installation, packaging, release and upgrade</h1>
-<p><strong>Official releases</strong>: v1.1.0 is the version this tree builds; v1.0.0 is the latest published. One complete product runtime per platform and architecture. The macOS App adds only the Electron shell to it and the CLI only launchers; Windows and Linux Apps are a <a href="#thin-shell">thin shell</a> plus a seed. Checks, downloads and platform handoff are in <a href="automatic-updates.html">Automatic updates</a>.</p>
+<p><strong>Official releases</strong>: v1.2.0 is the version this tree builds; v1.1.0 is the latest published. One complete product runtime per platform and architecture. The macOS App adds only the Electron shell to it and the CLI only launchers; Windows and Linux Apps are a <a href="#thin-shell">thin shell</a> plus a seed. Checks, downloads and platform handoff are in <a href="automatic-updates.html">Automatic updates</a>.</p>
 
 <h2>Who gets what</h2>
 <table class="stack">
@@ -57,6 +57,7 @@
 </tbody>
 </table>
 <p class="note">arm64 and x64 build separately, no universal2. A platform leg that fails leaves its files out and is named under "Not in this release"; publication stops only when the wheel or every macOS and Linux runtime is missing. Thin Apps need a trusted update signing key, because without one they could never update.</p>
+<p class="note">A leg whose artifact holds no installer or archive counts as failed and publishes nothing. When a planned package, a platform's update files or an installer's checksum file is missing, the publish job turns red after the release is public and names each one. What a switch or a missing key leaves out does not.</p>
 <table class="stack fixed">
 <thead><tr><th scope="col">Repository variable</th><th scope="col">Leg</th></tr></thead>
 <tbody>
@@ -280,7 +281,7 @@
 <details>
 <summary>Windows, CLI, release</summary>
 <ul>
-<li>Windows: same ZIP as the CLI; manifest, Python, worker health and Web chat from the unpacked App; ConPTY presets; browser paths. Updater takes only the exact EXE.</li>
+<li>Windows: same ZIP as the CLI; manifest, Python, worker health and Web chat from the unpacked App; ConPTY presets; browser paths. Updater takes only the exact EXE. Before packaging, the tests in <code translate="no">scripts/release/windows-contracts.txt</code>; after it, <code translate="no">smoke-windows-desktop.ps1</code> installs, launches to a healthy worker, makes one tool call and uninstalls keeping the data. The installed CLI also makes one tool call (<code translate="no">smoke-tool-call.py</code>).</li>
 <li>CLI: both bootstraps with latest and pinned versions; no PyPI or clone; hashes match; old version starts after a failed upgrade.</li>
 <li>Release: one version everywhere; every published asset passed its own leg; a build with no publisher signature carries <code translate="no">-unsigned</code> in its name.</li>
 <li>Linux Desktop: <code translate="no">scripts/release/smoke-linux-desktop.sh</code> under Xvfb on clean Ubuntu 22.04 and 24.04 with Git removed: deb install, desktop entry, <code translate="no">node-pty</code>, first-run seed, restart after unpacking, worker health, <code translate="no">/chat</code>, the launcher, and the AppImage with <code translate="no">APPIMAGE_EXTRACT_AND_RUN=1</code>.</li>
@@ -311,8 +312,8 @@
 <tbody>
 <tr><th scope="row">Single-port worker, health and recovery, Web in the runtime, capability manifest, shared runtime archive, fixed-App install, icons, CLI installers, tag-driven Release</th><td>Implemented</td></tr>
 <tr><th scope="row">macOS signed DMG and ZIP</th><td>Implemented; Apple gates are <a href="developer-id.html">external</a></td></tr>
-<tr><th scope="row">Windows Desktop</th><td>Implemented, first published with v1.1.0; never run on real Windows. <a href="windows-support.html#implementation-status">Windows support</a></td></tr>
-<tr><th scope="row">Thin shell and seed</th><td>Implemented, used by Windows and Linux Apps from v1.1.0. The packaged shell passes the macOS smoke; Linux deb and AppImage pass under Xvfb on arm64. Open: x86_64 Linux packages, a real Windows run, and the macOS privacy-grant gate (<a href="developer-id.html">Developer ID</a>) before the macOS App can turn thin. <code translate="no">legacy_app</code> and the App ties in the supervisor still exist</td></tr>
+<tr><th scope="row">Windows Desktop</th><td>Implemented, first published with v1.2.0; never run on real Windows. <a href="windows-support.html#implementation-status">Windows support</a></td></tr>
+<tr><th scope="row">Thin shell and seed</th><td>Implemented, used by the Linux App from v1.1.0 and the Windows App from v1.1.1. The packaged shell passes the macOS smoke; Linux deb and AppImage pass under Xvfb on arm64. Open: x86_64 Linux packages, a real Windows run, and the macOS privacy-grant gate (<a href="developer-id.html">Developer ID</a>) before the macOS App can turn thin. <code translate="no">legacy_app</code> and the App ties in the supervisor still exist</td></tr>
 <tr><th scope="row">Linux Desktop</th><td>Implemented, first published with v1.1.0. Update activation and going back on Linux need one more end-to-end run</td></tr>
 <tr><th scope="row">Release workflow</th><td>Independent legs and unsigned forms implemented and tested as scripts; the workflow itself has not yet run on GitHub</td></tr>
 <tr><th scope="row">Local refresh completion</th><td>Regression cases pass; installed-App acceptance open</td></tr>

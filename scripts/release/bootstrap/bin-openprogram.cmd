@@ -1,7 +1,13 @@
 @echo off
 rem Installed as <root>\bin\openprogram.cmd. `versions` runs outside every
 rem version, so it works when the current one is broken.
-setlocal
+rem
+rem Python runs in UTF-8 mode here, as the launcher and the other installed
+rem commands start it. The console reads what it prints as UTF-8 for the length
+rem of the command and gets its own code page back, with Python's exit status.
+setlocal DisableDelayedExpansion
+for /f "tokens=2 delims=:." %%P in ('chcp') do set "_OPENPROGRAM_CODEPAGE=%%P"
+chcp 65001 >nul
 set "ROOT=%~dp0.."
 for /f "usebackq tokens=1,* delims==" %%A in ("%ROOT%\current") do (
   if "%%A"=="version" set "VERSION=%%B"
@@ -15,8 +21,9 @@ if /i "%~1"=="versions" (
   shift
   goto versions
 )
-"%ROOT%\versions\%VERSION%\venv\Scripts\python.exe" -I -B -m openprogram %*
-exit /b %ERRORLEVEL%
+"%ROOT%\versions\%VERSION%\venv\Scripts\python.exe" -I -B -X utf8 -m openprogram %*
+set "_OPENPROGRAM_EXIT=%ERRORLEVEL%"
+goto finish
 
 :versions
 set "ARGUMENTS="
@@ -26,5 +33,9 @@ set "ARGUMENTS=%ARGUMENTS% %1"
 shift
 goto collect
 :run
-"%BASE_PYTHON%" -I -B "%ROOT%\bootstrap\versions.py" --root "%ROOT%" %ARGUMENTS%
-exit /b %ERRORLEVEL%
+"%BASE_PYTHON%" -I -B -X utf8 "%ROOT%\bootstrap\versions.py" --root "%ROOT%" %ARGUMENTS%
+set "_OPENPROGRAM_EXIT=%ERRORLEVEL%"
+
+:finish
+chcp %_OPENPROGRAM_CODEPAGE% >nul
+exit /b %_OPENPROGRAM_EXIT%

@@ -4,7 +4,10 @@ Provider API-key resolution.
 LLM provider credentials live in exactly ONE place: the AuthStore under
 ``~/.openprogram`` — written by the settings UI ("add a key") and by the
 CLI (``openprogram providers login <provider> --api-key``). Environment
-variables are NOT consulted; there is no config.json fallback.
+variables are NOT consulted, with one exception: a one-shot ``openprogram
+--print`` process, after the AuthStore finds no key, reads the provider's
+standard variable for itself and stores nothing
+(:func:`read_env_keys_in_this_process`). There is no config.json fallback.
 
 The two exceptions are Amazon Bedrock and Google Vertex, whose
 authentication is the cloud SDK's own credential chain (AWS SigV4 /
@@ -70,13 +73,44 @@ def resolve_provider_key(provider: str) -> str | None:
     except ImportError:
         return None
     try:
-        return resolve_store_api_key_sync(provider)
+        stored = resolve_store_api_key_sync(provider)
     except AuthCredentialProcessError:
         # A configured helper that fails is an error the user must see,
         # not a "no key here" shrug — see auth.resolver's module docstring.
         raise
     except Exception:
+        stored = None
+    return stored or process_env_key(provider)
+
+
+# A one-shot run (``openprogram --print``) may take a provider's standard
+# environment variable when the AuthStore has no key: read in this process
+# only, never written to the store, and only after a stored key.
+_env_keys_in_process = False
+
+
+def read_env_keys_in_this_process(enabled: bool = True) -> None:
+    """Let :func:`resolve_provider_key` fall back to the provider's standard
+    environment variable for the rest of this process (``--print`` only)."""
+    global _env_keys_in_process
+    _env_keys_in_process = bool(enabled)
+
+
+def process_env_key(provider: str) -> str | None:
+    """The provider's key from its standard environment variable, when this
+    process allows it (:func:`read_env_keys_in_this_process`). OAuth tokens
+    are not keys and are skipped."""
+    if not _env_keys_in_process:
         return None
+    for name in env_vars_for(provider):
+        if "OAUTH" in name.upper():
+            continue
+        value = (os.environ.get(name) or "").strip()
+        if value.lower().startswith("bearer "):
+            value = value[7:].strip()
+        if value:
+            return value
+    return None
 
 
 # 

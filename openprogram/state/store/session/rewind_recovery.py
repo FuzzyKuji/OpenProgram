@@ -35,13 +35,17 @@ def cas_for_intent(
             "source_branch_id": source_branch_id,
             "target_branch_id": target_branch_id,
             "active_branch_id": target_branch_id if forward else source_branch_id,
-            "target_status": "active" if forward else "aborted",
-            "preserve_target": not forward,
+            "target_status": "active" if forward or source_branch_id == target_branch_id else "aborted",
+            "preserve_target": not forward and source_branch_id != target_branch_id,
         }
     return store.compare_and_set_head(
         session_id,
         expected,
         target,
+        expected_meta=({"active_branch_id": (
+            intent["expected_active_branch_id"] if forward
+            else target_branch_id or intent["expected_active_branch_id"]
+        )} if "expected_active_branch_id" in intent else None),
         branch_update=update,
         meta_update=(
             intent.get("forward_meta_update")
@@ -55,7 +59,12 @@ def recover_session_rewinds(session_id: str, *, store=None) -> list[dict]:
     from openprogram.state.store.snapshot.checkpoint import CheckpointStore
 
     store = store or default_store()
-    with store._rewind_recovery_scope(session_id):
+    # Replay under the conversation's write lock, which a live rewind holds
+    # from its intent to its outcome: a journal entry seen here is never
+    # one another thread or process is still applying.
+    if not session_id or session_id in {".", ".."}:
+        return []
+    with store._conversation_write_lock(session_id), store._rewind_recovery_scope(session_id):
         if store._open(session_id) is None:
             return []
         journal = CheckpointStore(store._session_dir(session_id))

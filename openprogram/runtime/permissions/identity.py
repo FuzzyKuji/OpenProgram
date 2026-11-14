@@ -70,6 +70,12 @@ def check_in(req) -> bool:
     return getattr(req, "speaker_id", None) == CHECK_IN_SPEAKER
 
 
+def ends_with_its_run(req) -> bool:
+    """A run that starts clean and ends with its answer: a scheduled run or a
+    check-in. What it opened for itself (a page) is of no use to the next one."""
+    return check_in(req) or getattr(req, "source", None) in {"cron", "scheduler"}
+
+
 def in_handoff_chain(req) -> bool:
     """A turn that delivers a handoff or its reply."""
     return getattr(req, "automation", None) in HANDOFF_TURNS
@@ -145,15 +151,6 @@ def destructive_delete(name: str, args: dict | None) -> bool:
                for key in ("command", "cmd", "code", "chars"))
 
 
-def _web_use_evaluates(args: dict | None) -> bool:
-    """A web_use call that runs arbitrary JavaScript in a page, in any argument spelling."""
-    if not isinstance(args, dict):
-        return False
-    nested = args.get("arguments") if isinstance(args.get("arguments"), dict) else {}
-    return any(str(value or "").strip().lower() == "evaluate"
-               for value in (args.get("action"), nested.get("action")))
-
-
 def page_script(name: str, args: dict | None) -> bool:
     """A page script reads everything a signed-in page holds, including what
     observations redact. It is part of operating that browser: the grant that
@@ -163,7 +160,7 @@ def page_script(name: str, args: dict | None) -> bool:
     if name == "computer_use_agent":
         from openprogram.programs.tools.computer_use.computer_use_agent import evaluates
         return evaluates(args)
-    return name == "web_use" and _web_use_evaluates(args)
+    return False
 
 
 def path_is_safe(tool_name: str, args: dict, req: Any) -> bool:
@@ -271,6 +268,6 @@ def _denied(item: refusal.Refusal, authority: object | None = None) -> Decision:
 
 
 __all__ = [
-    "AUTOMATIC_GOAL_ORIGINS", "CHECK_IN_SPEAKER", "FROM_AUTOMATIC_GOAL", "SCHEDULER_SPEAKER", "automatic_goal_origin", "destructive_delete", "detached_from_window", "in_handoff_chain", "inherited_automation", "outside_text", "PATCH_PATH_PREFIXES", "READ_PATH_TOOLS", "RISKY_TOOLS", "SCHEDULED_MEMORY_TOOLS",
+    "AUTOMATIC_GOAL_ORIGINS", "CHECK_IN_SPEAKER", "FROM_AUTOMATIC_GOAL", "SCHEDULER_SPEAKER", "automatic_goal_origin", "destructive_delete", "detached_from_window", "ends_with_its_run", "in_handoff_chain", "inherited_automation", "outside_text", "PATCH_PATH_PREFIXES", "READ_PATH_TOOLS", "RISKY_TOOLS", "SCHEDULED_MEMORY_TOOLS",
     "WORKTREE_TOOLS", "WRITE_TOOLS", "audit_path", "check_in", "check_in_read_refusal", "decide", "page_script", "path_is_safe", "scope_violation", "unattended",
 ]

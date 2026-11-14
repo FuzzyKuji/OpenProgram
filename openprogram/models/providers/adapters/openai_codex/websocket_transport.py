@@ -64,6 +64,8 @@ SHUN_S = 10 * 60.0
 # Frames read ahead of the reply proper, to tell an error before anything is handed on.
 PRELUDE_FRAMES = 8
 # Frames that are the transport's own and never part of the reply.
+# ``codex.rate_limits`` carries the plan windows; it goes to the turn's
+# ``on_frame`` (quota capture) and not into the reply.
 _TRANSPORT_FRAMES = frozenset({
     "codex.rate_limits",
     "codex.response.metadata",
@@ -260,6 +262,20 @@ def _pool() -> dict[str, _Kept]:
     return pool
 
 
+#: Closes started without waiting for them, per loop; :func:`drain` awaits
+#: what is left of them before the loop closes.
+_closing: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, set[asyncio.Task]]" = weakref.WeakKeyDictionary()
+
+
+def _close_later(kept: _Kept) -> None:
+    """Close ``kept`` without making the caller wait for the round trip."""
+    loop = asyncio.get_running_loop()
+    task = loop.create_task(kept.close())
+    tasks = _closing.setdefault(loop, set())
+    tasks.add(task)
+    task.add_done_callback(tasks.discard)
+
+
 def keep_key(url: str, headers: dict[str, str], body: dict[str, Any]) -> str:
     """The conversation's key among kept sockets; ``""`` for a turn that names none.
 
@@ -281,7 +297,7 @@ def _take(key: str) -> _Kept | None:
         return None
     now = time.monotonic()
     if now - kept.opened >= KEEP_AGE_S or now - kept.used >= KEEP_IDLE_S:
-        asyncio.ensure_future(kept.close())
+        _close_later(kept)
         return None
     return kept
 
@@ -289,27 +305,29 @@ def _take(key: str) -> _Kept | None:
 def _put(kept: _Kept) -> None:
     now = time.monotonic()
     if not kept.key or now - kept.opened >= KEEP_AGE_S:
-        asyncio.ensure_future(kept.close())
+        _close_later(kept)
         return
     kept.used = now
     pool = _pool()
     previous = pool.pop(kept.key, None)
     if previous is not None and previous is not kept:
-        asyncio.ensure_future(previous.close())
+        _close_later(previous)
     pool[kept.key] = kept
     for stale_key in [k for k, v in pool.items() if now - v.used >= KEEP_IDLE_S or now - v.opened >= KEEP_AGE_S]:
-        asyncio.ensure_future(pool.pop(stale_key).close())
+        _close_later(pool.pop(stale_key))
     while len(pool) > KEEP_MAX:
         oldest = min(pool, key=lambda k: pool[k].used)
-        asyncio.ensure_future(pool.pop(oldest).close())
+        _close_later(pool.pop(oldest))
 
 
 async def drain() -> None:
-    """Close every socket kept on the running loop."""
+    """Close every socket kept on the running loop, and finish the closes
+    already under way."""
     pool = _pool()
     kept = list(pool.values())
     pool.clear()
-    await asyncio.gather(*(k.close() for k in kept), return_exceptions=True)
+    closing = list(_closing.pop(asyncio.get_running_loop(), ()))
+    await asyncio.gather(*(k.close() for k in kept), *closing, return_exceptions=True)
 
 
 # Kept sockets close with the loop's shared HTTP clients.
@@ -336,8 +354,10 @@ def _error_status(frame: dict[str, Any]) -> int:
 class SocketTurn:
     """A turn whose reply has begun on a socket: its events, as the HTTP stream's."""
 
-    def __init__(self, kept: _Kept, shape: TurnShape | None, prelude: list[dict[str, Any]], size: int) -> None:
+    def __init__(self, kept: _Kept, shape: TurnShape | None, prelude: list[dict[str, Any]], size: int,
+                 on_frame: Any = None) -> None:
         self._kept = kept
+        self._on_frame = on_frame
         self._shape = shape
         self._prelude = prelude
         self._size = size
@@ -362,10 +382,10 @@ class SocketTurn:
                 self._kept.reply_id = reply_id
                 _put(self._kept)
             else:
-                asyncio.ensure_future(self._kept.close())
+                _close_later(self._kept)
         elif kind in _TERMINAL or kind == "error":
             self._finished = True
-            asyncio.ensure_future(self._kept.close())
+            _close_later(self._kept)
 
     async def events(self, receive_next) -> AsyncIterator[dict[str, Any]]:
         """The reply's events; ``receive_next`` reads one frame under the caller's budgets.
@@ -388,6 +408,7 @@ class SocketTurn:
                     raise
                 frame = _parse(raw)
                 if frame is None or frame.get("type") in _TRANSPORT_FRAMES:
+                    _hand_on(frame, self._on_frame)
                     continue
                 self._note(frame)
                 yield frame
@@ -395,6 +416,16 @@ class SocketTurn:
             if not self._finished:
                 self._finished = True
                 await self._kept.close()
+
+
+def _hand_on(frame: dict[str, Any] | None, on_frame: Any) -> None:
+    """Give a transport frame to the turn's observer; it never fails the turn."""
+    if frame is None or on_frame is None:
+        return
+    try:
+        on_frame(frame)
+    except Exception:
+        _log.debug("codex: transport frame observer failed", exc_info=True)
 
 
 def _parse(raw: Any) -> dict[str, Any] | None:
@@ -407,12 +438,111 @@ def _parse(raw: Any) -> dict[str, Any] | None:
     return frame if isinstance(frame, dict) else None
 
 
+_connection_class: Any = None
+
+
+def _connection() -> Any:
+    """The client connection that ends its TCP connection once its close is answered.
+
+    A plain websockets client that closes waits, after the backend has
+    answered its close frame, for the backend to drop the TCP connection
+    (up to ``close_timeout``); through chatgpt.com that takes about two
+    seconds, and a turn's loop closing its kept socket waited for it. Once
+    both close frames have crossed, the WebSocket is closed and nothing more
+    can arrive on it, so this end drops the connection itself (RFC 6455
+    7.1.1 lets a client do so). A close the backend started is answered and
+    left to the backend to end, as before.
+
+    Through an HTTP proxy websockets hands the tunnel to this connection and
+    starts TLS inside it before it calls ``connection_made``; asyncio's TLS
+    layer counts the connection as made from the start, so a tunnel that
+    ends during that handshake (the far end refuses) calls
+    ``connection_lost`` on a connection that never began. The dial has
+    already failed with that error and nothing was set up, so there is
+    nothing to end.
+    """
+    global _connection_class
+    if _connection_class is None:
+        from websockets.asyncio.client import ClientConnection
+
+        class _Connection(ClientConnection):
+            def connection_lost(self, exc: Exception | None) -> None:
+                if not hasattr(self, "recv_messages"):
+                    return
+                super().connection_lost(exc)
+
+            def data_received(self, data: bytes) -> None:
+                super().data_received(data)
+                protocol = self.protocol
+                if (
+                    protocol.close_sent is not None
+                    and protocol.close_rcvd is not None
+                    and protocol.close_rcvd_then_sent is False
+                    and not self.transport.is_closing()
+                ):
+                    self.transport.abort()
+
+        _connection_class = _Connection
+    return _connection_class
+
+
+def _install_proxy_protocol() -> None:
+    """Make a given-up CONNECT through an HTTP proxy end cleanly.
+
+    websockets 16 waits for the proxy's answer on a future and closes the
+    proxy connection only when that wait raises an ``Exception``. A dial
+    cancelled while it waits (the turn stopped, the open timeout) cancels
+    the future and leaves the connection open, so the proxy's late
+    ``200 Connection established`` sets a result on the cancelled future and
+    asyncio logs ``InvalidStateError`` from ``data_received`` and again from
+    ``connection_lost``. This protocol closes the connection as soon as
+    nothing waits for it and leaves a settled future alone; a proxy that
+    refuses, times out or drops the connection while the dial waits still
+    fails the dial, which then goes over HTTP. The answer's stream is ended
+    once: a proxy that closes before answering is seen ending by
+    ``eof_received`` and again by ``connection_lost``.
+    """
+    from websockets.asyncio import client
+
+    if getattr(client.HTTPProxyConnection, "_settles_once", False):
+        return
+
+    class _ProxyConnection(client.HTTPProxyConnection):
+        _settles_once = True
+
+        def connection_made(self, transport: Any) -> None:
+            super().connection_made(transport)
+            self.response.add_done_callback(self._given_up)
+
+        def _given_up(self, response: asyncio.Future) -> None:
+            if response.cancelled() and not self.transport.is_closing():
+                self.transport.close()
+
+        def run_parser(self) -> None:
+            if not self.response.done():
+                super().run_parser()
+
+        def eof_received(self) -> None:
+            if not self.reader.eof:
+                self.reader.feed_eof()
+            self.run_parser()
+
+        def connection_lost(self, exc: Exception | None) -> None:
+            if not self.reader.eof:
+                self.reader.feed_eof()
+            if exc is not None and not self.response.done():
+                self.response.set_exception(exc)
+
+    client.HTTPProxyConnection = _ProxyConnection
+
+
 async def _dial(url: str, headers: dict[str, str], key: str, host: str) -> _Kept:
     from websockets.asyncio.client import connect
     from websockets.exceptions import InvalidStatus
 
     from openprogram.models.providers.utils.http_proxy import proxy_for_url
 
+    _install_proxy_protocol()
     handshake = {
         name: value for name, value in headers.items()
         if name.lower() not in _HTTP_ONLY_HEADERS
@@ -429,6 +559,7 @@ async def _dial(url: str, headers: dict[str, str], key: str, host: str) -> _Kept
             # a socket parked in the pool between turns.
             ping_interval=None,
             user_agent_header=None,
+            create_connection=_connection(),
         )
     except InvalidStatus as exc:
         status = exc.response.status_code
@@ -452,6 +583,7 @@ async def _begin(
     *,
     reused: bool,
     receive_next,
+    on_frame: Any = None,
 ) -> SocketTurn:
     """Send the message and read the frames ahead of the reply proper."""
     def unavailable(exc: BaseException | None, why: str) -> Exception:
@@ -483,6 +615,7 @@ async def _begin(
             raise unavailable(exc, "the socket ended before the reply") from exc
         frame = _parse(raw)
         if frame is None or frame.get("type") in _TRANSPORT_FRAMES:
+            _hand_on(frame, on_frame)
             continue
         if frame.get("type") == "error":
             await kept.close()
@@ -506,7 +639,7 @@ async def _begin(
                 )
         prelude.append(frame)
         break
-    return SocketTurn(kept, shape, prelude, len(message))
+    return SocketTurn(kept, shape, prelude, len(message), on_frame)
 
 
 async def open_turn(
@@ -515,11 +648,13 @@ async def open_turn(
     headers: dict[str, str],
     body: dict[str, Any],
     receive_next,
+    on_frame: Any = None,
 ) -> SocketTurn:
     """Begin a streamed turn on a socket; :class:`SocketUnavailable` means use HTTP.
 
     ``receive_next(connection)`` reads one frame, applying the caller's idle,
-    stall and cancel budgets.
+    stall and cancel budgets. ``on_frame(frame)`` is given each transport
+    frame (``codex.rate_limits`` and the like) that is not part of the reply.
     """
     url = socket_url(base_url)
     host = urlsplit(url).netloc
@@ -549,11 +684,12 @@ async def open_turn(
             await kept.close()
         else:
             try:
-                return await _begin(kept, message, shape, reused=True, receive_next=receive_next)
+                return await _begin(kept, message, shape, reused=True, receive_next=receive_next,
+                                    on_frame=on_frame)
             except _Again as exc:
                 _log.debug("codex: kept socket failed before the reply (%s); opening a new one", exc)
 
     if _message_too_big(host, len(whole)):
         raise SocketUnavailable("turn as big as one the host refused")
     fresh = await _dial(url, headers, key, host)
-    return await _begin(fresh, whole, shape, reused=False, receive_next=receive_next)
+    return await _begin(fresh, whole, shape, reused=False, receive_next=receive_next, on_frame=on_frame)

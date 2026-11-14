@@ -78,6 +78,26 @@ def classify(exc: BaseException, allowed: Callable[[], bool | None] = _screen_ca
     return "permission" if allowed() is False else "error"
 
 
+_MACOS_ONLY = "The computer's sound is recorded on macOS only."
+
+
+def support(platform: str | None = None) -> dict:
+    """Whether the "Others" track can be recorded here, and why not; asks macOS for nothing.
+
+    A meeting still records the microphone where this is unavailable.
+    """
+    import importlib.util
+    if (sys.platform if platform is None else platform) != "darwin":
+        return {"available": False, "reason": _MACOS_ONLY}
+    try:
+        found = importlib.util.find_spec("ScreenCaptureKit") is not None
+    except (ImportError, ValueError):
+        found = False
+    if not found:
+        return {"available": False, "reason": "ScreenCaptureKit for Python (PyObjC) is not installed."}
+    return {"available": True, "reason": ""}
+
+
 class ScreenCaptureSource:
     """Everything the main display plays, through an audio-only ScreenCaptureKit stream."""
 
@@ -86,7 +106,7 @@ class ScreenCaptureSource:
 
     def start(self, sink: Sink) -> None:
         if sys.platform != "darwin":
-            raise Unavailable("unsupported", "The computer's sound is recorded on macOS only.")
+            raise Unavailable("unsupported", _MACOS_ONLY)
         try:
             sc, _cm, _appkit = _sck.frameworks()
         except ImportError as exc:

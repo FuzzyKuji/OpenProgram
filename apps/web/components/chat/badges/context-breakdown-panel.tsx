@@ -13,9 +13,8 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { ArrowLeft, ChevronDown, ChevronRight, FoldVertical } from "lucide-react";
 import { useTranslation } from "@/lib/i18n";
-import { HoverTip } from "@/components/ui/tooltip";
 import { FillIcon } from "@/components/ui/fill-icon";
-import { selectViewRows, useSessionStore } from "@/lib/session-store";
+import { useSessionStore } from "@/lib/session-store";
 import { cn } from "@/lib/utils";
 import {
   CHECK_SLOT_PAD,
@@ -33,6 +32,7 @@ import {
   subscribeContextBreakdownCache,
   type ContextBreakdown as Breakdown,
 } from "@/lib/chat/context-breakdown-cache";
+import { isCompacting } from "@/lib/chat/run/run-operation";
 
 interface Props {
   sessionId: string | null;
@@ -353,33 +353,9 @@ export function ContextBreakdownPanel({ sessionId, headId, onClose }: Props) {
     sessionId ? s.contextWindow[sessionId] : undefined,
   );
   const compacting = useSessionStore((s) =>
-    Boolean(sessionId && s.compactionUi[sessionId]?.running),
+    Boolean(sessionId && isCompacting(s.runningTasks[sessionId])),
   );
-  const recentlyCompacted = useSessionStore((s) => {
-    if (!sessionId) return false;
-    const order = s.messageOrder[sessionId] || [];
-    const rows = selectViewRows(sessionId)(s);
-    let hasNewMessage = false;
-    for (let i = order.length - 1; i >= 0; i -= 1) {
-      const message = rows[order[i]];
-      if (!message) continue;
-      if (message.role === "user" || message.role === "assistant") {
-        hasNewMessage = true;
-        continue;
-      }
-      if (message.kind !== "compaction" || message.slot === "card") continue;
-      if (message.id.startsWith("compaction_failed_")) return false;
-      const completed = message.slot === "event"
-        || message.id.startsWith("compaction_finished_")
-        || (
-          message.id.startsWith("compaction_started_")
-          && !s.compactionUi[sessionId]?.running
-        );
-      return completed && !hasNewMessage;
-    }
-    return false;
-  });
-  const canCompact = Boolean(sessionId) && !compacting && !recentlyCompacted;
+  const canCompact = Boolean(sessionId) && !compacting;
   const draftProvider = useSessionStore((s) => s.agentSettings.chat?.provider);
   const draftModel = useSessionStore((s) => s.agentSettings.chat?.model);
   const draftProjectId = useSessionStore((s) =>
@@ -593,11 +569,7 @@ export function ContextBreakdownPanel({ sessionId, headId, onClose }: Props) {
           })}
           {/* A chat with no session has nothing to compact. */}
           {sessionId && <div className={MENU_SEPARATOR} />}
-          {sessionId && (recentlyCompacted ? (
-            <HoverTip label={text("Recently compacted", "最近已压缩")}>
-              <span className="block">{compactRow}</span>
-            </HoverTip>
-          ) : compactRow)}
+          {sessionId && compactRow}
         </>
       )}
     </div>

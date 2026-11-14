@@ -163,3 +163,20 @@ def test_invalid_limits_rejection_fails_closed_when_usage_read_fails(
     assert denied.reason_code == "quota.accounting_unavailable"
     assert denied.retryable is True
 
+
+
+def test_default_pool_runs_the_default_number_of_agents(monkeypatch) -> None:
+    """With nothing configured, one conversation runs agent.max_running_agents
+    helpers at once: the default pool must not cut that default down."""
+    from openprogram.runtime.jobs.resource_governance.limits import (
+        MAX_RUNNING_AGENTS,
+        scheduler_capacity,
+    )
+
+    monkeypatch.delenv("OPENPROGRAM_JOB_WORKERS", raising=False)
+    assert scheduler_capacity() > MAX_RUNNING_AGENTS
+    resolved = resolve_resource_limits(
+        ResourceLimits(), default_live_limit=MAX_RUNNING_AGENTS,
+    )
+    live = resolved.fields["max_live_per_session"]
+    assert (live.effective, live.source) == (MAX_RUNNING_AGENTS, "default")

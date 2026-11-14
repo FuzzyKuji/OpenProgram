@@ -122,9 +122,14 @@ export function activeThemeId(): ThemeId | undefined {
   return isThemeId(value) ? value : undefined;
 }
 
+/** The desktop App reports the OS appearance itself; see theme.systemDark in its preload. */
 function currentSystemDark(): boolean {
-  return typeof window !== "undefined"
-    && window.matchMedia("(prefers-color-scheme: dark)").matches;
+  if (typeof window === "undefined") return false;
+  try {
+    const value = window.openprogramDesktop?.theme?.systemDark?.();
+    if (typeof value === "boolean") return value;
+  } catch { /* Fall back to the media query. */ }
+  return window.matchMedia("(prefers-color-scheme: dark)").matches;
 }
 
 export function resolvedThemeId(
@@ -362,12 +367,16 @@ export function useThemePref() {
     // 'auto' 时跟随系统明暗切换。
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
     const onSystemChange = () => {
-      if (currentMode === "auto") {
+      if (currentMode !== "auto") return;
+      const resolved = currentSystemDark() ? "dark" : "light";
+      // The pre-paint script hears the same change and may have applied it already.
+      if (document.documentElement.getAttribute("data-theme-mode") !== resolved) {
         applyTheme(currentStyle, currentMode, "system");
-        notify();
       }
+      notify();
     };
     mq.addEventListener("change", onSystemChange);
+    const stopDesktopSystem = window.openprogramDesktop?.theme?.onSystemChange?.(onSystemChange);
 
     const onStorage = (event: StorageEvent) => {
       if (
@@ -398,6 +407,7 @@ export function useThemePref() {
     return () => {
       subscribers.delete(sub);
       mq.removeEventListener("change", onSystemChange);
+      stopDesktopSystem?.();
       window.removeEventListener("storage", onStorage);
     };
   }, []);

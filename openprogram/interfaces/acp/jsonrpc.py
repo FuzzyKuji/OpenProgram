@@ -158,6 +158,15 @@ class Connection:
             if not isinstance(msg, dict):
                 continue
             self._dispatch(msg)
+        # The client is gone: nothing will answer what we asked it, so the
+        # waiters fail now instead of at their timeout.
+        with self._lock:
+            pending = list(self._pending.values())
+        for ev, slot in pending:
+            if not ev.is_set():
+                slot.append(("error", {"code": INTERNAL_ERROR,
+                                       "message": "the client disconnected"}))
+                ev.set()
         # Let in-flight turns finish writing before the process exits.
         for t in list(self._workers):
             t.join(timeout=5.0)

@@ -247,6 +247,10 @@ def _names_command(found: PageReferences, path: tuple[str, ...]) -> bool:
     return any(pattern.search(text) for text, _line in found.fragments)
 
 
+def _beside_commands(found: PageReferences, line: int, commands: frozenset[str]) -> bool:
+    return len({text.strip() for text, at in found.fragments if at == line and text.strip() in commands}) >= 2
+
+
 def _removed_cli_tokens(repository: Repository, path: str, found: PageReferences) -> Iterable[Finding]:
     """A verb or flag this change removed, written bare in a table or sentence."""
     change = repository.parser_change()
@@ -256,7 +260,12 @@ def _removed_cli_tokens(repository: Repository, path: str, found: PageReferences
         # A flag other commands still take only counts on a page about this command.
         if token not in change.vanished and not _names_command(found, command):
             continue
-        for line in dict.fromkeys(_whole_span_lines(found, token)):
+        lines = list(dict.fromkeys(_whole_span_lines(found, token)))
+        if not command and not token.startswith("-") and not _names_command(found, ("openprogram", token)):
+            # A top-level verb is often an ordinary word as well (an application, a target):
+            # it is the command where the page writes it in a list of top-level verbs.
+            lines = [line for line in lines if _beside_commands(found, line, change.top_level)]
+        for line in lines:
             name = " ".join(("openprogram", *command))
             yield Finding("claims.flag" if token.startswith("-") else "claims.command", "error", path, line,
                           f"{name} no longer offers {token}, and this page still names it.",

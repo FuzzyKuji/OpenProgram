@@ -386,9 +386,10 @@ def _handle_compact(args: list[str], console, session_id: str) -> bool:
         )
 
         summary = result.get("summary", "")
-        kept = result.get("kept_count", 0)
+        # ``covered_count`` is how many messages the summary replaced.
+        covered = result.get("covered_count") or result.get("message_count", 0)
         preview = summary[:200] + "..." if len(summary) > 200 else summary
-        console.print(f"[green]Compacted.[/]  Kept {kept} recent messages.")
+        console.print(f"[green]Compacted.[/]  Summarized {covered} messages.")
         if preview:
             console.print(f"[dim]Summary: {preview}[/]")
     except Exception as e:
@@ -812,12 +813,12 @@ def _handle_copy(console, agent, session_id: str) -> bool:
         console.print("[yellow]No assistant reply to copy yet.[/]")
         return False
     text = last_assistant.get("content") or ""
-    try:
-        import pyperclip
-        pyperclip.copy(text)
+    from openprogram.host._platform import clipboard
+    if clipboard.copy(text):
         console.print(f"[green]Copied {len(text)} chars to clipboard.[/]")
-    except Exception:
-        console.print("[dim]No clipboard backend; printing instead:[/]")
+    else:
+        reason = clipboard.support()["reason"] or "The clipboard tool refused the text."
+        console.print(f"[dim]{reason} Printing instead:[/]")
         console.print(text)
     return False
 

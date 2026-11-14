@@ -214,6 +214,22 @@ def test_gh_source_removal_has_both_instructional_and_executable(tmp_path: Path)
     assert any(not s.executable for s in steps)
 
 
+def test_gh_source_removal_names_the_file_the_token_came_from(tmp_path: Path, monkeypatch):
+    # gh keeps hosts.yml under %AppData%\GitHub CLI on Windows, so the step
+    # cannot say ~/.config/gh there.
+    monkeypatch.delenv("GH_CONFIG_DIR", raising=False)
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    monkeypatch.setenv("AppData", str(tmp_path / "Roaming"))
+    monkeypatch.setattr("openprogram.models.auth.sources.gh_cli.sys.platform", "win32")
+    path = tmp_path / "Roaming" / "GitHub CLI" / "hosts.yml"
+    path.parent.mkdir(parents=True)
+    path.write_text(GH_HOSTS_YML, encoding="utf-8")
+    src = GhCliSource()
+    cred = src.try_import(tmp_path)[0]
+    text = src.removal_steps(cred)[0].description
+    assert str(path) in text and ".config" not in text
+
+
 def test_parse_hosts_yml_quoted_value():
     text = "github.com:\n    user: 'alice'\n    oauth_token: \"gho_X\"\n"
     parsed = _parse_hosts_yml(text)

@@ -706,7 +706,7 @@ def test_wheel_contains_both_runtime_shims(tmp_path):
     config = tomllib.loads((repo / "pyproject.toml").read_text(encoding="utf-8"))
     package_data = config["tool"]["setuptools"]["package-data"]["openprogram"]
     assert "host/sandbox/shims/*.py" in package_data
-    assert "programs/applications/browser/web_use/*.cjs" in package_data
+    assert "programs/applications/browser/*.cjs" in package_data
 
     project = tmp_path / "project"
     (project / "openprogram" / "host" / "sandbox" / "shims").mkdir(parents=True)
@@ -717,8 +717,7 @@ def test_wheel_contains_both_runtime_shims(tmp_path):
         "openprogram/programs/__init__.py",
         "openprogram/programs/applications/__init__.py",
         "openprogram/programs/applications/browser/__init__.py",
-        "openprogram/programs/applications/browser/web_use/__init__.py",
-        "openprogram/programs/applications/browser/web_use/playwright_exact_page_mcp.cjs",
+        "openprogram/programs/applications/browser/playwright_background_tabs.cjs",
     ):
         destination = project / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -767,8 +766,7 @@ def test_wheel_contains_both_runtime_shims(tmp_path):
     assert "openprogram/host/sandbox/shims/sitecustomize.py" in names
     assert "openprogram/host/sandbox/shims/node_preload.cjs" in names
     assert (
-        "openprogram/programs/applications/browser/web_use/"
-        "playwright_exact_page_mcp.cjs"
+        "openprogram/programs/applications/browser/playwright_background_tabs.cjs"
     ) in names
     assert "openprogram/webui/functions_meta.json" not in names
     assert "openprogram/webui/programs_meta.json" not in names
@@ -790,8 +788,7 @@ def test_wheel_contains_both_runtime_shims(tmp_path):
     assert (installed_shims / "sitecustomize.py").is_file()
     assert (installed / "openprogram/host/sandbox/shims/node_preload.cjs").is_file()
     assert (
-        installed / "openprogram/programs/applications/browser/web_use/"
-        "playwright_exact_page_mcp.cjs"
+        installed / "openprogram/programs/applications/browser/playwright_background_tabs.cjs"
     ).is_file()
 
     runtime_work = tmp_path / "runtime-work"

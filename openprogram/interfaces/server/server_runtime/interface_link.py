@@ -6,6 +6,8 @@ link follows the live module (and tests that replace one of its helpers).
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 import json
 
 
@@ -43,7 +45,7 @@ def session_busy(session_id: str) -> bool:
     server = _server()
     lock = getattr(server, "_running_tasks_lock", None)
     tasks = getattr(server, "_running_tasks", None)
-    if lock is not None and isinstance(tasks, dict):
+    if lock is not None and isinstance(tasks, Mapping):
         with lock:
             if session_id in tasks:
                 return True

@@ -233,9 +233,62 @@ class ExecutionEventEffects:
                 return
         db = default_db()
         writer = SessionNodeWriter(db, execution.session_id, advance_head=False)
-        node = writer.load().nodes.get(source.assistant_message_id)
+        graph = writer.load()
+        node = graph.nodes.get(source.assistant_message_id)
         if node is None:
-            raise RuntimeError("Cancelled execution is waiting for its assistant node")
+            node = self._reply_of_turn_that_never_ran(execution, source, writer, graph)
+        if node is not None:
+            self._close_cancelled_reply(execution, source, writer, db, node)
+
+    def _reply_of_turn_that_never_ran(self, execution: ExecutionRecord, source, writer, graph):
+        """The stopped reply of a chat turn a stop reached before it started.
+
+        A chat turn opens its reply when it starts, so one stopped while
+        queued, or after its lease but before a driver was bound to run it,
+        has none and never will: no attempt can start on a cancelled
+        execution. Its message was
+        written before it was admitted, so the reply is written here, as
+        stopped, as a turn stopped just after it started leaves it. A chat
+        turn that writes its own message when it starts showed nothing and
+        leaves nothing to close (None). Any other anchor is written by
+        whoever admitted the execution and can still arrive, and a turn that
+        did start and left no reply has lost it: both raise, and the event
+        effect tries again until it gives up loudly.
+        """
+        from .attempts import AttemptStore
+
+        waiting = RuntimeError("Cancelled execution is waiting for its assistant node")
+        turn_input = self.store.get_agent_turn_input(execution.execution_id) or {}
+        # An attempt a stop ended before any driver was bound never ran, even
+        # if it was activated.
+        if turn_input.get("kind") != "chat" or any(
+                attempt.activated_at is not None and attempt.outcome != "cancelled_during_activation"
+                for attempt in AttemptStore(self.store).list_for_execution(execution.execution_id)):
+            raise waiting
+        request = turn_input.get("request") or {}
+        if not request.get("user_already_persisted"):
+            return None
+        if not source.user_message_id or source.user_message_id not in graph.nodes:
+            raise waiting
+        from openprogram.runtime.permissions.authority import runtime_authority
+        from openprogram.state.store.session.nodes import Call, ROLE_LLM
+
+        # It never ran: it starts and ends at the stop.
+        stopped_at = execution.terminal_at or execution.updated_at
+        metadata = {
+            "source": request.get("source") or "",
+            "status": "cancelled",
+            "started_at": stopped_at,
+            "finished_at": stopped_at,
+            **runtime_authority(request, f"agent/{request.get('agent_id')}"),
+        }
+        writer.append(Call(
+            id=source.assistant_message_id, created_at=stopped_at, role=ROLE_LLM, output="",
+            predecessor=source.user_message_id, metadata=metadata,
+        ), create_if_missing=False)
+        return writer.load().nodes.get(source.assistant_message_id)
+
+    def _close_cancelled_reply(self, execution: ExecutionRecord, source, writer, db, node) -> None:
         metadata = node.metadata or {}
         if metadata.get("status") not in {None, "running", "paused", "interrupted", "error", "cancelled"}:
             return

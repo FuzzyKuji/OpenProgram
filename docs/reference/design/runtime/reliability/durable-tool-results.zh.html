@@ -35,11 +35,10 @@
 
 <h2 id="full-result-artifact-identity">完整结果文件</h2>
 <ul>
-<li>配置档状态目录下 <code translate="no">tool_results/</code> 中的文件属于其会话、执行和 qualified occurrence。Provider 原始 call ID 会重复，不是身份。</li>
-<li>文件名含该归属的摘要，排他创建使每次保存有独立路径，无作用域的调用也一样。</li>
-<li>同一 occurrence 再次保存可以新增文件，不能覆盖早先 receipt 引用的内容。</li>
-<li>完整写入并关闭后才返回路径。</li>
-<li>旧 receipt 和旧文件保持可读，不迁移。</li>
+<li>完整文字存在当前对话的目录里，路径是 <code translate="no">tool_results/&lt;sha256&gt;.txt</code>，按内容命名，随对话删除和备份。不在对话里时（一次性的 CLI 调用）存到配置档状态目录下的 <code translate="no">tool_results/</code>。</li>
+<li>同样的文字只存一份；不同的文字不会同名，不管是哪次调用、哪一层存的。Provider 原始 call ID 会重复，不参与命名。</li>
+<li>文件已存在就复用，因为名字说明了它存的就是这段文字。新文件先写到临时文件再移到位，所以完整写入后才返回路径。</li>
+<li>以前按别的名字写下的文件保持可读，不迁移。</li>
 </ul>
 
 <h2>失败信号</h2>
@@ -65,7 +64,7 @@
 
 <h2>达到委派上限时读取结果</h2>
 <ul>
-<li>达到 <code translate="no">agent.max_messages</code> 时，<code translate="no">job_output</code> 仍可发现和使用。读取不创建执行、分支或投递，不消耗额度。</li>
+<li>达到 <code translate="no">agent.max_messages</code> 时，<code translate="no">read_conversation</code> 仍可发现，并能读取执行 id。读取不创建执行、分支或投递，不消耗额度。</li>
 <li>会话和祖先所有权检查仍然生效，且在等待之前。</li>
 <li>耗尽的链仍隐藏 <code translate="no">agent</code>；<code translate="no">send_message</code> 保留投递时的检查。没有单独的取消工具。</li>
 </ul>
@@ -76,7 +75,7 @@
 <thead class="sr"><tr><th scope="col">对象</th><th scope="col">怎样验证</th></tr></thead>
 <tbody>
 <tr><th scope="row"><code translate="no">execute_code</code></th><td>经 <code translate="no">AgentTool.execute</code> 调用已注册工具，运行真实的成功、失败和超时片段</td></tr>
-<tr><th scope="row"><code translate="no">job_output</code></th><td>在上限处解析公开工具目录，读取本会话已完成的 Job，在等待前拒绝其他会话的 Job</td></tr>
+<tr><th scope="row"><code translate="no">read_conversation</code></th><td>在上限处解析公开工具目录，读取本会话已完成的 Job，在等待前拒绝其他会话的 Job</td></tr>
 <tr><th scope="row">辅助 Provider</th><td>已注册 wrapper 配合受控官方 Provider 传输和自有 PNG；未知引用、后端不可用、访问后端前的沙箱拒绝、取消</td></tr>
 <tr><th scope="row">Canvas</th><td>已注册工具操作自有文件；显式标记、文本不变、<code translate="no">Error:</code> 开头的成功数据、普通调用兼容</td></tr>
 <tr><th scope="row"><code translate="no">ask_user_question</code></th><td>经 <code translate="no">AgentTool.execute</code> 检查不可用输入和受控前端回答，不向真实用户提问</td></tr>

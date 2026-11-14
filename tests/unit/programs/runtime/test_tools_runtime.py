@@ -1,7 +1,7 @@
 """Coverage for the @tool decorator + runtime layer.
 
 Verifies the parts that govern how every future tool will behave:
-schema generation, sync/async wrap, error wrap, char cap + persist,
+schema generation, sync/async wrap, error wrap, the declared result cap,
 approval gate evaluation, cache, cancel/on_update injection, and
 registry filtering.
 """
@@ -23,7 +23,6 @@ from openprogram.models.providers.types import AgentToolResult
 from openprogram.host.backend import RunResult
 from openprogram.programs._host import runtime as R
 from openprogram.programs._host.runtime import (
-    MIN_KEEP_CHARS,
     ToolReturn,
     _build_parameters_schema,
     _parse_docstring,
@@ -35,7 +34,6 @@ from openprogram.programs._host.runtime import (
     function,
     tool_requires_approval,
 )
-from openprogram.programs._host.execution import _cap_result_text
 from openprogram.extensions.mcp.adapter import convert_call_result
 from openprogram.models.providers.types import ImageContent, TextContent
 
@@ -137,31 +135,6 @@ def test_schema_skips_framework_kwargs() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Result truncation
-# ---------------------------------------------------------------------------
-
-def test_cap_short_text_unchanged() -> None:
-    assert _cap_result_text("hi", 100) == "hi"
-
-
-def test_cap_long_text_head_tail() -> None:
-    text = "A" * 1500 + "B" * 1500
-    capped = _cap_result_text(text, max_chars=200, head_ratio=0.5)
-    assert capped.startswith("A" * 1000 + "\n\n[...")
-    assert capped.endswith("\n\n" + "B" * 1000)
-    assert "1,000 chars elided of 3,000 total" in capped
-
-
-def test_cap_respects_min_floor() -> None:
-    text = "X" * 10_000
-    capped = _cap_result_text(text, max_chars=100)
-    assert len(capped) >= MIN_KEEP_CHARS
-    assert "elided" in capped
-    assert capped.startswith("X")
-    assert capped.endswith("X")
-
-
-# ---------------------------------------------------------------------------
 # Decorator: schema + name + description
 # ---------------------------------------------------------------------------
 
@@ -241,68 +214,60 @@ def test_agent_tool_result_bridges_legacy_details_error_bit() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Char cap + persist-to-disk
+# The declared result cap: recorded by the tool, applied once by the loop
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("length", [1000, MIN_KEEP_CHARS])
-@pytest.mark.parametrize("persist_full", [False, True])
-def test_result_within_minimum_cap_is_preserved(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, length: int, persist_full: bool,
-) -> None:
-    monkeypatch.setattr(R, "_tool_results_dir", lambda: tmp_path)
-    original = "A" * (length // 2) + "B" * (length - length // 2)
-
-    @function(max_result_chars=200, persist_full=persist_full)
-    def small_result() -> str:
-        return original
-
-    result = _run(small_result.execute("small-cap", {}, None, None))
-    assert result.content[0].text == original
-    assert list(tmp_path.iterdir()) == []
+def _stored(result, call_id: str = "c1"):
+    from types import SimpleNamespace
+    from openprogram.runtime.agent.loop.tool_dispatch import _as_stored
+    return _as_stored(SimpleNamespace(id=call_id, name="big", arguments={}), result)
 
 
-@pytest.mark.parametrize("head_ratio", [0.0, 1.0])
-def test_result_cap_endpoint_keeps_only_requested_portion(head_ratio: float) -> None:
-    @function(max_result_chars=200, persist_full=False, head_ratio=head_ratio)
-    def long_result() -> str:
-        return "A" * 3000 + "B" * 3000
-
-    result = _run(long_result.execute("endpoint-cap", {}, None, None))
-    text = result.content[0].text
-    assert "4,000 chars elided of 6,000 total" in text
-    assert text.count("A") == (MIN_KEEP_CHARS if head_ratio == 1.0 else 0)
-    assert text.count("B") == (MIN_KEEP_CHARS if head_ratio == 0.0 else 0)
-
-
-def test_long_result_truncates(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_tool_never_cuts_its_own_text_and_records_its_cap(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(R, "_tool_results_dir", lambda: tmp_path)
 
-    @function(max_result_chars=200, persist_full=False)
+    @function(max_result_weight=200)
     def big() -> str:
         """Huge."""
         return "Z" * 50_000
 
     result = _run(big.execute("c1", {}, None, None))
-    text = result.content[0].text
-    assert len(text) >= MIN_KEEP_CHARS
-    assert "elided" in text
+    assert result.content[0].text == "Z" * 50_000
+    assert result.details["cap"] == 200
+    assert list(tmp_path.iterdir()) == []
 
 
-def test_persist_full_writes_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_result_within_the_declared_cap_is_stored_whole(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(R, "_tool_results_dir", lambda: tmp_path)
 
-    @function(max_result_chars=100, persist_full=True)
+    @function(max_result_weight=200)
+    def small() -> str:
+        return "A" * 800                      # weight 200
+
+    stored = _stored(_run(small.execute("c1", {}, None, None)))
+    assert stored.content[0].text == "A" * 800
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_the_loop_bounds_once_to_the_declared_cap_and_keeps_the_whole_text(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from openprogram.state.store.session.weight import weight
+    monkeypatch.setattr(R, "_tool_results_dir", lambda: tmp_path)
+
+    @function(max_result_weight=200)
     def big() -> str:
         """Persist everything."""
-        return "Q" * 50_000
+        return "\n".join(f"line {i}" for i in range(10_000))
 
-    result = _run(big.execute("c123", {}, None, None))
-    text = result.content[0].text
-    assert "saved at" in text
+    whole = "\n".join(f"line {i}" for i in range(10_000))
+    stored = _stored(_run(big.execute("c123", {}, None, None)), "c123")
+    text = stored.content[0].text
+    assert weight(text) <= 200 < weight(whole)
     persisted, = tmp_path.glob("*.txt")
-    assert str(persisted) in text
-    assert persisted.exists()
-    assert persisted.read_text() == "Q" * 50_000
+    assert str(persisted) in text and persisted.read_text() == whole
+    assert stored.details["output"]["full_path"] == str(persisted)
+    assert stored.details["preview"] == whole[:4_000]
 
 
 # ---------------------------------------------------------------------------
@@ -1107,9 +1072,7 @@ def test_defer_sidecar_set() -> None:
 
 
 def test_split_partitions_provider_vs_catalog() -> None:
-    from openprogram.programs._host.runtime import (
-        split_tools_for_dispatch, install_loaded_deferred,
-    )
+    from openprogram.programs._host.runtime import split_tools_for_dispatch
 
     @function(name="common")
     def common() -> str:
@@ -1121,16 +1084,15 @@ def test_split_partitions_provider_vs_catalog() -> None:
         """Only loaded on demand."""
         return "x"
 
-    install_loaded_deferred()
-    provider, catalog = split_tools_for_dispatch([get("common"), get("rare2")])
+    provider, catalog = split_tools_for_dispatch([get("common"), get("rare2")], ())
     assert [t.name for t in provider] == ["common"]
     assert catalog == [("rare2", "Only loaded on demand.")]
 
 
 def test_tool_search_promotes_deferred_into_provider_list() -> None:
+    from openprogram.models.providers.types import ToolResultMessage
     from openprogram.programs._host.runtime import (
-        split_tools_for_dispatch, install_loaded_deferred,
-        tool_search,
+        loaded_tools, split_tools_for_dispatch, tool_search,
     )
 
     @function(name="lazy_tool", defer=True)
@@ -1138,22 +1100,23 @@ def test_tool_search_promotes_deferred_into_provider_list() -> None:
         """Loaded only when asked."""
         return "x"
 
-    install_loaded_deferred()
     result = _run(tool_search.execute(
         "c1", {"select": "select:lazy_tool"}, None, None
     ))
     assert "Loaded 1 deferred tool" in result.content[0].text
 
-    provider, catalog = split_tools_for_dispatch([get("lazy_tool")])
+    # The next request reads the load from the search result in its messages.
+    message = ToolResultMessage(tool_call_id="c1", tool_name="tool_search",
+                                content=result.content, details=result.details, timestamp=0)
+    assert split_tools_for_dispatch([get("lazy_tool")], ())[0] == []
+    provider, catalog = split_tools_for_dispatch([get("lazy_tool")], loaded_tools([message]))
     assert [t.name for t in provider] == ["lazy_tool"]
-    assert catalog == []
+    # Still named in the prompt: loading a tool must not change the prompt.
+    assert catalog == [("lazy_tool", "Loaded only when asked.")]
 
 
 def test_tool_search_handles_unknown_names() -> None:
-    from openprogram.programs._host.runtime import (
-        install_loaded_deferred, tool_search,
-    )
-    install_loaded_deferred()
+    from openprogram.programs._host.runtime import tool_search
     result = _run(tool_search.execute(
         "c1", {"select": "select:no_such_tool"}, None, None
     ))
@@ -1182,15 +1145,14 @@ def test_tool_search_capitalized_names_use_only_current_scope() -> None:
     finally:
         runtime._allowed_tool_names.reset(token)
 
-    assert "Tool 'bash' is already loaded" in text
-    assert "Tool 'read' is already loaded" in text
+    assert "Tool 'bash' is already in this turn's tool list" in text
+    assert "Tool 'read' is already in this turn's tool list" in text
     assert "Write" in text and "Tool 'write'" not in text
 
 
 def test_tool_search_cannot_load_program_outside_resolved_scope() -> None:
     from openprogram.programs._host.runtime import (
         install_allowed_tool_names,
-        install_loaded_deferred,
         tool_search,
     )
 
@@ -1202,7 +1164,6 @@ def test_tool_search_cannot_load_program_outside_resolved_scope() -> None:
     def private_report() -> str:
         return "private"
 
-    install_loaded_deferred()
     token = install_allowed_tool_names({"tool_search", "allowed_report"})
     try:
         explicit = _run(tool_search.execute(
@@ -1217,6 +1178,58 @@ def test_tool_search_cannot_load_program_outside_resolved_scope() -> None:
     assert "Loaded 0" in explicit
     assert "private_report" not in keyword
     assert "allowed_report" in keyword
+
+
+def test_a_loaded_tool_whose_server_disconnects_stays_and_says_why() -> None:
+    """Deferred-tools A5: the array keeps the loaded definition, a call says
+    the server is disconnected, and a reconnect brings the real tool back."""
+    from openprogram.models.providers.shared.tool_loads import loaded_records
+    from openprogram.models.providers.types import ToolResultMessage
+    from openprogram.programs._host.runtime import (
+        _departed, mark_unavailable, split_tools_for_dispatch, tool_search, unregister,
+    )
+
+    @function(name="linear__create_issue", defer=True)
+    def create_issue(title: str) -> str:
+        """Create a Linear issue."""
+        return f"created {title}"
+
+    real = get("linear__create_issue")
+    result = _run(tool_search.execute("c1", {"select": "select:linear__create_issue"}, None, None))
+    messages = [ToolResultMessage(tool_call_id="c1", tool_name="tool_search", content=result.content,
+                                  details=result.details, timestamp=0)]
+    records = loaded_records(messages)
+    names = list(records)
+    before, _ = split_tools_for_dispatch([real], names, records)
+
+    mark_unavailable(["linear__create_issue"], "MCP server 'linear' is disconnected")
+    unregister("linear__create_issue")
+    after, catalog = split_tools_for_dispatch([], names, records)
+    assert [(t.name, t.description, t.parameters) for t in after] == \
+        [(t.name, t.description, t.parameters) for t in before]
+    assert catalog == []
+    called = _run(after[0].execute("c2", {"title": "x"}, None, None))
+    assert called.is_error
+    assert called.content[0].text == ("Tool linear__create_issue is unavailable: "
+                                      "MCP server 'linear' is disconnected.")
+
+    R.register(real)
+    assert "linear__create_issue" not in _departed
+    again, _ = split_tools_for_dispatch([get("linear__create_issue")], names, records)
+    assert again == [real]
+
+
+def test_a_stopped_or_failed_search_loads_nothing() -> None:
+    from openprogram.models.providers.shared.tool_loads import loaded_tools
+    from openprogram.models.providers.types import TextContent as TC, ToolResultMessage
+
+    record = {"loads": [{"name": "cron", "definition": {"name": "cron", "description": "",
+                                                        "parameters": {"type": "object"}}}]}
+    stopped = ToolResultMessage(tool_call_id="c1", tool_name="tool_search", content=[TC(text="stopped")],
+                                details={**record, "stopped": {"reason_code": "cancel.user"}}, timestamp=0)
+    failed = ToolResultMessage(tool_call_id="c2", tool_name="tool_search", content=[TC(text="x")],
+                               details=record, is_error=True, timestamp=0)
+    assert loaded_tools([stopped, failed]) == []
 
 
 def test_deferred_catalog_text_format() -> None:

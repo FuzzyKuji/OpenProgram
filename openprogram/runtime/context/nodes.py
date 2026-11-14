@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import Optional
 
 from openprogram.state.store.session.nodes import Call, Graph
+from openprogram.state.store.session.summaries import active_summary_for_chain, summary_covers_ids
 
 
 # Helpers (operate purely on a Graph)
@@ -240,33 +241,6 @@ def render_path(graph: Graph, head_id: str) -> list[str]:
     return [n.id for n in graph if n.id in members]
 
 
-def summary_covers_ids(node: "Call") -> Optional[list[str]]:
-    """The chain-node ids a summary replaces, or None for non-summaries.
-
-    Written by the compaction persister as ``metadata.covers_ids`` —
-    ids, not a seq interval, because seqs of sibling branches interleave
-    (context/compaction.md §2).
-    """
-    raw = (node.metadata or {}).get("covers_ids")
-    if not isinstance(raw, (list, tuple)) or not raw:
-        return None
-    return [str(x) for x in raw]
-
-
-def active_summary(graph: Graph) -> Optional["Call"]:
-    """The one summary rendering consults — the newest, by seq.
-
-    Compaction is a rolling summary (context/compaction.md §1): each new
-    summary absorbs the previous one, so older summary nodes are inert
-    relics and never elide anything.
-    """
-    cands = [n for n in graph.nodes.values()
-             if summary_covers_ids(n) is not None]
-    if not cands:
-        return None
-    return max(cands, key=lambda n: n.seq)
-
-
 def render_context(
     graph: Graph,
     *,
@@ -433,26 +407,31 @@ def render_context(
     # does not contain the whole segment — a fork from inside the
     # covered range, a dead sibling of the same era — renders raw: its
     # context was never compacted.
-    summary = active_summary(graph)
+    summary = active_summary_for_chain(graph, (n.id for n in chain))
     elided: set[str] = set()
     splice_before: Optional[str] = None
     if summary is not None:
         seg = summary_covers_ids(summary) or []
-        chain_ids = {n.id for n in chain}
-        if seg and summary.id not in chain_ids \
-                and all(sid in chain_ids for sid in seg):
-            elided = set(seg)
-            kids: dict[str, list[str]] = {}
-            for n in chain:
-                if n.caller:
-                    kids.setdefault(n.caller, []).append(n.id)
-            stack = list(seg)
-            while stack:
-                for cid in kids.get(stack.pop(), ()):
-                    if cid not in elided:
-                        elided.add(cid)
-                        stack.append(cid)
-            splice_before = seg[0]
+        elided = set(seg)
+        kids: dict[str, list[str]] = {}
+        for n in chain:
+            if n.caller:
+                kids.setdefault(n.caller, []).append(n.id)
+        stack = list(seg)
+        while stack:
+            for cid in kids.get(stack.pop(), ()):
+                if cid not in elided:
+                    elided.add(cid)
+                    stack.append(cid)
+        splice_before = seg[0]
+
+    def _hidden(n) -> bool:
+        # io function: hide its internal llm exchanges.
+        if n.is_llm() and n.caller in io_owners:
+            return True
+        # llm function: hide its own input/output node and its nested
+        # code sub-calls — only its llm exchanges survive.
+        return n.id in llm_owners or (n.is_code() and n.caller in llm_owners)
 
     kept = []
     for n in chain:
@@ -460,12 +439,7 @@ def render_context(
             kept.append(summary)
         if n.id in elided:
             continue
-        # io function: hide its internal llm exchanges.
-        if n.is_llm() and n.caller in io_owners:
-            continue
-        # llm function: hide its own input/output node and its nested
-        # code sub-calls — only its llm exchanges survive.
-        if n.id in llm_owners or (n.is_code() and n.caller in llm_owners):
+        if _hidden(n):
             continue
         kept.append(n)
 
@@ -496,7 +470,7 @@ __all__ = [
     "branch_internal",
     "fold_history",
     "summary_covers_ids",
-    "active_summary",
+    "active_summary_for_chain",
     "render_spine",
     "render_path",
     "render_context",

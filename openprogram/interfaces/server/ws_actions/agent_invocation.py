@@ -89,13 +89,24 @@ def prepare_agent_invocation(cmd: dict) -> dict | None:
     return {'agent_id': agent_id, 'profile_snapshot': profile, 'agent_trial': trial, 'resolved_model': resolved_model}
 
 
-def persist_agent_invocation(session_id: str, invocation: dict, conv: dict) -> None:
-    """Pin invocation-only settings in existing session metadata after reserve."""
+def persist_agent_invocation(session_id: str, invocation: dict, conv: dict,
+                             branch_id: str | None = None) -> None:
+    """Pin invocation-only settings in existing session metadata after reserve.
+
+    ``branch_id`` names a branch other than the selected one the call was
+    made on: the called Agent and its model are written on that branch's
+    own record, and the selected branch's live mirror is left alone."""
     from openprogram.runtime.context.session_db import default_db
 
     profile = invocation['profile_snapshot']
     model = invocation['resolved_model']
     provider, model_id = model.get('provider', ''), model.get('id', '')
+    if branch_id and not invocation['agent_trial']:
+        default_db().update_branch_config(session_id, branch_id, {
+            "agent_id": invocation['agent_id'], "provider_override": provider,
+            "model_override": model_id, "thinking_effort": profile.get('thinking_effort') or None,
+        })
+        return
     default_db().update_session(
         session_id,
         agent_id=invocation['agent_id'],

@@ -151,10 +151,15 @@ class ProvidersOperations:
         ``_merge_content`` for the text-prompt pathway and would duplicate
         history already present in the message list.
         """
+        if self._call_fn is None:
+            # A standalone run is the profile owner's once it uses the
+            # profile's model; settled before its tools are gated.
+            from openprogram.runtime.agent.runtime_scope import profile_model_in_use
+            profile_model_in_use()
         session_model = self._resolve_session_model()
         agent_tools, web_search_option = self._resolve_request_tools(session_model)
         request_context, request_doc_text, history, current = (
-            self._render_request_messages(content)
+            self._render_request_messages(content, session_model)
         )
         workflow_role, system_prompt = self._compose_system_prompt(agent_tools)
         model_call_budget = _current_model_call_budget.get(None)
@@ -182,21 +187,20 @@ class ProvidersOperations:
             structured_format=structured_format,
             stream_fn=_stream_fn,
             context_transform=context_transform,
+            # A workflow role sees only its instructions: no recalled memory
+            # and no date. A model call built on a prompt of its own is told
+            # the date beside its message; a host-supplied ``call`` gets the
+            # content it was given.
+            recall=not workflow_role,
+            dated=not workflow_role and self._call_fn is None,
         )
         _unsub, capture = self._subscribe_stream_forwarding(session, model_call_budget)
         _frame_token = self._bind_llm_call_frame()
 
-        _memory_token = None
-        if workflow_role:
-            from openprogram.runtime.agent.loop import memory_prefetch_enabled
-            _memory_token = memory_prefetch_enabled.set(False)
         try:
             session.replace_messages(history)
             final = await session.run(current)
         finally:
-            if _memory_token is not None:
-                from openprogram.runtime.agent.loop import memory_prefetch_enabled
-                memory_prefetch_enabled.reset(_memory_token)
             if _frame_token is not None:
                 try:
                     from openprogram.runtime.context.scope import _call_id
@@ -330,7 +334,7 @@ class ProvidersOperations:
         return agent_tools, web_search_option
 
 
-    def _render_request_messages(self, content):
+    def _render_request_messages(self, content, session_model=None):
         """Build the request context and split the prompt into history and current message."""
         # Prompt-composition: prefer DAG-derived history when a store
         # is installed; fall back to wrapping ``content`` as a single
@@ -343,7 +347,7 @@ class ProvidersOperations:
         # The docstring of the function that made this call, for this
         # request only. Read before the tool loop repoints the call frame.
         request_doc_text = request_doc()
-        dag_messages = self._render_history_messages(content, request_context)
+        dag_messages = self._render_history_messages(content, request_context, session_model)
         if dag_messages is not None:
             history = dag_messages[:-1]
             current = dag_messages[-1]
@@ -550,6 +554,8 @@ class ProvidersOperations:
         structured_format,
         stream_fn,
         context_transform,
+        recall=True,
+        dated=False,
     ):
         """Gate the tools and open the AgentSession that runs this call."""
         from openprogram.runtime.agent.loop.session import AgentSession
@@ -573,7 +579,7 @@ class ProvidersOperations:
             tools=agent_tools,
             system_prompt=system_prompt,
             api_key=self.api_key,
-            session_id=self.session_id,
+            session_id=self._provider_session_id(session_model, system_prompt, agent_tools),
             thinking_level=_current_effort.get(None) or self.thinking_level,
             tool_choice=loop_opts.get("tool_choice"),
             parallel_tool_calls=loop_opts.get("parallel_tool_calls"),
@@ -583,8 +589,30 @@ class ProvidersOperations:
             response_format=structured_format,
             stream_fn=stream_fn,
             transform_context=context_transform,
+            recall=recall,
+            dated=dated,
         )
         return session, session_max_iterations
+
+
+    def _provider_session_id(self, model, system_prompt, tools) -> str:
+        """The id the provider keys this call's prompt cache (and an OpenCode
+        session header) by; the derivation is shared with calls made straight
+        to an adapter (``providers.shared.cache_key``).
+
+        A Runtime is usually made for one call (a title, a topic sort, a
+        program run), so its own random id would give every call a cache
+        route of its own and none would reuse the prefix the last one sent.
+        Calls with the same model, system prompt and tools share that
+        prefix, so they share an id derived from it. An id a caller set on
+        the Runtime is used as given.
+        """
+        if self.session_id != getattr(self, "_own_session_id", self.session_id):
+            return self.session_id
+        from openprogram.models.providers.shared.cache_key import prefix_cache_key
+
+        return prefix_cache_key(getattr(model, "provider", None), getattr(model, "id", None),
+                                system_prompt, [getattr(tool, "name", None) for tool in tools or []])
 
 
     def _subscribe_stream_forwarding(self, session, model_call_budget):
@@ -819,6 +847,19 @@ class ProvidersOperations:
                     _project(dumped)
                     if cb:
                         cb(dumped)
+            elif inner_type == "retry" and getattr(inner, "restart", False):
+                # The request is sent again after a transport failure and
+                # what it streamed is void: the call stream starts a new
+                # attempt, as it does for a retry made by the invocation.
+                _thinking_buf["text"] = ""
+                try:
+                    from openprogram.runtime.agent.runtime.execution_stream.adapter import (
+                        note_transport_retry,
+                    )
+                    note_transport_retry(self._exec_state(), reason="transport_retry")
+                except Exception:
+                    # Attempt bookkeeping on the stream; the re-send itself proceeds.
+                    _log.debug("stream re-send not noted on call stream", exc_info=True)
             elif inner_type == "done":
                 _project({"type": "done"})
                 if cb and getattr(
@@ -938,6 +979,7 @@ class ProvidersOperations:
                     arguments=None,
                     expose=event_expose,
                 )
+            from openprogram.models.providers.shared.tool_loads import durable_details
             self._finish_nested_tool_node(
                 parent_node_id=parent_node_id,
                 tool_call_id=call_id,
@@ -946,6 +988,7 @@ class ProvidersOperations:
                 result="" if event_expose == "hidden" else result_str,
                 is_error=is_error,
                 outcome=getattr(ev, "outcome", None),
+                details=durable_details(getattr(result, "details", None)),
             )
             group_id = (block or {}).get("group_id", "")
             result_ev = {
@@ -1061,6 +1104,7 @@ class ProvidersOperations:
                     retry_after_s=final.error_retry_after_s,
                     provider=final.provider,
                     model=final.model,
+                    failure=final.error_cause,
                 )
             else:
                 error = RuntimeError(message)

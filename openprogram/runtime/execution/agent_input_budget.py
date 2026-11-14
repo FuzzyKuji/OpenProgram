@@ -15,6 +15,12 @@ from typing import Any, Mapping
 
 
 AGENT_TURN_INPUT_MAX_BYTES = 256 * 1024
+#: The longest message a person may send, in characters
+#: (``turn_input.MAX_USER_INPUT_CHARS``, which must stay equal). A chat
+#: input's ``user_text`` is measured against this, not against the 256 KiB
+#: envelope budget: every surface lets a person send this much, so the
+#: envelope must not refuse what the surface accepted.
+AGENT_USER_TEXT_MAX_CHARS = 1 << 20
 AGENT_IMAGE_BYTES_MAX = 5 * 1024 * 1024
 AGENT_TURN_IMAGE_BYTES_MAX = 20 * 1024 * 1024
 AGENT_IMAGE_COUNT_MAX = 20
@@ -35,8 +41,9 @@ def budget_payload(value: Mapping[str, Any]) -> dict[str, Any]:
     """Copy *value* and blank validated image data for text-budget accounting.
 
     The returned copy is only for measuring the ordinary 256 KiB JSON input
-    budget.  The caller keeps the original image data in the durable payload
-    after this function validates its separate byte and count limits.
+    budget.  The caller keeps the original image data and message text in the
+    durable payload after this function validates their separate limits
+    (image bytes and count; the message's characters).
     """
     result = copy.deepcopy(dict(value))
     if result.get("kind") != "chat":
@@ -44,6 +51,14 @@ def budget_payload(value: Mapping[str, Any]) -> dict[str, Any]:
     request = result.get("request")
     if not isinstance(request, Mapping):
         return result
+    user_text = request.get("user_text")
+    if isinstance(user_text, str):
+        # The person's message has its own budget, as images do.
+        if len(user_text) > AGENT_USER_TEXT_MAX_CHARS:
+            raise AgentInputBudgetError(
+                "input_too_large", "The message exceeds the message size limit"
+            )
+        request = result["request"] = {**request, "user_text": ""}
     attachments = request.get("attachments")
     if attachments is None:
         return result

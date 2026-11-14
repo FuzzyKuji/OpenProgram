@@ -234,7 +234,7 @@
 <thead class="sr"><tr><th scope="col">说明</th><th scope="col">规则</th></tr></thead>
 <tbody>
 <tr><th scope="row">回传节点</th><td><code translate="no">predecessor</code> 为发起节点；若用户同时发了消息则形成分叉，并进入 <code translate="no">&lt; N/M &gt;</code> 切换器（<a href="../../ui/invariants.html">不变量</a>第 7 条）。无论 <code translate="no">caller</code> 为何，它都是接收链的一轮：user tier，回复右移一列。标签是发送者名字和内容，<code translate="no">message_from</code> 携带发送者</td></tr>
-<tr><th scope="row">子 Agent 再次派生</th><td><code translate="no">agent.max_spawn_depth</code>，默认 0（不限）。超限的派生被拒绝。渲染器支持任意深度</td></tr>
+<tr><th scope="row">子 Agent 再次派生</th><td><code translate="no">agent.max_spawn_depth</code>，默认 1。超限的派生被拒绝。渲染器支持任意深度</td></tr>
 </tbody>
 </table>
 
@@ -255,12 +255,12 @@
 <thead><tr><th scope="col">字段</th><th scope="col">含义</th><th scope="col">来源</th><th scope="col">绘制</th></tr></thead>
 <tbody>
 <tr><th scope="row"><code translate="no">in_context</code></th><td>在覆盖集合中</td><td><code translate="no">get_branch</code></td><td>完整圆片</td></tr>
-<tr><th scope="row"><code translate="no">aged</code></th><td>code 节点渲染为一行存根</td><td><code translate="no">render.py::_aged_code_ids</code>、<code translate="no">aging.py</code></td><td>图标 75%；绝不改整个节点的 <code translate="no">opacity</code></td></tr>
+<tr><th scope="row"><code translate="no">aged</code></th><td>总是 false：旧结果从不老化。保留它是为了让数据形状不变</td><td><code translate="no">routes/files/tree.py</code></td><td>无</td></tr>
 <tr><th scope="row"><code translate="no">spilled</code></th><td>已写入 <code translate="no">large_nodes/</code>，渲染只引用</td><td><code translate="no">metadata.spilled</code>、<code translate="no">spill.py::spill_if_large</code></td><td><code translate="no">▤</code> 用 <code translate="no">&lt;text&gt;</code> 绘制，首形状扫描会跳过</td></tr>
 </tbody>
 </table>
 
-<p class="note">收到 <code translate="no">context_stats</code> 和 <code translate="no">compaction_finished</code> 时重新获取（<code translate="no">chat-handlers.ts</code>）。<code translate="no">aged</code>、<code translate="no">spilled</code> 不在渲染签名内，所以新覆盖会清空签名（<code translate="no">setLastSignature(null)</code>）。摘要是普通链成员，分支 id 就是绘制 id，无需转换；只过滤合成桥（<code translate="no">filter.py</code>）。</p>
+<p class="note">收到 <code translate="no">context_stats</code> 和 <code translate="no">compaction_finished</code> 时重新获取（<code translate="no">chat-handlers.ts</code>）。<code translate="no">spilled</code> 不在渲染签名内，所以新覆盖会清空签名（<code translate="no">setLastSignature(null)</code>）。摘要是普通链成员，分支 id 就是绘制 id，无需转换；只过滤合成桥（<code translate="no">filter.py</code>）。</p>
 
 <h2 id="s9">9. 压缩显示为一个胶囊</h2>
 <p>摘要代表一个区间，所以画成一个带归档图标的圆片，肩部 <code translate="no">+N</code> 为覆盖数量。<code translate="no">metadata.covers_ids</code>（<code translate="no">context/persistence.py</code>）经 <code translate="no">builder.py</code> 加入被覆盖轮次的 caller 子树并去掉不存在的 id，驱动形状、折叠、计数、幽灵和检查器。前端不做 seq 运算，否则会把死分叉算进来。</p>

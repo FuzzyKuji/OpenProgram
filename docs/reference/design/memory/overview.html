@@ -92,6 +92,7 @@
 <tr><th scope="row">Organizer</th><td>No new message</td></tr>
 <tr><th scope="row">Non-owner chat edit</th><td>Only its own conversation</td></tr>
 <tr><th scope="row">Chat edit naming no source</th><td>The user message that asked for it</td></tr>
+<tr><th scope="row">Settings or CLI edit</th><td>Any conversation whose turns went to the shared store; not one that ran with memory off or read-only, nor one an Agent keeps for its own space. A refusal names which and asks for another message.</td></tr>
 </tbody>
 </table>
 
@@ -180,12 +181,14 @@
 <table class="stack fixed">
 <thead class="sr"><tr><th scope="col">Who</th><th scope="col">Does</th></tr></thead>
 <tbody>
-<tr><th scope="row">Commit that finds none</th><td>Generates it once from the staged tree (<code translate="no">runtime/memory_guide.py</code>): layout, Topics to three levels with first sentences, files the latest <code translate="no">recent_events</code> touched</td></tr>
+<tr><th scope="row">Commit that finds none</th><td>Generates it once from the staged tree (<code translate="no">runtime/memory_guide.py</code>): layout, Topics to three levels by title (front matter <code translate="no">name</code> or first heading, never a quoted sentence), files the latest <code translate="no">recent_events</code> touched</td></tr>
+<tr><th scope="row">Every commit</th><td>Drops the lines whose <code translate="no">topics/</code> path the tree no longer has (<code translate="no">drop_removed</code>): a <code translate="no">memory_update</code> delete runs no agent, and the map reaches every session</td></tr>
 <tr><th scope="row">Writer</th><td>Adds a line for a new Topic file or directory</td></tr>
-<tr><th scope="row">Organizer</th><td>Aligns it with the tree; short descriptions replace quoted sentences</td></tr>
+<tr><th scope="row">Organizer</th><td>Aligns it with the tree; short descriptions replace bare titles</td></tr>
 <tr><th scope="row">Both</th><td>Leave <code translate="no">&lt;!-- core: … --&gt;</code> to <code translate="no">&lt;!-- /core --&gt;</code> alone</td></tr>
 </tbody>
 </table>
+<p>Why: a generated line that quoted a Topic's first sentence put a fact in the map, and deleting that record left it there for every later session. Grok Build's generated manifest names files by title; Claude Code's index loses a memory's pointer when the memory goes. The map does both.</p>
 
 <h2 id="the-always-on-block">Always-on block</h2>
 <table class="stack fixed">
@@ -271,7 +274,7 @@
 <tr><th scope="row">Injection order</th><td>Personal first, project last, like <code translate="no">AGENTS.md</code></td></tr>
 <tr><th scope="row">Paths</th><td>With two layers, <code translate="no">project:topics/api.md</code>, <code translate="no">personal:topics/me.md</code>; unqualified means the default layer</td></tr>
 <tr><th scope="row">Tools</th><td><code translate="no">memory_get</code> without a path lists both and names the write target</td></tr>
-<tr><th scope="row">Counts as a layer</th><td>Once it holds a Topic or a <code translate="no">MEMORY.md</code>; the empty workspace from opening its Memory page adds none</td></tr>
+<tr><th scope="row">Counts as a layer</th><td>Once it holds a Topic or a <code translate="no">MEMORY.md</code>; the empty workspace from opening its Memory page adds none. Until then reads and edits stay with the personal memory, unqualified, and only a new record from <code translate="no">memory_update</code> goes to the project when project writes land there, as the writer's do</td></tr>
 <tr><th scope="row">One layer per turn</th><td>A mark of either layer counts as written, so toggling never copies a conversation across</td></tr>
 <tr><th scope="row">Execution policy</th><td>Memory off reads no project memory; only an execution allowed to write writes there. With several read spaces, the project is read with the first only. The commit guard accepts the project workspace only while a write has selected it.</td></tr>
 </tbody>
@@ -363,11 +366,11 @@
 
 <h3 id="checked-as-it-is-written">Checked as it is written</h3>
 <figure>
-<svg class="fig-wide" viewBox="0 0 680 206" role="img" aria-label="A Topic is caught at four points. Before each writer repair_committed_topics fixes committed Topics that no longer parse. After each edit check_edits runs on a copy of the stage; a failure names the file and appends the correction to the tool result. At turn end _fix_in_place repairs failures on the stage. Each accepted write becomes one Git commit per source.">
+<svg class="fig-wide" viewBox="0 0 680 206" role="img" aria-label="A Topic is caught at four points. Before each writer read_topic_tree reads every file as it is, so a broken file spoils only itself. After each edit check_edits runs on a copy of the stage; a failure names the file and appends the correction to the tool result. At turn end _fix_in_place repairs failures on the stage. Each accepted write becomes one Git commit per source.">
   <defs><marker id="mem-c" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path class="head" d="M0 0L8 4L0 8z"/></marker></defs>
   <text class="t-big" x="0" y="28">Before the writer</text>
-  <text class="t-cmd notranslate" translate="no" x="0" y="54">repair_committed_topics</text>
-  <text class="t-soft" x="0" y="74">fixes committed Topics that no longer parse</text>
+  <text class="t-cmd notranslate" translate="no" x="0" y="54">read_topic_tree</text>
+  <text class="t-soft" x="0" y="74">reads every file as it is; a broken one spoils only itself</text>
   <line class="ln" x1="230" y1="21" x2="340" y2="21" marker-end="url(#mem-c)"/>
   <text class="t-big" x="350" y="28">Each edit</text>
   <text class="t-cmd notranslate" translate="no" x="350" y="54">check_edits</text>
@@ -382,7 +385,7 @@
   <text class="t-soft" x="350" y="186">one Git commit per source</text>
 </svg>
 <ol class="flow fig-narrow">
-  <li><strong>Before the writer</strong><small><code translate="no">repair_committed_topics</code></small><small>fixes committed Topics that no longer parse</small></li>
+  <li><strong>Before the writer</strong><small><code translate="no">read_topic_tree</code></small><small>reads every file as it is; a broken one spoils only itself</small></li>
   <li><strong>Each edit</strong><small><code translate="no">check_edits</code></small><small>on a copy of the stage; a failure names the file,correction appended to the tool result</small></li>
   <li><strong>Turn end</strong><small><code translate="no">_fix_in_place</code></small><small>fixed on the stage</small></li>
   <li class="flow-end"><strong>History</strong><small>one Git commit per source</small></li>
@@ -405,7 +408,9 @@
 <table class="stack fixed">
 <thead><tr><th scope="col">Failure</th><th scope="col">Recovery</th></tr></thead>
 <tbody>
-<tr><th scope="row">A committed Topic does not parse (an outside edit)</th><td><code translate="no">repair_committed_topics</code> before every writer: <code translate="no">topic_tree_problems</code> names broken files, an agent fixes format on an unrestricted stage. Parsing files are the baseline; broken files' block IDs count as existing. Failure raises retryable <code translate="no">INVALID_TOPIC_FORMAT</code>; retries wait until the files change, and waiting writes fail fast.</td></tr>
+<tr><th scope="row">A Topic another tool or a person wrote</th><td>Read in place and never rewritten; a writer that changes a file written outside OpenProgram is refused with <code translate="no">OUTSIDE_FILE_READ_ONLY</code>. A file that does not decode is listed once under <code translate="no">writer.not_text</code>. No repair runs; see <a href="architecture.html#outside">Files written outside OpenProgram</a>.</td></tr>
+<tr><th scope="row">A person saves a held Topic</th><td><code translate="no">release_held</code> judges each such file alone with <code translate="no">save_problem</code>, after the block IDs and evidence labels a save assigns, so a cited paragraph needs no hand-written <code translate="no">^id</code>. One that then parses is an ordinary Topic, one that does not is kept as written and its problem returned as a warning.</td></tr>
+<tr><th scope="row">A held Topic's citations</th><td><code translate="no">save_problem</code> checks each citation the file adds as the install would, so one that would be refused (a conversation with memory off, say) is the file's problem and says why. The status and the opened file judge it as a Settings save, a person's own edit.</td></tr>
 <tr><th scope="row">Unusable writer model</th><td>Authentication, authorization, invalid request, non-retryable rate limit or a setting that no longer resolves: default Agent's model, then the last used. Only before any tool ran; the working model stays chosen.</td></tr>
 </tbody>
 </table>
@@ -420,7 +425,6 @@
 <tr><th scope="row">Background write</th><td>Names conversation and turn count; the reorganizing it triggers is a second commit</td></tr>
 <tr><th scope="row">Nightly pass</th><td>Its own commit, one per file split</td></tr>
 <tr><th scope="row"><code translate="no">memory_update</code></th><td>Names its conversation</td></tr>
-<tr><th scope="row">Topic format repair</th><td><code translate="no">memory: repair topic format</code></td></tr>
 <tr><th scope="row">Memory-page typing</th><td>Five-minute checkpoints</td></tr>
 <tr><th scope="row">Edits outside a transaction</th><td>Once a write passes its checks, <code translate="no">snapshot_outside_edits</code> flushes any pending checkpoint and commits <code translate="no">topics/</code>, <code translate="no">MEMORY.md</code>, <code translate="no">core.md</code> as <code translate="no">memory: edits made outside OpenProgram</code>, so undoing that write keeps them. Autosave and restore keep their own history.</td></tr>
 </tbody>

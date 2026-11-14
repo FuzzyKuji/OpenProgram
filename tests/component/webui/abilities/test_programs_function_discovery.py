@@ -68,7 +68,7 @@ def test_programs_lists_tools_and_applications_from_the_source_tree() -> None:
     assert browser["program_kind"] == "application"
     assert browser["enabled"] is True
     assert browser["has_children"] is True
-    assert browser["callable_name"] == "web_use"
+    assert "callable_name" not in browser
 
     planning = {entry["path"]: entry for entry in _list_entries("tools/planning")["entries"]}
     goal = planning["tools/planning/goal"]
@@ -115,7 +115,7 @@ def test_programs_lists_tools_and_applications_from_the_source_tree() -> None:
         for entry in _list_entries("applications/browser")["entries"]
         if entry.get("callable_name")
     ]
-    assert browser_entries == [("web_use", "applications/browser/web_use")]
+    assert browser_entries == []
 
 
 def test_goal_form_takes_only_the_objective() -> None:
@@ -264,7 +264,6 @@ def test_agentic_registry_discovery_uses_a_stable_snapshot(monkeypatch) -> None:
     indexed = _registered_agent_methods()
 
     assert "tools/planning/goal" in indexed
-    assert "applications/browser/web_use" in indexed
 
 
 def test_multi_entry_call_graph_scopes_imports_to_selected_function(

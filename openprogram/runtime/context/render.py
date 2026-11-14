@@ -22,63 +22,36 @@ Mapping rules
 
 Visibility / hiding semantics live in :func:`render_context` — the
 renderer is a strict translation pass on whatever ids it gets.
+
+A finished turn renders the way its own requests sent it, so the
+provider's cached prefix still matches when the next turn starts:
+
+* a user message carries the blocks its turn put in front of it (the
+  recalled memory, the run note), stored on its node;
+* a reply goes back one provider response at a time, as the turn sent it:
+  that response's reasoning, text and calls in one assistant message,
+  then the results of those calls. Reasoning goes back, to the model that
+  wrote it only, as the provider's own signed item (a Responses reasoning
+  item with its encrypted content); text goes under the message id the
+  provider gave it. The reply's
+  ordered blocks mark where each response began (``round_start``); a reply recorded without the marks
+  sends its calls one per message, each with its result, and its text last;
+* the reply is the model's own (its provider, api and model), so the
+  provider keeps the ids it issued.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
+from openprogram.runtime.context.nodes import summary_covers_ids
 from openprogram.state.store.session.nodes import Call, Graph
-
-
-def _aged_code_ids(graph: Graph, read_ids: list[str],
-                   manifest: "dict | None" = None) -> "tuple[set[str], int]":
-    """``(ids to render as aged stubs, the boundary used)``.
-
-    The last ``TAIL_TURNS`` llm nodes keep full fidelity; code nodes
-    before that window collapse to a one-line stub (protected tools like
-    todo_list are never aged). This is a pre-pass over read_ids — the
-    renderer stays a strict translation, aging policy lives here.
-
-    The boundary comes from :mod:`openprogram.runtime.context.aging`, which
-    ratchets it per turn so two renders inside one turn agree. When a
-    ``manifest`` is supplied its recorded ``aged_before_seq`` wins over
-    live policy — that's what makes a historical render replayable byte
-    for byte after the policy constants change.
-    """
-    try:
-        from openprogram.runtime.context.tool_aging import policy
-        from openprogram.runtime.context.aging import aged_before_seq, manifest_boundary
-    except Exception:
-        return set(), -1
-    # Read the flag at call time (not import time) so tests and ablation
-    # runs can flip it via monkeypatch without reimporting the module.
-    if not policy.AGING_ENABLED:
-        return set(), -1
-    nodes = [graph.nodes.get(nid) for nid in read_ids]
-    nodes = [n for n in nodes if n is not None]
-
-    boundary = manifest_boundary(manifest)
-    if boundary is None:
-        boundary = aged_before_seq(nodes)
-    if boundary < 0:
-        return set(), boundary  # whole conversation fits in the tail window
-
-    aged: set[str] = set()
-    for n in nodes:
-        if not n.is_code():
-            continue
-        if n.seq >= boundary:
-            continue
-        if (n.name or "") in policy.PRUNE_PROTECTED_TOOLS:
-            continue
-        aged.add(n.id)
-    return aged, boundary
 
 
 def render_dag_messages(graph: Graph, read_ids: list[str],
                         session_directory: "str | None" = None,
-                        manifest: "dict | None" = None) -> list:
+                        reasoning_for: Any = None,
+                        audience: str = "own_prompt") -> list:
     """Translate ``read_ids`` into a pi-ai message list.
 
     Pure read path: it never writes. An over-cap node was already spilled
@@ -91,10 +64,19 @@ def render_dag_messages(graph: Graph, read_ids: list[str],
         read_ids: node ids to include, in chronological order (as
                   produced by :func:`render_context`).
         session_directory: the session's directory on disk, when the
-                  caller knows it. Spilling does not read it.
-        manifest: a previously recorded ``render_manifest``. When given,
-                  its ``aged_before_seq`` overrides live aging policy so
-                  the historical render is reproduced exactly.
+                  caller knows it: kept media are read from its ``media/``
+                  (``store.session.media``), else from the path each
+                  record names. Spilling does not read it.
+        reasoning_for: the model the messages are sent to. A reply this
+                  model wrote goes back with its reasoning; any other
+                  reply, and every reply when this is None (a summary
+                  source, a token estimate), goes back without it.
+                  Another model cannot use a reasoning item and would
+                  read its summary as text the assistant said.
+        audience: who the request is built for (``context.turn_context``):
+                  a conversation turn's own request shows the section
+                  notes stored beside earlier messages; any call with a
+                  system prompt of its own (the default) does not.
 
     Returns:
         list of provider ``Message`` objects (``UserMessage`` /
@@ -107,52 +89,84 @@ def render_dag_messages(graph: Graph, read_ids: list[str],
         UserMessage,
         AssistantMessage,
         TextContent,
+        ThinkingContent,
         ToolCall,
         ToolResultMessage,
     )
 
-    def _assistant(text: str, ts: int, model: str = "") -> AssistantMessage:
-        """Build an AssistantMessage with sensible defaults for the
-        non-content fields (the renderer doesn't know real api /
-        provider / usage — these are reconstructions of history)."""
+    reasoning_identity = (
+        getattr(reasoning_for, "api", None),
+        getattr(reasoning_for, "provider", None),
+        getattr(reasoning_for, "id", None),
+    )
+
+    def _assistant(text: str, ts: int, model: str = "",
+                   identity: "tuple[str, str, str] | None" = None) -> AssistantMessage:
+        """An AssistantMessage of history. ``identity`` is the reply's own
+        ``(api, provider, model)`` when it is known; otherwise neutral
+        defaults, which every provider treats as another model's turn."""
+        api, provider, model_id = identity or ("messages", "anthropic", model or "history")
         return AssistantMessage(
             role="assistant",
-            content=[TextContent(type="text", text=text)],
-            api="messages",        # neutral default; consumers ignore for history reconstruction
-            provider="anthropic",  # neutral default
-            model=model or "history",
+            content=[TextContent(type="text", text=text)] if text is not None else [],
+            api=api,
+            provider=provider,
+            model=model_id,
             timestamp=ts,
         )
 
-    aged_ids, _boundary = _aged_code_ids(graph, read_ids, manifest)
-    _spilled = [
-        (graph.nodes[nid].metadata or {})["spilled"].get("path", "")
-        for nid in read_ids
-        if nid in graph.nodes
-        and isinstance((graph.nodes[nid].metadata or {}).get("spilled"), dict)
-    ]
-    if manifest is None:
-        # Record what THIS render did, so the llm node about to be closed
-        # can stamp it and a later replay can reproduce these bytes.
-        from openprogram.runtime.context.aging import build_manifest, publish_manifest
-        publish_manifest(build_manifest(_boundary, _spilled))
-
     def _result_text_for(node: Call) -> str:
-        """Rendered text of a code node's result, aged to a stub when the
-        node is outside the tail window (saves tokens on long histories)."""
-        if node.id in aged_ids:
-            from openprogram.runtime.context.tool_aging.summarize import summarize_tool_call
-            return summarize_tool_call(
-                node.name or "", node.input,
-                node.output, bool((node.metadata or {}).get("is_error")),
-            )
+        """Rendered text of a code node's result: the text the turn sent.
+        Old results are never shortened here; only compaction replaces
+        them (``docs/reference/design/context/overview.html``)."""
         return _elide(_format_result(node.output), node)
 
+    def _tool_call(node: Call) -> ToolCall:
+        return ToolCall(id=(node.metadata or {})["tool_call_id"], name=node.name or "",
+                        arguments=_call_arguments(node.input))
+
+    def _tool_result(node: Call, ts: int) -> ToolResultMessage:
+        # The node keeps the result's durable details (its load record,
+        # ``shared.tool_loads``) beside its text; the message carries them
+        # back, so a request built from history matches the one built in
+        # the turn that ran the tool.
+        result_text = _result_text_for(node) if node.output is not None else ""
+        media = (node.metadata or {}).get("media")
+        # A result of media alone had no text block in its turn.
+        text_blocks = [] if (media and not result_text) else [TextContent(type="text", text=result_text)]
+        from openprogram.state.store.session.media import with_media
+        return ToolResultMessage(
+            tool_call_id=(node.metadata or {})["tool_call_id"],
+            tool_name=node.name or "",
+            content=with_media(text_blocks, media, session_directory),
+            details=(node.metadata or {}).get("details"),
+            is_error=bool((node.metadata or {}).get("is_error")),
+            timestamp=ts,
+        )
+
+    # The calls each reply made, by id, for sending them back inside the
+    # response that made them; a node sent that way is not sent again.
+    calls_by_reply = _model_calls_by_reply(graph, read_ids)
+    sent_in_round: set[str] = set()
+
     messages: list = []
-    # The most recent AssistantMessage emitted — a model-tool_use code
-    # node appends its ToolCall here (the call must live INSIDE the
-    # assistant turn that emitted it, then a ToolResultMessage follows).
+    # The reply being rendered: its text and any imported calls wait here
+    # until its own tool calls (the code nodes it called) are out, because
+    # in the turn the text came after them. ``reply_identity`` is that
+    # reply's (api, provider, model), which its tool calls share.
     last_assistant: "AssistantMessage | None" = None
+    reply_identity: "tuple[str, str, str] | None" = None
+
+    def _flush_reply() -> None:
+        nonlocal last_assistant, reply_identity
+        if last_assistant is not None and any(
+            getattr(block, "type", None) != "text" or getattr(block, "text", "")
+            for block in last_assistant.content
+        ):
+            messages.append(last_assistant)
+        last_assistant = None
+        reply_identity = None
+
     for nid in read_ids:
         node = graph.nodes.get(nid)
         if node is None:
@@ -162,20 +176,29 @@ def render_dag_messages(graph: Graph, read_ids: list[str],
         if node.is_user():
             # ROOT is structural, not a user turn. Historical empty rows must
             # not become empty user messages (or authority-only messages).
-            if node.id == "ROOT" or not _text(node.output).strip():
+            # A message of pictures alone is a turn too.
+            user_media = (node.metadata or {}).get("media")
+            if node.id == "ROOT" or (not _text(node.output).strip() and not user_media):
                 continue
-            last_assistant = None
+            _flush_reply()
             from openprogram.runtime.permissions.authority import render_model_input_from
             # ``model_input`` is what the model read for this turn when it
             # differs from the visible message (a ``/skill`` expansion).
             model_input = (node.metadata or {}).get("model_input")
+            raw_text = _text(model_input or node.output)
+            text = render_model_input_from(node.metadata or {}, _elide(raw_text, node))
+            text = with_turn_block(text, _stored_turn_block(node, audience))
+            from openprogram.state.store.session.media import with_media
+            # A turn with no text sent its pictures alone, with no text block.
+            text_blocks = ([] if user_media and not raw_text.strip()
+                           else [TextContent(type="text", text=text)])
+            content = with_media(text_blocks, user_media, session_directory)
+            if not content:
+                continue
             messages.append(UserMessage(
                 role="user",
-                content=[TextContent(type="text",
-                                      text=render_model_input_from(
-                                          node.metadata or {},
-                                          _elide(_text(model_input or node.output), node),
-                                      ))],
+                # The images the person sent go back where the turn put them.
+                content=content,
                 timestamp=ts_ms,
             ))
 
@@ -185,25 +208,84 @@ def render_dag_messages(graph: Graph, read_ids: list[str],
             # names its sender and where its full run can be read.
             report = _attach_report(node)
             if report:
-                last_assistant = None
+                _flush_reply()
                 messages.append(UserMessage(
                     role="user",
                     content=[TextContent(type="text", text=report)],
                     timestamp=ts_ms,
                 ))
 
+        elif node.is_llm() and summary_covers_ids(node) is not None:
+            # A compaction summary stands where the turns it covers began.
+            # One written as user input (``render_role``) reads as context
+            # given to the model, with its prefix; an older one stays the
+            # assistant message it was. Either carries the tools its turns
+            # loaded, so the request still loads them (``shared.tool_loads``),
+            # and the working state the compaction restored after its text.
+            _flush_reply()
+            from openprogram.runtime.context.carried_tools import carried_tools
+            carried = carried_tools(graph, node) or None
+            text = _elide(_text(node.output), node)
+            restored = (node.metadata or {}).get("restored_state")
+            if isinstance(restored, str) and restored.strip():
+                text = f"{text}\n\n{restored}"
+            if (node.metadata or {}).get("render_role") == "user":
+                messages.append(UserMessage(
+                    role="user", content=[TextContent(type="text", text=text)],
+                    carried_tools=carried, timestamp=ts_ms))
+            else:
+                last_assistant = _assistant(text, ts_ms, model=node.name or "",
+                                            identity=_reply_identity(node))
+                last_assistant.carried_tools = carried
+
         elif node.is_llm():
+            _flush_reply()
             request_content = (node.metadata or {}).get("request_content")
             if request_content is not None:
                 messages.append(UserMessage.model_validate(request_content))
-            am = _assistant(
+            reply_identity = _reply_identity(node)
+            own_reasoning = reply_identity is not None and reply_identity == reasoning_identity
+            rounds = _reply_rounds(node)
+            if rounds is not None:
+                calls = calls_by_reply.get(node.id, {})
+                for blocks in rounds:
+                    response = _assistant(None, ts_ms, identity=reply_identity)
+                    called: list[Call] = []
+                    for block in blocks:
+                        if block["type"] == "text":
+                            response.content.append(TextContent(
+                                type="text", text=block["text"], text_signature=block.get("signature")))
+                            continue
+                        if block["type"] == "thinking":
+                            if not own_reasoning:
+                                continue
+                            response.content.append(ThinkingContent(
+                                thinking=block.get("text") or "", thinking_signature=block["signature"],
+                                redacted=True if block.get("redacted") else None))
+                            continue
+                        code = calls.get(str(block.get("tool_call_id") or ""))
+                        if code is None or code.id in sent_in_round:
+                            # No result to pair it with (an Agent method
+                            # call renders as its own row): leave it out.
+                            continue
+                        response.content.append(_tool_call(code))
+                        called.append(code)
+                        sent_in_round.add(code.id)
+                    if any(not isinstance(item, ThinkingContent) for item in response.content):
+                        # Reasoning alone answers nothing; its response
+                        # left nothing else to send.
+                        messages.append(response)
+                    messages.extend(_tool_result(code, int((code.created_at or 0) * 1000))
+                                    for code in called)
+                continue
+            last_assistant = _assistant(
                 _elide(_text(node.output), node), ts_ms,
-                model=node.name or "",
+                model=node.name or "", identity=reply_identity,
             )
-            last_assistant = am
-            messages.append(am)
 
         elif node.is_code():
+            if node.id in sent_in_round:
+                continue
             md = node.metadata or {}
             expose = md.get("expose") or "io"
             if expose == "hidden":
@@ -221,7 +303,6 @@ def render_dag_messages(graph: Graph, read_ids: list[str],
                 # model to call it again; replay it as part of the reply.
                 if last_assistant is None:
                     last_assistant = _assistant("", ts_ms)
-                    messages.append(last_assistant)
                 agent = imported.get("agent") if isinstance(imported, dict) else ""
                 text = f"[{agent} tool call] {_format_call_signature(node)}"
                 if node.output is not None:
@@ -229,31 +310,20 @@ def render_dag_messages(graph: Graph, read_ids: list[str],
                 last_assistant.content.append(TextContent(type="text", text=text))
                 continue
             if tool_call_id:
-                # Model-emitted tool_use: round-trip as a real
-                # ToolCall (inside the owning assistant turn) + a
+                # A model call whose reply has no response marks: a real
+                # ToolCall in an assistant message of its own + a
                 # ToolResultMessage. Providers reject an orphaned
-                # tool_use/tool_result, so the ToolCall must attach to
-                # an AssistantMessage. If none precedes (e.g. reads
-                # started mid-turn), synthesize an empty one.
-                if last_assistant is None:
-                    last_assistant = _assistant("", ts_ms)
-                    messages.append(last_assistant)
-                last_assistant.content.append(ToolCall(
-                    id=tool_call_id,
-                    name=node.name or "",
-                    arguments=node.input if isinstance(node.input, dict) else {},
-                ))
-                result_text = _result_text_for(node) if node.output is not None else ""
-                messages.append(ToolResultMessage(
-                    tool_call_id=tool_call_id,
-                    tool_name=node.name or "",
-                    content=[TextContent(type="text", text=result_text)],
-                    timestamp=ts_ms,
-                ))
+                # tool_use/tool_result, so the ToolCall always has an
+                # assistant message; the reply's text follows its calls
+                # (``_flush_reply``).
+                call_message = _assistant(None, ts_ms, identity=reply_identity)
+                call_message.content.append(_tool_call(node))
+                messages.append(call_message)
+                messages.append(_tool_result(node, ts_ms))
                 continue
             # Direct Agent method (no tool_call_id): render as a
             # user→assistant text pair (the legacy convention).
-            last_assistant = None
+            _flush_reply()
             call_text = _format_call_signature(node)
             doc = md.get("doc")
             if doc:
@@ -271,7 +341,137 @@ def render_dag_messages(graph: Graph, read_ids: list[str],
             elif ended:
                 messages.append(_assistant(ended, ts_ms))
 
+    _flush_reply()
     return messages
+
+
+def turn_block(memory_prefetch: Any, run_note: Any, current_date: Any = None,
+               memory_map: Any = None) -> str:
+    """The block a turn puts in front of its live user message: the date it
+    was sent on, its notes (a rewind, the sections that changed:
+    ``context.turn_context.notes_text``), the memory it recalled, then its
+    run note. Later renders of that message join its ``turn_context``
+    entries in the same order (``turn_context.block``), so the bytes match."""
+    parts = (current_date, memory_map, memory_prefetch, run_note)
+    return "\n\n".join(part for part in parts if isinstance(part, str) and part)
+
+
+def with_turn_block(text: str, block: str) -> str:
+    """``text`` with ``block`` in front, exactly as the turn's requests sent it."""
+    return f"{block.rstrip()}\n\n{text}" if block else text
+
+
+def _stored_turn_block(node: Call, audience: str = "own_prompt") -> str:
+    """The block a past turn sent before its user message, from its node's
+    ``turn_context``, as a request for ``audience`` shows it."""
+    from openprogram.runtime.context.turn_context import block
+
+    return block(node.metadata or {}, audience)
+
+
+def _reply_identity(node: Call) -> "tuple[str, str, str] | None":
+    """``(api, provider, model)`` of the model that wrote this reply.
+
+    The reply node records its provider and model; the api is the one that
+    model is served through. Unknown (an old node, a model no longer
+    listed) means the neutral history identity.
+    """
+    md = node.metadata or {}
+    provider = md.get("provider")
+    model_id = md.get("model") or node.name
+    if not isinstance(provider, str) or not provider or not isinstance(model_id, str) or not model_id:
+        return None
+    try:
+        from openprogram.models.providers.catalog.models import get_model
+
+        model = get_model(provider, model_id)
+    except Exception:
+        return None
+    api = getattr(model, "api", None)
+    if not isinstance(api, str) or not api:
+        return None
+    return api, provider, model_id
+
+
+def _model_calls_by_reply(graph: Graph, read_ids: list[str]) -> "dict[str, dict[str, Call]]":
+    """``{reply id: {tool call id: code node}}`` for the calls a model made
+    and this render sends as ToolCalls (not hidden, not run by the provider,
+    not imported from another agent)."""
+    calls: dict[str, dict[str, Call]] = {}
+    for nid in read_ids:
+        node = graph.nodes.get(nid)
+        if node is None or not node.is_code() or not node.caller:
+            continue
+        md = node.metadata or {}
+        if (not md.get("tool_call_id") or (md.get("expose") or "io") == "hidden"
+                or md.get("provider_executed") or md.get("imported_from")):
+            continue
+        calls.setdefault(node.caller, {}).setdefault(str(md["tool_call_id"]), node)
+    return calls
+
+
+def _reply_rounds(node: Call) -> "list[list[dict]] | None":
+    """A reply's signed reasoning, text and call blocks, split into the
+    provider responses that made them, or None when the reply does not record where each began.
+
+    The turn marks the first block of each response ``round_start``
+    (``turn_runtime.loop_runner``). A reply recorded before the marks, one
+    whose first block is unmarked, or one whose text was spilled (the text
+    to send is then the elided output) is rendered from its output instead.
+    """
+    md = node.metadata or {}
+    if md.get("spilled"):
+        return None
+    extra = md.get("extra")
+    if isinstance(extra, str):
+        try:
+            import json as _json
+
+            extra = _json.loads(extra)
+        except (TypeError, ValueError):
+            return None
+    blocks = extra.get("blocks") if isinstance(extra, dict) else None
+    if not isinstance(blocks, list) or not blocks:
+        return None
+    if not isinstance(blocks[0], dict) or not blocks[0].get("round_start"):
+        return None
+    rounds: list[list[dict]] = []
+    for block in blocks:
+        if not isinstance(block, dict):
+            continue
+        if block.get("round_start"):
+            rounds.append([])
+        kind = block.get("type")
+        if kind == "text" and isinstance(block.get("text"), str) and block["text"]:
+            rounds[-1].append(block)
+        elif kind == "thinking" and isinstance(block.get("signature"), str) and block["signature"]:
+            # A signed block: a Responses reasoning item, an Anthropic
+            # thinking block, a signed Gemini thought part. An unsigned one
+            # stays out; a Gemini thought part without a signature was sent
+            # inside its turn, so the next turn's request differs there.
+            rounds[-1].append(block)
+        elif kind == "tool" and not block.get("provider_executed"):
+            rounds[-1].append(block)
+    return rounds
+
+
+def _call_arguments(value: Any) -> dict:
+    """A recorded call's arguments as the dict the model sent.
+
+    A tool node stores them as the JSON text the turn sent; parsing it gives
+    back the same keys in the same order, so they serialize to the same bytes.
+    """
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            import json as _json
+
+            parsed = _json.loads(value)
+        except (TypeError, ValueError):
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
 
 
 _SETTLED = ("completed", "errored", "failed", "cancelled", "canceled")
@@ -311,11 +511,17 @@ def _elide(text: str, node: Call) -> str:
     """Shrink one over-cap node's text for the prompt. Read-only.
 
     The spill file was written when the node was recorded; here we only
-    read ``metadata.spilled`` to cite it. A node with no spill entry is
-    under the cap and passes through untouched.
+    read ``metadata.spilled`` to cite it, at the cap the stamp recorded.
+    A tool result the model called for was bounded when it was made, and a
+    message a person or a model wrote is never cut (``spill.never_cut``):
+    both go as the turn sent them. A node recorded with a stamp (before
+    those rules) is cut as it was then.
     """
-    from openprogram.state.store.session.spill import elide_spilled
-    return elide_spilled(text, (node.metadata or {}).get("spilled"))
+    from openprogram.state.store.session.spill import bounded_when_made, elide_spilled, never_cut
+    spilled = (node.metadata or {}).get("spilled")
+    if spilled is None and (bounded_when_made(node) or never_cut(node)):
+        return text
+    return elide_spilled(text, spilled)
 
 
 def _text(value: Any) -> str:

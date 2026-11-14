@@ -53,8 +53,8 @@
 <h2 id="publishing-a-version">Publishing a version</h2>
 <pre><code translate="no">scripts/publish-github.sh -m "Sidebar run status, Launchpad, Agent cards" --dry-run
 scripts/publish-github.sh -m "Sidebar run status, Launchpad, Agent cards"
-scripts/publish-github.sh -m "Windows and Linux Apps" --tag v1.1.0 --dry-run
-scripts/publish-github.sh -m "Windows and Linux Apps" --tag v1.1.0</code></pre>
+scripts/publish-github.sh -m "Windows and Linux Apps" --tag v1.2.0 --dry-run
+scripts/publish-github.sh -m "Windows and Linux Apps" --tag v1.2.0</code></pre>
 
 <table class="stack fixed">
 <thead class="sr"><tr><th scope="col">Flag</th><th scope="col">Effect</th></tr></thead>
@@ -92,12 +92,17 @@ scripts/publish-github.sh -m "Windows and Linux Apps" --tag v1.1.0</code></pre>
 
 <h2 id="what-a-release-builds">What a release builds</h2>
 <p>The Release workflow runs on the pushed tag. Every platform leg is independent.</p>
+<p>A tag never moves, so a release can be rehearsed first. Publish <code translate="no">main</code> without <code translate="no">--tag</code>, then run <code translate="no">gh workflow run release.yml -f tag=vX.Y.Z -f rehearse=true</code>: every leg builds from <code translate="no">main</code>, the same checks run and nothing is published.</p>
+<p><code translate="no">gh workflow run windows-install-smoke.yml -f tag=vX.Y.Z -f run_id=&lt;rehearsal run&gt;</code> installs that run's Windows files on a Windows runner. When both pass, <code translate="no">scripts/publish-github.sh --source refs/publish/last --tag vX.Y.Z</code> tags the same commit; without <code translate="no">--source</code>, a promotion made in between would become a new, unrehearsed version.</p>
 <table class="stack fixed">
 <thead class="sr"><tr><th scope="col">Point</th><th scope="col">Behaviour</th></tr></thead>
 <tbody>
 <tr><th scope="row">Failed leg</th><td>Its files are left out; the publish job uploads what succeeded</td></tr>
+<tr><th scope="row">Thin App without update files</th><td>The Windows or Linux App leg marks an error before building when its platform's update files were not built, then still builds and checks the App so the same run shows every other problem; publish leaves that App out and names why</td></tr>
+<tr><th scope="row">Windows checks</th><td>App leg: the platform contract tests in <code translate="no">scripts/release/windows-contracts.txt</code>, then the installer installs, launches to a healthy worker, makes one tool call and uninstalls keeping the data. A failed contract does not stop the build and the install check; a step before the upload keeps that App out. Runtime leg: the installed command makes one tool call. A failure leaves out only that package. A failed Windows leg keeps its logs as a <code translate="no">diagnostics-windows-*</code> artifact, never published</td></tr>
 <tr><th scope="row"><code translate="no">release-manifest.json</code></th><td>Lists only what exists</td></tr>
 <tr><th scope="row">Release notes</th><td>Gain a "Not in this release" section naming what is missing and why</td></tr>
+<tr><th scope="row">Planned package missing</th><td>After the release is public, the publish job fails and names each one, so the run cannot look complete</td></tr>
 <tr><th scope="row">Publishing refused</th><td>Only when the wheel is missing or no macOS or Linux command-line runtime was built</td></tr>
 </tbody>
 </table>
@@ -157,6 +162,6 @@ scripts/publish-github.sh -m "Windows and Linux Apps" --tag v1.1.0</code></pre>
 <thead class="sr"><tr><th scope="col">Status</th><th scope="col">Items</th></tr></thead>
 <tbody>
 <tr><th scope="row">Implemented</th><td><code translate="no">scripts/publish-github.sh</code> with dry run, <code translate="no">--no-push</code>, <code translate="no">--tag</code>, credential scan and <code translate="no">refs/publish/last</code>; both guards; the rules in <code translate="no">AGENTS.md</code>; the Release workflow's independent legs</td></tr>
-<tr><th scope="row">Not yet run</th><td>The Release workflow and its Windows and Linux legs have not had a real GitHub Actions run</td></tr>
+<tr><th scope="row">Not yet run</th><td>A complete Release run. The one run so far, for v1.1.0, published the macOS and Linux Apps and every command-line runtime; the Windows installer was built and left out, because the Windows update files failed. The 1.2.0 rehearsal ran once: the publish job's check named the three Apps that did not pass (both macOS legs at signing, Windows at its App smoke). The Windows install smoke workflow has not run</td></tr>
 </tbody>
 </table>

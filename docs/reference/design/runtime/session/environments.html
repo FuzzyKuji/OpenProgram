@@ -6,7 +6,7 @@
 <table class="stack">
 <thead><tr><th scope="col">Kind</th><th scope="col">Backend</th><th scope="col">Command form</th><th scope="col">Working folder</th><th scope="col">Host sandbox</th></tr></thead>
 <tbody>
-<tr><th scope="row"><code translate="no">local</code></th><td><code translate="no">LocalBackend</code></td><td>Subprocess on the host</td><td>Host</td><td>Applies</td></tr>
+<tr><th scope="row"><code translate="no">local</code></th><td><code translate="no">LocalBackend</code></td><td>Host subprocess. macOS and Linux: <code translate="no">bash -c</code>, sandboxed or not (<code translate="no">sh</code> only without bash), so <code translate="no">echo</code> prints <code translate="no">\n</code> as written and <code translate="no">printf</code> expands it; scheduled task commands run the same way. Windows: Git Bash or PowerShell, WSL bash when sandboxed</td><td>Host</td><td>Applies</td></tr>
 <tr><th scope="row"><code translate="no">ssh</code></th><td><code translate="no">SshBackend(target, workdir)</code></td><td><code translate="no">ssh … &lt;target&gt; 'cd &lt;dir&gt; &amp;&amp; &lt;cmd&gt;'</code></td><td>Remote absolute path</td><td>Off; isolation is the remote account</td></tr>
 <tr><th scope="row"><code translate="no">docker</code></th><td><code translate="no">DockerBackend(image, container, mounts)</code></td><td><code translate="no">docker exec -i [-w cwd] &lt;container&gt; sh -c &lt;cmd&gt;</code></td><td>Host path, mounted at the same path</td><td>Off; isolation is the container</td></tr>
 </tbody>

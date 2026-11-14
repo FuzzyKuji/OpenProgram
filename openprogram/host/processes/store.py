@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import sqlite3
 import subprocess
+import sys
 import time
 import uuid
 
@@ -31,6 +32,10 @@ def process_identity(pid: int | None) -> str | None:
     """Read birth identity only; recorded PIDs are never used to send signals."""
     if not pid:
         return None
+    if sys.platform.startswith("linux"):
+        # Read /proc so an image without ps still runs commands, in the format
+        # `ps -o lstart=` prints, so identities recorded by ps keep matching.
+        return _proc_lstart(pid)
     if os.name == "posix":
         value = subprocess.run(["ps", "-p", str(pid), "-o", "lstart="],
                                capture_output=True, text=True, timeout=3)
@@ -39,6 +44,32 @@ def process_identity(pid: int | None) -> str | None:
     # portable inspection relies on its durable heartbeat, never PID reuse.
     return None
 
+
+
+_DAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+_MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun",
+           "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+
+def _proc_lstart(pid: int, proc_root: str = "/proc") -> str | None:
+    """A process's start time as procps ``ps -o lstart=`` prints it.
+
+    procps takes the boot time from ``btime`` in ``/proc/stat``, adds the
+    process's ``starttime`` clock ticks divided down to whole seconds, and
+    prints the local time with ``ctime`` (C-locale names, day padded with a
+    space).
+    """
+    try:
+        # comm may contain spaces and parentheses; fields begin after its last ')'.
+        fields = Path(proc_root, str(pid), "stat").read_text(encoding="utf-8").rsplit(")", 1)[-1].split()
+        ticks = int(fields[19])
+        boot = next(int(line.split()[1]) for line in Path(proc_root, "stat").read_text(encoding="utf-8").splitlines()
+                    if line.startswith("btime "))
+        when = time.localtime(boot + ticks // os.sysconf("SC_CLK_TCK"))
+    except (OSError, IndexError, ValueError, StopIteration, UnicodeError):
+        return None
+    return (f"{_DAYS[when.tm_wday]} {_MONTHS[when.tm_mon - 1]} {when.tm_mday:2d} "
+            f"{when.tm_hour:02d}:{when.tm_min:02d}:{when.tm_sec:02d} {when.tm_year}")
 
 class ProcessStore:
     def __init__(self, path: str | Path | None = None):

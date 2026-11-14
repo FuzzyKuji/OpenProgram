@@ -11,7 +11,7 @@
 <tr><th scope="row">因请求形态被拒</th><td><a href="request-repair.zh.html">修复后重发</a></td></tr>
 <tr><th scope="row">流长时间沉默</th><td>10 分钟无字节或 15 分钟无真实数据才失败；无总时长限制</td></tr>
 <tr><th scope="row">死连接</th><td>连接超时 30 秒，TCP keepalive 约 60 秒发现</td></tr>
-<tr><th scope="row">已有内容后断开</th><td>绝不盲目重试。Codex 保留部分回复，<code translate="no">stop_reason="length"</code>。</td></tr>
+<tr><th scope="row">已有内容后断开</th><td>Codex 保留部分回复，<code translate="no">stop_reason="length"</code>。其他提供商遇到传输失败时重发整个请求，已收到的部分作废，见<a href="error-and-timeout-mechanism.zh.html#resend">重发失败的回复</a>。</td></tr>
 <tr><th scope="row">网络不可达</th><td><a href="error-and-timeout-mechanism.zh.html#network-wait">等待网络</a></td></tr>
 <tr><th scope="row">换模型</th><td>默认关闭；只在首个 token 之前</td></tr>
 <tr><th scope="row">仍然失败</th><td><a href="error-taxonomy-propagation.zh.html">界面上的结构化错误</a></td></tr>
@@ -24,7 +24,7 @@
 <thead><tr><th scope="col">预算</th><th scope="col">谁重置</th><th scope="col">抓什么</th></tr></thead>
 <tbody>
 <tr><th scope="row"><code translate="no">SSE_IDLE_TIMEOUT_S</code> 600</th><td>任意一行，含 ping</td><td>死连接。Codex 自己的客户端给 5 分钟；10 分钟给缓冲代理留余地。</td></tr>
-<tr><th scope="row"><code translate="no">SSE_DATA_STALL_TIMEOUT_S</code> 900</th><td>只有解析出的事件</td><td>字节级超时看不到的 ping 刷屏卡死</td></tr>
+<tr><th scope="row">流空闲上限 300</th><td>只有解析出的事件</td><td>连接还开着、回复却停了，含只剩 ping 的情况；会重试。所有提供商都有，见<a href="error-and-timeout-mechanism.zh.html#idle-bound">空闲上限</a></td></tr>
 <tr><th scope="row"><code translate="no">OPENPROGRAM_SSE_TOTAL_TIMEOUT_S</code> 0</th><td>无</td><td>正值表示启用期限</td></tr>
 </tbody>
 </table>
@@ -60,7 +60,8 @@
 <thead><tr><th scope="col">变量</th><th scope="col">默认</th><th scope="col">含义</th></tr></thead>
 <tbody>
 <tr><th scope="row"><code translate="no">OPENPROGRAM_SSE_IDLE_TIMEOUT_S</code></th><td>600</td><td>无字节</td></tr>
-<tr><th scope="row"><code translate="no">OPENPROGRAM_SSE_DATA_STALL_TIMEOUT_S</code></th><td>900</td><td>无真实数据</td></tr>
+<tr><th scope="row"><code translate="no">OPENPROGRAM_STREAM_IDLE_TIMEOUT_S</code></th><td>300</td><td>没有事件；0 关闭此上限</td></tr>
+<tr><th scope="row"><code translate="no">OPENPROGRAM_SSE_DATA_STALL_TIMEOUT_S</code></th><td>同空闲上限</td><td>无真实数据，仅 Codex</td></tr>
 <tr><th scope="row"><code translate="no">OPENPROGRAM_SSE_TOTAL_TIMEOUT_S</code></th><td>0</td><td>单流期限；0 为无</td></tr>
 <tr><th scope="row"><code translate="no">OPENPROGRAM_HTTPX_CONNECT_TIMEOUT_S</code></th><td>30</td><td>连接</td></tr>
 <tr><th scope="row"><code translate="no">OPENPROGRAM_HTTPX_WRITE_TIMEOUT_S</code>、<code translate="no">_POOL_TIMEOUT_S</code></th><td>30</td><td>写、连接池</td></tr>
@@ -101,7 +102,7 @@
 <tr><th scope="row">连接复用</th><td>keep-alive</td><td>WS 池，55 分钟回收</td><td>共享，陈旧时重建</td><td>不适用</td><td>共享，按循环区分</td></tr>
 <tr><th scope="row">密钥轮换</th><td>有</td><td>无</td><td>池、冷却</td><td>不适用</td><td>池、冷却</td></tr>
 <tr><th scope="row">模型故障转移</th><td>有</td><td>仅 WS 到 HTTP</td><td>链</td><td>不适用</td><td>链，默认关闭</td></tr>
-<tr><th scope="row">首 token 后断开</th><td>报错</td><td>报错</td><td>部分回复并继续</td><td>报错</td><td>部分回复并继续（Codex）</td></tr>
+<tr><th scope="row">首 token 后断开</th><td>报错</td><td>报错</td><td>部分回复并继续</td><td>报错</td><td>部分回复并继续（Codex）；重发（其他）</td></tr>
 <tr><th scope="row">OAuth 刷新</th><td>不适用</td><td>不适用</td><td>按请求</td><td>按调用</td><td>按调用</td></tr>
 <tr><th scope="row">限流头</th><td>不适用</td><td>有</td><td>Nous</td><td>不适用</td><td>有</td></tr>
 <tr><th scope="row">分类</th><td>有</td><td>标签联合</td><td>有</td><td>基础</td><td><code translate="no">ErrorReason</code></td></tr>

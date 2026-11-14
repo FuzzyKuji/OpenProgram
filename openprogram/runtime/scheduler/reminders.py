@@ -8,12 +8,14 @@ a channel conversation (WeChat, Telegram, …) gets the text through its
 outbound path, and a waking reminder starts an owner turn in the
 conversation it was set in, so the agent acts on it there. When no desktop
 App answers, the worker posts the system notification itself, so a reminder
-still pops up with every App window closed. Config ``hooks`` and proactive
+still pops up with every App window closed (macOS, Linux with
+``notify-send``, Windows through Windows PowerShell). Config ``hooks`` and proactive
 policies can subscribe to the same event.
 """
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import subprocess
 import sys
@@ -103,6 +105,61 @@ def _bundle_notify(title: str, message: str) -> bool:
     return True
 
 
+# Windows shows a toast only for a registered application; Windows PowerShell
+# is one on every install, so the toast is posted under its name, the way
+# Script Editor posts the macOS one outside the app bundle.
+_WINDOWS_TOAST_APP = r"{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe"
+_WINDOWS_TOAST_SCRIPT = (
+    "$ErrorActionPreference='Stop';"
+    "[void][Windows.UI.Notifications.ToastNotificationManager,Windows.UI.Notifications,ContentType=WindowsRuntime];"
+    "[void][Windows.Data.Xml.Dom.XmlDocument,Windows.Data.Xml.Dom.XmlDocument,ContentType=WindowsRuntime];"
+    "$xml=[Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent("
+    "[Windows.UI.Notifications.ToastTemplateType]::ToastText02);"
+    "$text=$xml.GetElementsByTagName('text');"
+    "[void]$text.Item(0).AppendChild($xml.CreateTextNode($env:OPENPROGRAM_NOTICE_TITLE));"
+    "[void]$text.Item(1).AppendChild($xml.CreateTextNode($env:OPENPROGRAM_NOTICE_MESSAGE));"
+    "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($env:OPENPROGRAM_NOTICE_APP)"
+    ".Show([Windows.UI.Notifications.ToastNotification]::new($xml))"
+)
+
+
+def _windows_toast(title: str, message: str) -> bool:
+    """Post a Windows toast through Windows PowerShell, which can load WinRT.
+
+    The texts travel in the child's environment and enter the toast as text
+    nodes, so nothing an Agent wrote is parsed as script or as XML.
+    PowerShell 7 (``pwsh``) cannot load WinRT types, so it is not a fallback.
+    """
+    executable = shutil.which("powershell.exe")
+    if executable is None:
+        return False
+    env = {**os.environ, "OPENPROGRAM_NOTICE_TITLE": title, "OPENPROGRAM_NOTICE_MESSAGE": message,
+           "OPENPROGRAM_NOTICE_APP": _WINDOWS_TOAST_APP}
+    command = [executable, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", _WINDOWS_TOAST_SCRIPT]
+    return subprocess.run(command, capture_output=True, timeout=10, env=env,
+                          creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).returncode == 0
+
+
+def notification_support(platform: str | None = None) -> dict:
+    """Whether the worker can post a system notification itself, and why not.
+
+    The desktop App shows its own on every platform; this is the fallback
+    for when no App window answers.
+    """
+    platform = sys.platform if platform is None else platform
+    if platform == "darwin":
+        return {"available": True, "reason": ""}
+    if platform == "win32":
+        if shutil.which("powershell.exe"):
+            return {"available": True, "reason": ""}
+        return {"available": False, "reason": "Notifications from the worker need Windows PowerShell (powershell.exe)."}
+    if platform.startswith("linux"):
+        if shutil.which("notify-send"):
+            return {"available": True, "reason": ""}
+        return {"available": False, "reason": "Notifications from the worker need notify-send (the libnotify tools)."}
+    return {"available": False, "reason": f"Notifications from the worker are not supported on {platform}."}
+
+
 def system_notify(title: str, message: str) -> bool:
     """Post an operating-system notification from the worker itself.
 
@@ -120,6 +177,8 @@ def system_notify(title: str, message: str) -> bool:
             command = ["osascript", "-e", script, "--", title, message]
         elif sys.platform.startswith("linux") and shutil.which("notify-send"):
             command = ["notify-send", "--urgency=critical", "--app-name=OpenProgram", "--", title, message]
+        elif sys.platform == "win32":
+            return _windows_toast(title, message)
         else:
             return False
         return subprocess.run(command, capture_output=True, timeout=10).returncode == 0
@@ -231,4 +290,5 @@ def deliver(event: Any) -> None:
     threading.Thread(target=target, name=name, daemon=True).start()
 
 
-__all__ = ["EVENT", "deliver", "fire", "install", "notify_unless_shown", "shown", "system_notify", "wake_text"]
+__all__ = ["EVENT", "deliver", "fire", "install", "notification_support", "notify_unless_shown", "shown",
+           "system_notify", "wake_text"]

@@ -1,9 +1,12 @@
 /* An Agent's time chart: a column per level, newest on top. Blocks are placed
-   by agent-chart.tsx; heights follow how far right the reader has scrolled. */
-.cols { flex: 1; min-height: 0; overflow: auto; scrollbar-width: none; padding-bottom: 12px; -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 22px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 22px), transparent); }
+   by agent-chart.tsx at the level of the deepest column in view. The box
+   scrolls up and down; sideways, the track (.inner) moves by its transform,
+   and every column in view is whole: --chart-col is the box's width over
+   the number of columns it holds. */
+.cols { flex: 1; min-height: 0; overflow-x: hidden; overflow-y: auto; scrollbar-width: none; padding-bottom: 12px; }
 .cols::-webkit-scrollbar { display: none; }
 .inner { display: flex; width: max-content; position: relative; }
-.col { width: 256px; flex: none; position: relative; }
+.col { width: var(--chart-col, 256px); flex: none; position: relative; }
 .ch { position: sticky; top: 0; z-index: 3; display: flex; gap: 6px; min-width: 0; height: 30px; box-sizing: border-box; padding: 8px 8px 4px; font-size: 13px; line-height: 18.2px; color: var(--text-muted); background: var(--color-sidebar); }
 .ch > span { flex: none; }
 .ch .crumb { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); }

@@ -125,21 +125,23 @@ def test_dispatcher_still_running_keeps_the_notice(session, monkeypatch):
 
 
 def test_notice_text_marks_itself_and_carries_replies():
+    # A background spawn (not waited on): its card carries the report.
     spawn = Job(id="s1", parent_session_id="p1", prompt="research", agent_id="main",
-                status=JobStatus.COMPLETED, attach_pointer_id="ap1", label="scout")
+                status=JobStatus.COMPLETED, attach_pointer_id="ap1", label="scout", wait=False)
     reply = Job(id="r1", parent_session_id="p2", prompt="ask", agent_id="main",
                 status=JobStatus.COMPLETED, head_id="hb", result_text="B says yes")
     text = notices.notice_text([spawn, reply])
     assert "not a message from the user" in text
     assert "Agent \"scout\" finished (job s1)." in text
-    assert "Its report is attached above." in text
-    assert "Reply from branch p2:hb:\nB says yes" in text
+    assert "(its report is attached above)" in text
+    assert "Reply from branch p2:hb:" in text and "B says yes" in text
     assert "send_message(to=\"p2:hb\")" in text
 
 
 def test_notice_items_give_each_job_its_row():
+    # A background spawn (not waited on): its card carries the report.
     spawn = Job(id="s1", parent_session_id="p1", prompt="research", agent_id="main",
-                status=JobStatus.COMPLETED, attach_pointer_id="ap1", label="scout")
+                status=JobStatus.COMPLETED, attach_pointer_id="ap1", label="scout", wait=False)
     reply = Job(id="r1", parent_session_id="p2", prompt="ask", agent_id="main",
                 status=JobStatus.ERRORED, head_id="hb", error="boom", label="frontend")
     text = notices.notice_text([spawn, reply])

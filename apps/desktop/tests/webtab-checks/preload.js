@@ -145,53 +145,6 @@ function checkPreloadPopupSubscription() {
   testContext.assert.equal(listeners.has("terminal:resource"), false);
 }
 
-function checkPreloadHumanInputSubscription() {
-  const listeners = new Map();
-  const exposedByName = new Map();
-  const preloadSandbox = {
-    CustomEvent: class CustomEvent {},
-    process: { argv: ["electron"] },
-    window: { dispatchEvent() {} },
-    require(id) {
-      if (id !== "electron") return testContext.require(id);
-      return {
-        contextBridge: {
-          exposeInMainWorld(name, value) { exposedByName.set(name, value); },
-        },
-        ipcRenderer: {
-          send() {},
-          invoke() { return Promise.resolve(null); },
-          on(channel, listener) { listeners.set(channel, listener); },
-          removeListener(channel, listener) {
-            if (listeners.get(channel) === listener) listeners.delete(channel);
-          },
-        },
-      };
-    },
-  };
-  testContext.vm.createContext(preloadSandbox);
-  testContext.vm.runInContext(testContext.preloadSource, preloadSandbox, { filename: "apps/desktop/main/preload.js" });
-  const exposed = exposedByName.get("openprogramDesktop");
-
-  const received = [];
-  const unsubscribe = exposed.webTab.onHumanInput((payload) => received.push(payload));
-  const payload = {
-    id: "pane-a",
-    windowId: "window-from-main",
-    sequence: 3,
-    kind: "pointer",
-  };
-  listeners.get("webtab:human-input")?.({}, payload);
-  testContext.assert.deepEqual(received, [payload]);
-  testContext.assert.equal(
-    Object.keys(received[0]).sort().join(","),
-    "id,kind,sequence,windowId",
-    "human-input payload must not include typed text, key values, coordinates, or URLs",
-  );
-  unsubscribe();
-  testContext.assert.equal(listeners.has("webtab:human-input"), false);
-}
-
 function checkPreloadLocalFilePath() {
   const exposedByName = new Map();
   const nativeFile = { name: "Project Folder" };
@@ -327,5 +280,5 @@ function checkPreloadTabTransfer() {
     );
   }
 }
-return { checkPreloadWindowIdentity, checkPreloadPopupSubscription, checkPreloadHumanInputSubscription, checkPreloadLocalFilePath, checkPreloadTabTransfer };
+return { checkPreloadWindowIdentity, checkPreloadPopupSubscription, checkPreloadLocalFilePath, checkPreloadTabTransfer };
 };

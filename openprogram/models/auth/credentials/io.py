@@ -8,6 +8,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO, Callable, Iterator
+from openprogram.host._platform.filesystem import replace_file
 
 
 class PrivateAtomicWriteError(OSError):
@@ -141,7 +142,7 @@ def _atomic_write(
 
         keep_previous(target)
         try:
-            os.replace(temporary, target)
+            replace_file(temporary, target)
         except OSError as exc:
             raise PrivateAtomicWriteError(
                 "replace", target, committed=False, cause=exc

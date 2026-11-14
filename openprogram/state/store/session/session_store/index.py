@@ -262,7 +262,11 @@ class IndexOperations:
                 if any(shared.os.path.lexists(sdir / name) for name in _SESSION_DATA):
                     return False
                 dest.mkdir(parents=True)
-                shared.os.rename(sdir, dest / "session")
+                try:
+                    shared.move_session_folder(sdir, dest / "session")
+                except OSError:
+                    dest.rmdir()
+                    raise
                 shared.atomic_write_text(dest / "reason.json", shared.json.dumps({
                     "session_id": session_id,
                     "source": str(sdir),

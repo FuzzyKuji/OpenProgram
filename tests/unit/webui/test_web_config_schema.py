@@ -104,6 +104,7 @@ def test_outbound_url_security_is_normalized_before_atomic_persistence(monkeypat
                     "origin": "https://catalog.corp.example:8443",
                 }
             ],
+            "model_tools": "open",
             "policy_proxy": {
                 "url": "http://127.0.0.1:3128",
                 "enforces_target_policy": True,

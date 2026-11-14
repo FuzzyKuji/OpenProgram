@@ -303,11 +303,12 @@ def build_branches_payload(session_id: str | None) -> dict:
                     name = mid[:8]
                 rows.append({
                     "head_msg_id": mid,
+                    **({"branch_id": row["branch_id"]} if row.get("branch_id") else {}),
                     "name": name,
                     "is_named": bool(row.get("name")),
                     "created_at": row.get("created_at"),
                     "updated_at": row.get("updated_at"),
-                    "active": (mid == active_head),
+                    "active": (row["branch_id"] == (sess or {}).get("active_branch_id")) if row.get("branch_id") else (mid == active_head),
                     # A sub-agent's conversation kept in this session: its
                     # tip is addressable, but it is not a branch the user made.
                     "sub_agent": mid in spawned,

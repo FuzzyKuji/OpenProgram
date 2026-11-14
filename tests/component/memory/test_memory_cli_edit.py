@@ -183,7 +183,8 @@ def test_stage_directories_are_cleaned_up_on_both_paths(memory, editor):
     assert _stage_dirs() == before
 
 
-def test_cli_edit_rejects_uncited_section_and_retains_draft(memory, editor, capsys):
+def test_cli_edit_rejects_dangling_link_and_retains_draft(memory, editor, capsys):
+    # A person's uncited paragraph is kept; a link to no block is not.
     from openprogram.state.memory.store import _ensure_git_history
     from openprogram.state.memory.management.transaction import workspace_revision
 
@@ -194,7 +195,7 @@ def test_cli_edit_rejects_uncited_section_and_retains_draft(memory, editor, caps
     }
     revision = workspace_revision(memory)
     head = subprocess.check_output(["git", "-C", str(memory), "rev-parse", "HEAD"])
-    editor.content = NOTE + "\n## Unsupported section\n\nUncited substantive prose.\n"
+    editor.content = NOTE + "\n## Broken section\n\nSee [nothing](note.md#^deadbeef).\n"
     assert _edit(memory, "topics/note.md") == 1
     out = capsys.readouterr().out
     assert "Rejected:" in out

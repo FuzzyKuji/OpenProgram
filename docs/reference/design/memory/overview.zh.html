@@ -92,6 +92,7 @@
 <tr><th scope="row">整理器</th><td>不得新增消息引用</td></tr>
 <tr><th scope="row">非所有者的聊天编辑</th><td>只限自己的对话</td></tr>
 <tr><th scope="row">未写来源的聊天编辑</th><td>提出要求的那条用户消息</td></tr>
+<tr><th scope="row">设置页或 CLI 编辑</th><td>回合写入共享存储的任何对话；不含关闭记忆或只读记忆时的对话，也不含 Agent 留给自己空间的对话。拒绝时说明是哪一种，并请换一条消息引用。</td></tr>
 </tbody>
 </table>
 
@@ -180,12 +181,14 @@
 <table class="stack fixed">
 <thead class="sr"><tr><th scope="col">谁</th><th scope="col">做什么</th></tr></thead>
 <tbody>
-<tr><th scope="row">发现没有它的提交</th><td>从暂存树生成一次（<code translate="no">runtime/memory_guide.py</code>）：布局、三层 Topic 及首句、最新 <code translate="no">recent_events</code> 涉及的文件</td></tr>
+<tr><th scope="row">发现没有它的提交</th><td>从暂存树生成一次（<code translate="no">runtime/memory_guide.py</code>）：布局、三层 Topic 及标题（front matter <code translate="no">name</code> 或第一个标题，不引用原句）、最新 <code translate="no">recent_events</code> 涉及的文件</td></tr>
+<tr><th scope="row">每次提交</th><td>删掉 <code translate="no">topics/</code> 路径已不在目录树里的行（<code translate="no">drop_removed</code>）：<code translate="no">memory_update</code> 的删除不经过 agent，而地图每个会话都会读</td></tr>
 <tr><th scope="row">写入器</th><td>新建 Topic 文件或目录时加一行</td></tr>
-<tr><th scope="row">整理器</th><td>与目录树对齐；简短说明替换引用的首句</td></tr>
+<tr><th scope="row">整理器</th><td>与目录树对齐；简短说明替换只有标题的条目</td></tr>
 <tr><th scope="row">二者</th><td>不动 <code translate="no">&lt;!-- core: … --&gt;</code> 到 <code translate="no">&lt;!-- /core --&gt;</code></td></tr>
 </tbody>
 </table>
+<p>原因：生成的条目引用 Topic 首句，就把事实放进了地图，删掉那条记录后它还会出现在之后每个会话里。Grok Build 生成的清单按标题列文件；Claude Code 的索引在记忆删除时去掉它的指针。地图两样都做。</p>
 
 <h2 id="the-always-on-block">常驻块</h2>
 <table class="stack fixed">
@@ -271,7 +274,7 @@
 <tr><th scope="row">注入顺序</th><td>个人在前，项目在后，同 <code translate="no">AGENTS.md</code></td></tr>
 <tr><th scope="row">路径</th><td>两层时为 <code translate="no">project:topics/api.md</code>、<code translate="no">personal:topics/me.md</code>；无前缀指默认层</td></tr>
 <tr><th scope="row">工具</th><td><code translate="no">memory_get</code> 无路径时列出两层并指明写入目标</td></tr>
-<tr><th scope="row">何时算一层</th><td>有 Topic 或 <code translate="no">MEMORY.md</code> 之后；打开其 Memory 页产生的空工作区不算</td></tr>
+<tr><th scope="row">何时算一层</th><td>有 Topic 或 <code translate="no">MEMORY.md</code> 之后；打开其 Memory 页产生的空工作区不算。在此之前读取和编辑都留在个人记忆、不加前缀，只有 <code translate="no">memory_update</code> 新建的记录在项目写入落在这里时进入项目，和写入器一致</td></tr>
 <tr><th scope="row">每回合一层</th><td>任一层的标记都算已写，切换设置不会把对话复制到另一层</td></tr>
 <tr><th scope="row">执行策略</th><td>记忆关闭时不读项目记忆；只有允许写的执行才写入。有多个读空间时只随第一个读取项目。提交守卫仅在写入已选定项目工作区时接受它。</td></tr>
 </tbody>
@@ -362,11 +365,11 @@
 
 <h3 id="checked-as-it-is-written">边写边查</h3>
 <figure>
-<svg class="fig-wide" viewBox="0 0 680 206" role="img" aria-label="Topic 在四处被把关。每次写入前，repair_committed_topics 修复已提交但无法解析的 Topic。每次编辑后，在暂存副本上运行 check_edits；失败时指出文件，并把修正说明追加到工具结果。回合结束时，_fix_in_place 在暂存区修复失败项。每次接受的写入按来源生成一个 Git 提交。">
+<svg class="fig-wide" viewBox="0 0 680 206" role="img" aria-label="Topic 在四处被把关。每次写入前，read_topic_tree 按原样读取每个文件，坏文件只影响它自己。每次编辑后，在暂存副本上运行 check_edits；失败时指出文件，并把修正说明追加到工具结果。回合结束时，_fix_in_place 在暂存区修复失败项。每次接受的写入按来源生成一个 Git 提交。">
   <defs><marker id="mem-c" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path class="head" d="M0 0L8 4L0 8z"/></marker></defs>
   <text class="t-big" x="0" y="28">写入之前</text>
-  <text class="t-cmd notranslate" translate="no" x="0" y="54">repair_committed_topics</text>
-  <text class="t-soft" x="0" y="74">修复已提交但无法解析的 Topic</text>
+  <text class="t-cmd notranslate" translate="no" x="0" y="54">read_topic_tree</text>
+  <text class="t-soft" x="0" y="74">按原样读取每个文件；坏文件只影响它自己</text>
   <line class="ln" x1="230" y1="21" x2="340" y2="21" marker-end="url(#mem-c)"/>
   <text class="t-big" x="350" y="28">每次编辑</text>
   <text class="t-cmd notranslate" translate="no" x="350" y="54">check_edits</text>
@@ -381,7 +384,7 @@
   <text class="t-soft" x="350" y="186">每个来源一个 Git 提交</text>
 </svg>
 <ol class="flow fig-narrow">
-  <li><strong>写入之前</strong><small><code translate="no">repair_committed_topics</code></small><small>修复已提交但无法解析的 Topic</small></li>
+  <li><strong>写入之前</strong><small><code translate="no">read_topic_tree</code></small><small>按原样读取每个文件；坏文件只影响它自己</small></li>
   <li><strong>每次编辑</strong><small><code translate="no">check_edits</code></small><small>在暂存副本上；失败时指出文件，修正说明追加到工具结果</small></li>
   <li><strong>回合结束</strong><small><code translate="no">_fix_in_place</code></small><small>在暂存区修复</small></li>
   <li class="flow-end"><strong>历史</strong><small>每个来源一个 Git 提交</small></li>
@@ -404,7 +407,9 @@
 <table class="stack fixed">
 <thead><tr><th scope="col">失败</th><th scope="col">恢复</th></tr></thead>
 <tbody>
-<tr><th scope="row">已提交的 Topic 无法解析（外部编辑）</th><td><code translate="no">repair_committed_topics</code> 在每个写入器前运行：<code translate="no">topic_tree_problems</code> 指出损坏文件，agent 在不受限的暂存区修复格式。可解析的文件作基线，损坏文件的 block ID 视为存在。失败抛出可重试的 <code translate="no">INVALID_TOPIC_FORMAT</code>；等文件变化后才重试，其间写入快速失败。</td></tr>
+<tr><th scope="row">别的工具或人写的 Topic</th><td>原位读取，从不改写；写入器改动 OpenProgram 之外写的文件会被拒（<code translate="no">OUTSIDE_FILE_READ_ONLY</code>）。解码失败的文件在 <code translate="no">writer.not_text</code> 里列一次。不运行任何修复；见<a href="architecture.zh.html#outside">OpenProgram 之外写的文件</a>。</td></tr>
+<tr><th scope="row">有人保存保留中的 Topic</th><td><code translate="no">release_held</code> 用 <code translate="no">save_problem</code> 逐个单独判断，判断前先补上保存时会分配的 block ID 和证据标签，所以有引用的段落不用手写 <code translate="no">^id</code>。这样能解析的成为普通 Topic，不能解析的按原样保存，并把问题作为警告返回。</td></tr>
+<tr><th scope="row">保留中 Topic 的引用</th><td><code translate="no">save_problem</code> 按安装时的标准检查文件新加的每条引用，会被拒绝的引用（比如关闭记忆的对话）算作这个文件的问题，并写明原因。状态和打开文件时的提示，都按设置页保存（人自己的编辑）来判断。</td></tr>
 <tr><th scope="row">写入模型不可用</th><td>认证、授权、无效请求、不可重试的限流，或设置无法解析：默认 Agent 的模型，再最近使用的。仅在尚未运行工具时切换；可用的模型保持选中。</td></tr>
 </tbody>
 </table>
@@ -419,7 +424,6 @@
 <tr><th scope="row">后台写入</th><td>写明对话和回合数；它触发的整理是第二个提交</td></tr>
 <tr><th scope="row">夜间任务</th><td>独立提交，每拆分一个文件一个</td></tr>
 <tr><th scope="row"><code translate="no">memory_update</code></th><td>写明所属对话</td></tr>
-<tr><th scope="row">Topic 格式修复</th><td><code translate="no">memory: repair topic format</code></td></tr>
 <tr><th scope="row">Memory 页输入</th><td>五分钟检查点</td></tr>
 <tr><th scope="row">事务外的编辑</th><td>写入通过检查后，<code translate="no">snapshot_outside_edits</code> 刷新待处理的检查点，把 <code translate="no">topics/</code>、<code translate="no">MEMORY.md</code>、<code translate="no">core.md</code> 提交为 <code translate="no">memory: edits made outside OpenProgram</code>，撤销该写入时这些编辑得以保留。自动保存和恢复有各自的历史。</td></tr>
 </tbody>

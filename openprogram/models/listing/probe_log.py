@@ -2,7 +2,7 @@
 
 Outside any agent's turn, OpenProgram asks providers things by itself:
 Settings' connectivity test, a credential's validation, a model list's
-fetch. Those left no trace, so a test that failed in a way its one-line
+fetch, a quota read. Those left no trace, so a test that failed in a way its one-line
 answer did not explain could not be looked into afterwards.
 
 Each entry point is marked with :func:`probe` and the kind of test. Every
@@ -32,6 +32,7 @@ from openprogram.host.security.safe_http import ObservedRequest, observing_reque
 KIND_CONNECTIVITY = "connectivity"
 KIND_CREDENTIAL = "credential"
 KIND_MODEL_LIST = "model_list"
+KIND_QUOTA = "quota"
 
 _probing: ContextVar[str | None] = ContextVar("provider_probe_kind", default=None)
 
@@ -92,6 +93,7 @@ __all__ = [
     "KIND_CONNECTIVITY",
     "KIND_CREDENTIAL",
     "KIND_MODEL_LIST",
+    "KIND_QUOTA",
     "probe",
     "probing",
     "worth_keeping",

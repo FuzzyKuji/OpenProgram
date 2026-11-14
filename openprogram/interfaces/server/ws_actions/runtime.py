@@ -51,10 +51,13 @@ async def handle_list_models(ws, cmd: dict):
 async def handle_switch_model(ws, cmd: dict):
     """Same logic as POST /api/model, but over ws."""
     from openprogram.interfaces.server import server as _s
+    from openprogram.state.store.session.branch_config import BranchConfigConflict
     try:
         model = (cmd.get("model") or "").strip()
         explicit_provider = (cmd.get("provider") or "").strip() or None
         session_id = cmd.get("session_id")
+        from openprogram.interfaces.server.branch_settings import prepare_initial_guard, materialized_guard, commit_model, current_branch
+        initial_branch_id = prepare_initial_guard(session_id, cmd)
         if not model:
             await ws.send_text(json.dumps({
                 "type": "error", "data": {"message": "Missing model"},
@@ -91,12 +94,15 @@ async def handle_switch_model(ws, cmd: dict):
                 conv = await asyncio.to_thread(
                     _s._get_or_create_session, session_id)
             if conv:
+                from openprogram.interfaces.server.routes.execution.runtime import picks_other_branch
                 old_rt = conv.get("runtime")
                 cur_prov = conv.get(
                     "provider_name", _s.runtime_management._default_provider,
                 )
                 prov = target_provider or cur_prov
-                need_new_rt = (
+                # Another branch's model is stored, not run: build nothing.
+                elsewhere = picks_other_branch(session_id, cmd)
+                need_new_rt = not elsewhere and (
                     (target_provider and target_provider != cur_prov)
                     or (old_rt is None)
                 )
@@ -106,46 +112,19 @@ async def handle_switch_model(ws, cmd: dict):
                     except Exception as e:
                         _s._log(f"[switch_model] runtime build skipped for {prov}: {e}")
                         new_rt = None
-                    if new_rt is not None:
-                        if old_rt and hasattr(old_rt, "close"):
-                            try:
-                                old_rt.close()
-                            except Exception:
-                                # The old runtime is being replaced; a failed
-                                # close must not block the switch.
-                                _log.debug(
-                                    "closing replaced runtime for %s failed", prov, exc_info=True)
-                        conv["runtime"] = new_rt
-                    conv["provider_name"] = prov
                 else:
-                    if old_rt is not None:
-                        old_rt.model = bare_model
-                # The dispatcher reads the picker choice from
-                # provider_override / model_override, and restart
-                # restore only trusts those keys — provider_name alone
-                # is treated as possibly-stale state. Without them the
-                # turn re-resolves through the enabled list and the
-                # session answers on a different model than the chip
-                # shows (the routes/runtime.py sibling sets them; this
-                # WS path never did).
-                conv["provider_override"] = prov
-                conv["model_override"] = bare_model
-                # Persist straight to the session row. _save_session
-                # skips message-less sessions (ghost guard), but spawned
-                # turns (goal refine/decision, task agents) read the
-                # override from the DB — a switch before the first
-                # message must already be visible to them.
-                def _persist_override():
-                    from openprogram.runtime.context.session_db import default_db
-                    from openprogram.models.providers.catalog.last_used import record_last_used_model
-                    default_db().update_session(
-                        session_id,
-                        provider_override=prov,
-                        model_override=bare_model,
-                    )
-                    _s._save_session(session_id)
-                    record_last_used_model(prov, bare_model)
-                await asyncio.to_thread(_persist_override)
+                    new_rt = old_rt
+                guarded_cmd = materialized_guard(session_id, cmd, initial_branch_id)
+                row = await asyncio.to_thread(commit_model, session_id, guarded_cmd, prov, bare_model, conv,
+                                        runtime=None if elsewhere else new_rt,
+                                        replace_runtime=bool(need_new_rt))
+                prov, bare_model = row.get("provider_override"), row.get("model_override")
+                from openprogram.interfaces.server.routes.execution.runtime import picked_reply
+                reply = picked_reply(row)
+                if row.get("branch_id") != row.get("active_branch_id"):
+                    # Another branch's model: no broadcast moves the selected one's.
+                    await ws.send_text(json.dumps({"type": "model_switched", "data": reply}, default=str))
+                    return
                 info = _s._get_provider_info(session_id)
                 _s._broadcast(json.dumps(
                     {"type": "provider_changed", "data": info},
@@ -155,8 +134,8 @@ async def handle_switch_model(ws, cmd: dict):
                 _s.refresh_context_stats(session_id)
                 await ws.send_text(json.dumps({
                     "type": "model_switched",
-                    "data": {"provider": prov, "model": bare_model},
-                }))
+                    "data": {**reply, "active_branch_id": current_branch(session_id)},
+                }, default=str))
                 return
 
         # No session_id → swap default runtime.
@@ -201,6 +180,12 @@ async def handle_switch_model(ws, cmd: dict):
                 "model": bare_model,
             },
         }))
+    except BranchConfigConflict as exc:
+        from openprogram.interfaces.server.routes.execution.runtime import model_conflict
+        await ws.send_text(json.dumps({"type": "error", "data": {
+            **model_conflict(cmd.get("session_id"), exc),
+            "session_id": cmd.get("session_id"), "request_id": cmd.get("request_id"),
+        }}))
     except Exception as e:  # noqa: BLE001
         await ws.send_text(json.dumps({
             "type": "error", "data": {"message": str(e)},

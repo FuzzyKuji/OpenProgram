@@ -54,7 +54,7 @@
 <table class="stack fixed">
 <thead class="sr"><tr><th scope="col">方面</th><th scope="col">规则</th></tr></thead>
 <tbody>
-<tr><th scope="row">形式（<code translate="no">plugins/hooks.py</code>）</th><td>内联或 JSON 文件。OpenProgram：<code translate="no">{event: [{command, timeout}]}</code>，同 <code translate="no">config.json</code>。Claude Code：<code translate="no">{hooks: {PreToolUse: [{matcher, hooks: [{type: "command", command}]}]}}</code></td></tr>
+<tr><th scope="row">形式（<code translate="no">plugins/hooks.py</code>）</th><td>内联或 JSON 文件。OpenProgram：<code translate="no">{event: [{command, timeout, shell, args}]}</code>，同 <code translate="no">config.json</code>；<code translate="no">shell</code> 和 <code translate="no">args</code> 可选（<a href="../distribution/windows-command-shell.zh.html#hook-shell">hook 用哪个 shell</a>）。Claude Code：<code translate="no">{hooks: {PreToolUse: [{matcher, hooks: [{type: "command", command}]}]}}</code></td></tr>
 <tr><th scope="row"><code translate="no">CLAUDE_EVENTS</code></th><td><code translate="no">PreToolUse</code> → <code translate="no">tool.before</code>，<code translate="no">PostToolUse</code> → <code translate="no">tool.after</code>，<code translate="no">UserPromptSubmit</code> → <code translate="no">chat.before_send</code>，<code translate="no">Stop</code> → <code translate="no">turn.stop</code>，<code translate="no">SessionStart</code> → <code translate="no">session.start</code></td></tr>
 <tr><th scope="row">替换</th><td><code translate="no">${CLAUDE_PLUGIN_ROOT}</code> 是插件目录；<code translate="no">matcher</code> 是匹配事件 <code translate="no">tool</code> 的正则</td></tr>
 <tr><th scope="row">执行（<code translate="no">runtime/events/shell_hooks.py</code>）</th><td>事件以 JSON 传入 stdin。关卡事件上退出码 2 表示拒绝，stderr 为原因；其他退出码放行</td></tr>

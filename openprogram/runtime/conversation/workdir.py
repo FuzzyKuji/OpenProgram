@@ -83,7 +83,7 @@ def project_path_missing(session_id: str) -> Optional[str]:
 
 
 def runtime_location_for(
-    session_id: str, *, use_context: bool = True,
+    session_id: str, *, use_context: bool = True, branch_id: Optional[str] = None,
 ) -> dict[str, object]:
     """Resolve the exact project/worktree binding used by one turn.
 
@@ -96,7 +96,13 @@ def runtime_location_for(
     from openprogram.state.worktree.store import find_active_for_session
 
     project = _main_project(session_id)
-    worktree = find_active_for_session(session_id) if session_id else None
+    # The branch's own worktree: ``branch_id`` when the caller knows the
+    # turn's branch, else the running turn's branch or the selected one.
+    worktree = (
+        (find_active_for_session(session_id, branch_id) if branch_id
+         else find_active_for_session(session_id))
+        if session_id else None
+    )
     bound_worktree = current_worktree_path() if use_context else None
     if bound_worktree is None:
         if worktree is not None:

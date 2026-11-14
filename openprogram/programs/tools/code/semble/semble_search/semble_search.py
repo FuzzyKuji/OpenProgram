@@ -36,7 +36,7 @@ _DESCRIPTION = (
 @function(
     name="semble_search",
     description=_DESCRIPTION,
-    max_result_chars=20_000,
+    max_result_weight=5_000,
     toolset=["core", "research"],
 )
 def semble_search(query: str,

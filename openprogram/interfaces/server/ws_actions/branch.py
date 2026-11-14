@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import asyncio
 import json
+import uuid
 
 from openprogram.state.store.session.graph.branches import (  # noqa: F401
     _attach_info,
@@ -38,55 +39,55 @@ async def handle_list_branches(ws, cmd: dict):
 
 
 async def handle_checkout_branch(ws, cmd: dict):
+    """Select the branch ending at ``head_msg_id``: a view change, never
+    refused because a turn runs on the branch left or the branch entered
+    (``switch_branch``)."""
     from openprogram.interfaces.server import server as _s
     session_id = cmd.get("session_id")
     head_msg_id = cmd.get("head_msg_id")
     ok = False
     err = None
     alignment = None
+    active_branch_id = None
     if not session_id or not head_msg_id:
         err = "session_id and head_msg_id required"
-    elif _s._is_run_active(session_id):
-        # Moving HEAD mid-run would leave the in-flight reply anchored
-        # to a branch we've already left. Same 409 semantics as
-        # retry / edit.
-        err = _s.RUN_ACTIVE_ERROR
     else:
         try:
             from openprogram.runtime.context.session_db import default_db
             db = default_db()
-            if not db.message_exists(session_id, head_msg_id):
+            if (head_msg_id in set((db.get_session(session_id) or {}).get("rewind_hidden_nodes") or [])
+                    or head_msg_id in set((db.get_session(session_id) or {}).get("rewind_hidden_heads") or [])):
+                err = "This version was withdrawn by Rewind; use Undo rewind to recover it."
+            elif not db.message_exists(session_id, head_msg_id):
                 err = f"unknown message {head_msg_id!r}"
             else:
-                source_head_id = (db.get_session(session_id) or {}).get("head_id")
-                from openprogram.runtime.conversation.workspace_alignment import (
-                    conversation_checkout_alignment,
+                alignment = {"status": "aligned", "decision": "shared_workspace"}
+                from openprogram.runtime.conversation.rewind_marks import forget_read_baselines
+                # Every branch works on the same current files, not a historical copy.
+                switched = await asyncio.to_thread(
+                    _s.switch_branch, session_id, head_msg_id,
+                    branch_id=cmd.get("branch_id"),
+                    meta_update={"workspace_alignment": alignment,
+                                 "pending_rewind_note": {"kind": "branch_kept_files"}},
                 )
-
-                alignment = conversation_checkout_alignment(
-                    session_id, source_head_id, head_msg_id, store=db,
-                )
-                ok = _s._set_active_head(
-                    session_id,
-                    head_msg_id,
-                    expected_head_id=source_head_id,
-                    meta_update={"workspace_alignment": alignment},
-                )
+                ok = switched["ok"]
                 if ok:
+                    active_branch_id = switched["active_branch_id"]
+                    forget_read_baselines(session_id)
                     # A different branch is a different context. The last
                     # measurement belonged to the branch we just left, so
                     # re-estimate against the new one.
                     _s.refresh_context_stats(session_id)
                 else:
                     alignment = None
-                    err = "conversation head changed during checkout"
+                    err = switched["error"]
         except Exception as e:
             err = f"{type(e).__name__}: {e}"
     await ws.send_text(json.dumps({
         "type": "branch_checked_out",
         "data": {"session_id": session_id, "head_msg_id": head_msg_id,
                   "ok": ok, "error": err, "workspace_alignment": alignment,
-                  **({"code": "run_active"} if err == _s.RUN_ACTIVE_ERROR else {})},
+                  **({"active_branch_id": active_branch_id} if active_branch_id else {})},
     }, default=str))
 
 
@@ -103,32 +104,13 @@ async def handle_resolve_workspace_alignment(ws, cmd: dict):
     elif _s._is_run_active(session_id):
         error = _s.RUN_ACTIVE_ERROR
     elif decision == "keep_current_files":
+        # Compatibility for an already-open client displaying the retired banner.
+        alignment = {"status": "aligned", "decision": "shared_workspace"}
         from openprogram.runtime.context.session_db import default_db
-        from openprogram.runtime.conversation.workspace_alignment import adopt_current_workspace
-
-        alignment = adopt_current_workspace(
-            session_id,
-            store=default_db(),
-            source_head_id=(cmd.get("source_head_id") or None),
-            target_head_id=(cmd.get("target_head_id") or None),
-        )
-        ok = alignment.get("status") == "aligned"
-        error = alignment.get("resolution_error")
+        default_db().update_session(session_id, workspace_alignment=alignment)
+        ok = True
     elif decision == "restore_branch_code":
-        from openprogram.runtime.context.session_db import default_db
-        from openprogram.runtime.conversation.workspace_alignment import restore_branch_workspace
-
-        result = await asyncio.to_thread(
-            restore_branch_workspace,
-            session_id,
-            store=default_db(),
-            idempotency_key=(cmd.get("idempotency_key") or None),
-            source_head_id=(cmd.get("source_head_id") or None),
-            target_head_id=(cmd.get("target_head_id") or None),
-        )
-        ok = result.get("status") == "committed"
-        error = result.get("error")
-        alignment = result.get("workspace_alignment")
+        error = "Use Rewind to preview and confirm a file restore. Switching versions keeps current files."
     else:
         error = "unknown workspace alignment decision"
     await ws.send_text(json.dumps({
@@ -263,7 +245,15 @@ async def handle_delete_branch_name(ws, cmd: dict):
 
 
 async def handle_delete_branch(ws, cmd: dict):
-    """Real branch delete — walks the unique tail up to the fork point."""
+    """Delete a branch: the tail only it holds, from its tip up to the
+    fork point (``SessionStore.branch_tail``), and its record.
+
+    ``head_msg_id`` names a message on the branch; without it the
+    selected branch is deleted (the terminal UI's ``/branch delete``).
+    The conversation's only line is refused. Deleting the selected
+    branch first switches to another branch, so the record left behind
+    is never the selected one, then removes the tail and its records.
+    """
     from openprogram.interfaces.server import server as _s
     session_id = cmd.get("session_id")
     head_msg_id = cmd.get("head_msg_id")
@@ -279,48 +269,62 @@ async def handle_delete_branch(ws, cmd: dict):
     err = None
     deleted = 0
     new_head = None
+    refusal = None
+    tail = None
+    owner = f"branch_delete_{uuid.uuid4().hex}"
     if not session_id or not head_msg_id:
         err = "session_id and head_msg_id required"
-    elif _s._is_run_active(session_id):
-        # Worst case of the unguarded branch actions: the in-flight turn
-        # may be writing INTO the tail we're about to delete.
-        err = _s.RUN_ACTIVE_ERROR
     else:
         try:
             from openprogram.runtime.context.session_db import default_db
+            tail = default_db().branch_tail(session_id, head_msg_id)
+        except ValueError as e:
+            err = str(e)
+    if err is None:
+        # A branch operation on the selected branch. Refused while a turn
+        # writes INTO the tail about to be deleted: the selected branch's,
+        # or one on another branch whose tip lies in the removed subtree.
+        # A turn elsewhere keeps running.
+        refusal = await asyncio.to_thread(
+            _s.reserve_branch_operation, session_id, owner,
+            target_head=tail["start"], subtree=True,
+        )
+        if refusal is not None:
+            err = refusal["error"]
+    if err is None:
+        try:
+            from openprogram.runtime.context.session_db import default_db
             db = default_db()
-            sess = db.get_session(session_id) or {}
-            cur_head = sess.get("head_id")
-            head_in_branch = False
-            if cur_head:
-                chain = db.get_branch(session_id, cur_head) or []
-                head_in_branch = any(m.get("id") == head_msg_id for m in chain)
+            # Read again under the hold: the tree may have grown meanwhile.
+            tail = db.branch_tail(session_id, head_msg_id)
+            doomed = set(tail["nodes"])
+            cur_head = (db.get_session(session_id) or {}).get("head_id")
+            head_in_branch = cur_head in doomed
             if head_in_branch:
-                leaves = db.list_branches(session_id)
-                for lf in leaves:
-                    if lf["head_msg_id"] != head_msg_id:
-                        new_head = lf["head_msg_id"]
-                        break
-            deleted = db.delete_branch_tail(session_id, head_msg_id)
-            # After the tail is gone, so get_branch reads the surviving
-            # chain. _set_active_head also refreshes conv["messages"] —
-            # required even when HEAD didn't move, since the deleted rows
-            # may still sit in the cached list.
-            if head_in_branch:
-                _s._set_active_head(session_id, new_head)
-            else:
-                _s._invalidate_messages(session_id)
-            # Deleting the branch we were on moves HEAD elsewhere, so the
-            # context is a different set of nodes now.
+                # Move off first, through an ordinary switch: the branch
+                # being deleted keeps its record unselected, and the
+                # delete below removes it with its tail.
+                new_head = next((lf["head_msg_id"] for lf in db.list_branches(session_id)
+                                 if lf["head_msg_id"] not in doomed), tail["fork"])
+                if not _s._set_active_head(session_id, new_head):
+                    raise RuntimeError("the branch changed while it was being deleted; try again")
+            deleted = db.delete_branch_tail(session_id, tail["start"])
+            # _set_active_head refreshed conv["messages"] for a moved HEAD;
+            # the deleted rows may still sit in a cached list otherwise.
+            _s._invalidate_messages(session_id)
             _s.refresh_context_stats(session_id)
             ok = True
         except Exception as e:
             err = f"{type(e).__name__}: {e}"
+        finally:
+            _s._release_run_reservation(session_id, owner)
     await ws.send_text(json.dumps({
         "type": "branch_deleted",
         "data": {"session_id": session_id, "head_msg_id": head_msg_id,
                   "ok": ok, "deleted": deleted,
-                  "new_head": new_head, "error": err},
+                  "new_head": new_head, "error": err,
+                  **({key: refusal[key] for key in ("code", "kind", "branch_id", "blocking")
+                      if key in refusal} if refusal else {})},
     }, default=str))
 
 
@@ -585,7 +589,7 @@ async def handle_attach_branch(ws, cmd: dict) -> None:
 
 
 def run_branch_session(session_id: str | None, msg_id: str | None,
-                       title: str | None = None) -> dict:
+                       title: str | None = None, branch_id: str | None = None) -> dict:
     """Copy ``session_id`` up to ``msg_id`` into a new conversation.
 
     Shared by the ``branch_session`` WS action and
@@ -619,7 +623,7 @@ def run_branch_session(session_id: str | None, msg_id: str | None,
             msg_id = copy_tip(session_id, running=bool(_srv._is_run_active(session_id)))
             data["msg_id"] = msg_id
         new_id = branch_session(session_id, msg_id,
-                                title=(title or "").strip() or None)
+                                title=(title or "").strip() or None, **({"branch_id": branch_id} if branch_id is not None else {}))
     except BranchSessionError as e:
         data.update(error=str(e), code=e.code)
         return data
@@ -654,7 +658,7 @@ async def handle_branch_session(ws, cmd: dict) -> None:
              + a ``sessions_list`` broadcast on success.
     """
     data = await asyncio.to_thread(
-        run_branch_session, cmd.get("session_id"), cmd.get("msg_id"), cmd.get("title"),
+        run_branch_session, cmd.get("session_id"), cmd.get("msg_id"), cmd.get("title"), cmd.get("branch_id"),
     )
     await ws.send_text(json.dumps(
         {"type": "branch_session_result", "data": data}, default=str))

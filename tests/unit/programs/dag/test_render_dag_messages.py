@@ -86,40 +86,28 @@ def test_code_call_renders_as_user_assistant_pair():
     assert "hits" in assistant_text          # result shows up
 
 
-def test_old_code_nodes_age_to_stub_beyond_tail_window():
-    """Code nodes older than the last TAIL_TURNS (3) llm nodes render as
-    an [aged] stub; recent ones keep full output. Mirrors tool_aging."""
+def test_old_code_nodes_keep_their_whole_output():
+    """An old tool result renders as its turn sent it, however many llm
+    turns follow it: there is no aging step, only compaction replaces it."""
     g = Graph()
-    # An old tool call, then 3+ llm turns after it (pushing it out of the
-    # tail window), then a recent tool call.
     g.add(Call(role=ROLE_CODE, name="search",
                         input={"q": "old"}, output="OLD_FULL_RESULT_TEXT"))
-    g.add(Call(role=ROLE_LLM, output="t1"))
-    g.add(Call(role=ROLE_LLM, output="t2"))
-    g.add(Call(role=ROLE_LLM, output="t3"))
-    g.add(Call(role=ROLE_LLM, output="t4"))
+    for i in range(4):
+        g.add(Call(role=ROLE_LLM, output=f"t{i}"))
     g.add(Call(role=ROLE_CODE, name="search",
                           input={"q": "new"}, output="NEW_FULL_RESULT_TEXT"))
     all_ids = [n.id for n in sorted(g, key=lambda x: x.seq)]
-    msgs = render_dag_messages(g, all_ids)
-    texts = _texts(msgs)
-    blob = "\n".join(texts)
-    # old tool result rendered as a one-line [aged] stub (the stub keeps a
-    # short blurb of the result, so we check the stub PREFIX is present and
-    # the old result occupies a single aged line, not its own full message)
-    assert "[aged]" in blob
-    aged_lines = [t for t in texts if t.startswith("[aged]")]
-    assert len(aged_lines) == 1
-    assert "search" in aged_lines[0]
-    # recent tool result kept at full fidelity (no stub)
+    blob = "\n".join(_texts(render_dag_messages(g, all_ids)))
+    assert "[aged]" not in blob
+    assert "OLD_FULL_RESULT_TEXT" in blob
     assert "NEW_FULL_RESULT_TEXT" in blob
-    assert not any("NEW_FULL_RESULT_TEXT" in t and t.startswith("[aged]") for t in texts)
 
 
 def test_model_tool_use_code_node_renders_as_toolcall_toolresult():
     """A code node WITH a tool_call_id (model-emitted tool_use) round-trips
-    as a real ToolCall (inside the preceding assistant turn) + a
-    ToolResultMessage — not the user/assistant text pair."""
+    as a real ToolCall in an assistant message of its own + a
+    ToolResultMessage — not the user/assistant text pair — and the reply's
+    text follows its calls, as the turn sent them."""
     g = Graph()
     llm = g.add(Call(role=ROLE_LLM, output="let me search"))
     tc = g.add(Call(
@@ -131,11 +119,9 @@ def test_model_tool_use_code_node_renders_as_toolcall_toolresult():
         metadata={"tool_call_id": "call_abc"},
     ))
     msgs = render_dag_messages(g, [llm.id, tc.id])
-    # assistant turn, then a tool-result message
-    assert _roles(msgs) == ["assistant", "toolResult"]
-    # the ToolCall is appended INSIDE the assistant message content
-    asst = msgs[0]
-    tool_calls = [c for c in asst.content if getattr(c, "type", None) == "toolCall"]
+    assert _roles(msgs) == ["assistant", "toolResult", "assistant"]
+    call_message = msgs[0]
+    tool_calls = [c for c in call_message.content if getattr(c, "type", None) == "toolCall"]
     assert len(tool_calls) == 1
     assert tool_calls[0].id == "call_abc"
     assert tool_calls[0].name == "search"
@@ -144,6 +130,7 @@ def test_model_tool_use_code_node_renders_as_toolcall_toolresult():
     tr = msgs[1]
     assert tr.tool_call_id == "call_abc"
     assert "hits" in tr.content[0].text
+    assert msgs[2].content[0].text == "let me search"
 
 
 def test_toolcall_synthesizes_assistant_when_none_precedes():

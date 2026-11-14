@@ -50,7 +50,7 @@
 curl -fsSL https://openprogram.io/install | sh
 ```
 
-Windows（v1.1.0 から）：`irm https://openprogram.io/install.ps1 | iex`。macOS デスクトップ App は DMG として[リリースページ](https://github.com/FuzzyKuji/OpenProgram/releases)で配布しています。Linux と Windows の App は v1.1.0 から提供します。openprogram.io に接続できない場合：`curl -fsSL https://raw.githubusercontent.com/FuzzyKuji/OpenProgram/main/docs/_static_root/install.sh | sh`。その他の方法は[インストールガイド](https://openprogram.io/docs/install/install.html)（英語）を参照してください。
+Windows（v1.2.0 から）：`irm https://openprogram.io/install.ps1 | iex`。macOS デスクトップ App は DMG として[リリースページ](https://github.com/FuzzyKuji/OpenProgram/releases)で配布しています。Linux App は同じページに deb と AppImage があり、Windows App は v1.2.0 から提供します。openprogram.io に接続できない場合：`curl -fsSL https://raw.githubusercontent.com/FuzzyKuji/OpenProgram/main/docs/_static_root/install.sh | sh`。その他の方法は[インストールガイド](https://openprogram.io/docs/install/install.html)（英語）を参照してください。
 
 ## クイックスタート
 
@@ -101,7 +101,7 @@ class SupportAgent(Agent):
 
 | | |
 |---|---|
-| **[デスクトップと Web UI](https://openprogram.io/docs/reference/design/ui/README.html)** | macOS では App、v1.1.0 からは Linux と Windows でも App。Web UI はそのいずれでもサーバーでも使えます。 |
+| **[デスクトップと Web UI](https://openprogram.io/docs/reference/design/ui/README.html)** | macOS と Linux では App、v1.2.0 からは Windows でも App。Web UI はそのいずれでもサーバーでも使えます。 |
 | **[分割ペイン](https://openprogram.io/docs/reference/design/ui/workspace/center-tabs-and-split-layout.html)** | チャット、ファイル、ターミナル、Web ページを並べて表示。 |
 | **[内蔵ブラウザ](https://openprogram.io/docs/reference/design/ui/browser/built-in-browser.html)** | エージェントが読んで操作するブラウザを、そばで見守れます。 |
 | **[統合ターミナル](https://openprogram.io/docs/reference/design/ui/workspace/integrated-terminal.html)** | ワークスペース内のターミナルをエージェントと共有。 |

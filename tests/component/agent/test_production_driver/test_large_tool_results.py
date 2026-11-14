@@ -18,7 +18,7 @@ def test_large_tool_result_is_journaled_and_restored(tmp_path, kind):
 
     def large_result_hook(event, payload):
         if event == "tool.after":
-            payload = {**payload, "result": {**payload["result"], "content": content, "tool_name": "web_use", "timestamp": 1}}
+            payload = {**payload, "result": {**payload["result"], "content": content, "tool_name": "page_tool", "timestamp": 1}}
         return hook(event, payload)
 
     _provider_tool_decision(large_result_hook, snapshot, 0)

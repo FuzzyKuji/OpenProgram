@@ -208,6 +208,39 @@ def no_one_to_approve(name: str, args: Any, *, source: str, mode: str, wanted: s
                    _no_approver_change(name, args, wanted, rule, origin))
 
 
+def helper_cannot_ask(name: str, args: Any, *, layer: Layer, wanted: str, mode: str,
+                      rule: str | None = None) -> Refusal:
+    """A sub-agent nobody waits on met a call that would ask (permissions/delegation.py)."""
+    need = f'rule "{rule}"' if rule else _WANTED.get(wanted, f"{mode} mode")
+    return Refusal(layer, "HELPER_CANNOT_ASK", describe(name, args),
+                   f"this needs approval ({need}), and a sub-agent running in the background "
+                   "has no one to ask",
+                   "continue without it and say in your final reply what you needed and why, so the "
+                   "agent that started you can do it or ask the person; a sub-agent started in the "
+                   "foreground asks in its caller's conversation")
+
+
+#: What the model reads when a run no one watches (``openprogram --print``)
+#: meets a call that would ask: refused at once, and told to go on without it.
+NON_INTERACTIVE_TEXT = ("This non-interactive run cannot ask the user for permission, so the "
+                        "request was rejected. Continue without this action.")
+
+
+@dataclass(frozen=True)
+class NonInteractive(Refusal):
+    """A call refused because the run has no one to ask (``unattended``)."""
+
+    @property
+    def text(self) -> str:
+        return f"[blocked by {self.layer}] {self.what} did not run. {NON_INTERACTIVE_TEXT}"
+
+
+def non_interactive(name: str, args: Any, *, layer: Layer, wanted: str) -> Refusal:
+    return NonInteractive(layer, "NON_INTERACTIVE", describe(name, args),
+                          f"this run has no one to approve it ({wanted})",
+                          "continue without this action")
+
+
 def _no_approver_change(name: str, args: Any, wanted: str, rule: str | None, origin: str) -> str:
     """Only what would work: a hold and an ask rule outrank every allow rule, and leaving the sandbox ignores them."""
     if wanted == "RULE_OUTBOUND_HOLD":
@@ -238,6 +271,22 @@ _SELECTOR = "the mode selector at the bottom of the message box"
 def plan(name: str, args: Any) -> Refusal:
     return Refusal("mode", "PLAN_MODE_DENY", describe(name, args),
                    "the conversation is in Plan mode, which only reads", _SELECTOR)
+
+
+def not_in_plan(name: str, args: Any) -> Refusal:
+    """``exit_plan_mode`` called outside Plan mode: it stays in the tools
+    array whatever the mode, so the call is what is refused."""
+    return Refusal("mode", "PLAN_MODE_NOT_ACTIVE", describe(name, args),
+                   "the conversation is not in Plan mode, so there is no plan to leave",
+                   "carry on without it")
+
+
+def unavailable(name: str, args: Any, why: str) -> Refusal:
+    """A tool the conversation's tools array keeps but this turn cannot use
+    (``loop_runner.turn_availability``): the call is refused and the model
+    carries on another way. Nothing is asked of anyone."""
+    return Refusal("setting", "TOOL_UNAVAILABLE", describe(name, args), why,
+                   "carry on without it")
 
 
 def declined(name: str, args: Any, *, layer: Layer = "mode", note: str | None = None) -> Refusal:
@@ -279,6 +328,9 @@ _BUDGET_SETTING = {
     "generations": ("Max spawn depth", "max_spawn_depth"),
     "messages": ("Max messages per chain", "max_messages"),
     "agents": ("Max spawn fan-out", "max_spawn_fanout"),
+    "hops": ("Max message hops", "max_hops"),
+    "sends this hour": ("Max messages per agent per hour", "max_sends_per_hour"),
+    "dollars": ("Max spend per delegation (USD)", "max_tree_usd"),
 }
 
 
@@ -344,11 +396,6 @@ def mcp_authority(name: str, decision) -> Refusal:
     return authority(name, None, decision, "MCP client")
 
 
-def mcp_browser_unavailable(reason_code: str) -> Refusal:
-    return Refusal("identity", reason_code, "web_use", "browser control is not available to this MCP client",
-                   _IDENTITY_CHANGE)
-
-
 # -- stale state ---------------------------------------------------------------
 
 def stale(code: str, instruction: str) -> Retry:
@@ -356,4 +403,5 @@ def stale(code: str, instruction: str) -> Retry:
     return Retry(code, instruction)
 
 
-__all__ = ["Decision", "MCP_GATE_REFUSALS", "Refusal", "Refused", "Retry", "details", "tool_result"]
+__all__ = ["Decision", "MCP_GATE_REFUSALS", "NON_INTERACTIVE_TEXT", "NonInteractive", "Refusal",
+           "Refused", "Retry", "details", "non_interactive", "tool_result"]

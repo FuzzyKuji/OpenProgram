@@ -48,14 +48,29 @@ class ConversationSessionFacts(SessionFacts):
         from openprogram.runtime.conversation import session_config
         return session_config.project_defaults(session_id)
 
+    @staticmethod
+    def _turn_branch(session_id: str) -> dict:
+        """The branch of the turn running here, when it is in this conversation:
+        a grant it records belongs to that branch, not to the selected one."""
+        from openprogram.runtime.agent.turn_request import get_turn_request
+        req = get_turn_request()
+        branch = getattr(req, "branch_id", None) if getattr(req, "session_id", None) == session_id else None
+        return {"branch_id": branch} if branch else {}
+
     def session_rules(self, session_id: str):
         from openprogram.runtime.conversation import session_config
+        branch = self._turn_branch(session_id)
+        if branch:
+            from openprogram.runtime.context.session_db import default_db
+            from openprogram.state.store.session.branch_config import config_for_branch
+            row = default_db().get_session(session_id) or {}
+            return session_config._config_from_row(config_for_branch(row, branch["branch_id"])).permission_rules
         return session_config.load_session_run_config(session_id).permission_rules
 
     def save_session_rules(self, session_id: str, agent_id: Any, rules: dict) -> None:
         from openprogram.runtime.conversation import session_config
         session_config.save_session_run_config(
-            session_id, agent_id=agent_id, permission_rules=rules,
+            session_id, permission_rules=rules, **self._turn_branch(session_id),
         )
 
     def turn_request_for(self, store, execution) -> Any:
@@ -65,9 +80,9 @@ class ConversationSessionFacts(SessionFacts):
         )
         return resolver.build_request(execution, None)
 
-    def web_use_available(self, surface_context: dict | None) -> bool:
+    def browser_pages_available(self, surface_context: dict | None) -> bool:
         from openprogram.runtime.conversation import surface_context as surfaces
-        return surfaces.web_use_available(surface_context)
+        return surfaces.browser_pages_available(surface_context)
 
     def holds_outbound(self, agent_id: str) -> bool:
         from openprogram.runtime.agent_registry import manager

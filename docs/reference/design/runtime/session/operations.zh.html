@@ -94,7 +94,7 @@
 <tr><th scope="row">用户</th><td>把聊天行拖到项目上，或用 <strong>Move to project</strong></td><td>文件夹在磁盘上被移动或改名后重新选择</td></tr>
 <tr><th scope="row">动作</th><td><code translate="no">move_session_to_project {session_id, project_id}</code></td><td><code translate="no">relocate_project {session_id, project_id, path}</code></td></tr>
 <tr><th scope="row">改变</th><td>session 的项目。<code translate="no">SessionStore.move_session</code>，持 session 锁：丢弃缓存的仓库；把 <code translate="no">projects/&lt;old&gt;/chats/&lt;id&gt;</code> 和 <code translate="no">.file-recovery/&lt;id&gt;</code> 重命名到 <code translate="no">projects/&lt;new&gt;/chats/</code>；记录位置，重新绑定注册表，设置 <code translate="no">meta.project_id</code>；旧项目追加到 <code translate="no">meta.project_history</code></td><td>项目路径，不是绑定，所以冻结后仍合法。<code translate="no">project_store.relocate_project</code> 校验，改写路径，保留 id。</td></tr>
-<tr><th scope="row">拒绝</th><td>轮次运行中（<code translate="no">RUNNING_ERROR</code>）；目标已存在。同一项目：不变，不写节点。</td><td>默认项目：每次 <code translate="no">get_default_project</code> 读取都把显示路径恢复为主目录，也没有项目 Git 仓库</td></tr>
+<tr><th scope="row">拒绝</th><td>轮次运行中（<code translate="no">RUNNING_ERROR</code>）；目标已存在；文件夹<a href="#held-folder">被其他程序占用</a>。同一项目：不变，不写节点。</td><td>默认项目：每次 <code translate="no">get_default_project</code> 读取都把显示路径恢复为主目录，也没有项目 Git 仓库</td></tr>
 <tr><th scope="row">回复</th><td><code translate="no">session_moved {ok, from_project_id, project_id, node_id}</code>、给所有客户端的 <code translate="no">projects_changed</code>、新的 <code translate="no">projects_list</code></td><td><code translate="no">project_relocated {ok, old_path, path, node_id}</code>、新的 <code translate="no">projects_list</code></td></tr>
 <tr id="relocate-node"><th scope="row">节点 <code translate="no">name</code></th><td><code translate="no">project/move</code>，由 <code translate="no">record_move</code> 写</td><td><code translate="no">project/relocate</code>，由 <code translate="no">record_relocate</code> 写</td></tr>
 <tr><th scope="row"><code translate="no">output</code></th><td>旧项目名 → 新项目名</td><td>旧路径 → 新路径</td></tr>
@@ -102,13 +102,26 @@
 </tbody>
 </table>
 <p class="note">两种节点：<code translate="no">role</code> 为 <code translate="no">code</code>，<code translate="no">caller</code> 为 <code translate="no">ROOT</code>，<code translate="no">predecessor</code> 为 <code translate="no">None</code>；形状沿用 <code translate="no">context/system_prompt</code>；代码在 <code translate="no">state/store/project/relocate_node.py</code>。<code translate="no">caller</code> 让 head 不动。不放在对转录隐藏的 <code translate="no">context/</code> 下：这是值得看到的用户动作。</p>
+<h3 id="held-folder">被占用的对话文件夹</h3>
+<p>文件夹里有任何文件开着时，Windows 拒绝重命名这个文件夹。Worker 在两次写入之间不保留打开的文件，所以占用者是另一个进程里的读取者、索引器、杀毒扫描，或在工作文件夹里运行的命令。<code translate="no">move_session_folder</code> 重试一秒，然后抛出 <code translate="no">SessionFolderBusy</code>。不会改用复制文件夹。</p>
+<table class="stack">
+<thead><tr><th scope="col">重命名</th><th scope="col">文件夹一直被占用时</th></tr></thead>
+<tbody>
+<tr><th scope="row">移到另一个项目</th><td><code translate="no">session_moved</code> 带 <code translate="no">ok: false</code> 和错误；文件夹、恢复树、绑定和轮次都不变。如果被占用的是恢复树，先把对话重命名回去</td></tr>
+<tr><th scope="row">绑定草稿</th><td><code translate="no">set_session_project</code>：绑定改变，文件夹留在原处，记入位置映射。第一条消息：创建失败，草稿保留它的设置</td></tr>
+<tr><th scope="row">启动时隔离</th><td>空壳留在原处，空的隔离条目被移除</td></tr>
+<tr><th scope="row">发布迁移副本</th><td>journal 行为 <code translate="no">failed</code> 并带错误；源不动，下次运行发布已校验的副本</td></tr>
+</tbody>
+</table>
+<p class="note">如果对话也无法重命名回去，位置映射记下它的新文件夹，对话仍可读取，错误写明两个文件夹。再次把它移到同一项目会完成这次移动：恢复目录移到对话旁边，然后绑定改变。</p>
+<p class="note">归档只设置一个字段，删除是就地删除文件；两者都不重命名文件夹。对话 id 从不改变。</p>
 
 <table class="stack fixed">
 <thead class="sr"><tr><th scope="col">之后</th><th scope="col">效果</th></tr></thead>
 <tbody>
 <tr><th scope="row">移动后的下一轮</th><td>新项目的路径：<code translate="no">project_workdir_for</code> 每次重新解析</td></tr>
 <tr><th scope="row">移动后的记忆</th><td><code translate="no">project_layer.left_workspace_ids</code> 把 <code translate="no">project_history</code> 映射为工作区，<code translate="no">write_target</code> 计入它们标记过的轮次，新项目的记忆只收之后的内容。主目录项目同理，目标是个人工作区。</td></tr>
-<tr><th scope="row">移动后的设置</th><td>模型和权限模式随元数据移动；项目默认设置（<code translate="no">settings.json</code>）来自新项目</td></tr>
+<tr><th scope="row">移动后的设置</th><td>每个分支的 Agent、模型和权限模式随元数据移动；项目默认设置（<code translate="no">settings.json</code>）来自新项目</td></tr>
 <tr><th scope="row">目录缺失</th><td><code translate="no">project_workdir_for</code> 返回 <code translate="no">None</code>，绝不换成默认项目的主目录。项目缺失、被替换、等待中、迁移中或不可用时阻止新的绑定工作。session 仍可读，UI 收到位置状态和缺失路径。</td></tr>
 </tbody>
 </table>

@@ -360,11 +360,11 @@
 <table class="stack fixed">
 <thead class="sr"><tr><th scope="col">操作</th><th scope="col">效果</th></tr></thead>
 <tbody>
-<tr><th scope="row">轮次运行中</th><td>HEAD 不能移动：重新生成、保存并重新发送、检出和版本切换会被拒绝，直到结束</td></tr>
+<tr><th scope="row">轮次运行中</th><td>正在运行的分支上，重新生成、保存并重新发送和回退要等它结束；其他分支照常操作，切换分支从不被拒绝。会改动文件的回退在另一个分支运行时被拒绝，并给出先停止那个分支的按钮。</td></tr>
 <tr><th scope="row"><strong>复制</strong></th><td>每条消息都有</td></tr>
 <tr><th scope="row"><strong>重新生成</strong></th><td>把用户轮次作为同级重新运行</td></tr>
 <tr><th scope="row"><strong>保存并重新发送</strong>，编辑消息后</th><td>分叉该轮。磁盘文件不变。</td></tr>
-<tr><th scope="row"><strong>回退到这里</strong>的可用性</th><td>每条已发送的用户消息都有；运行中或上传文件时不可用，提示里写明原因。消息和附件放回输入框，排在草稿之前。</td></tr>
+<tr><th scope="row"><strong>回退到这里</strong>的可用性</th><td>每条已发送的用户消息都有；所在分支运行中或上传文件时不可用，提示里写明原因。消息和附件放回输入框，排在草稿之前。</td></tr>
 <tr><th scope="row">回退恢复什么</th><td>只恢复编辑工具的改动。只被 Shell 改过的文件和提交都保留。之后被另一段对话改过的文件不动，并会列出。</td></tr>
 <tr><th scope="row"><strong>已回退到这里</strong>、<strong>撤销回退</strong>、<strong>重做回退</strong></th><td>回退的轮次保留，这一行标出位置。再次发送在旁边新增版本。撤销和重做只移动对话。</td></tr>
 <tr><th scope="row"><strong>从这里分叉</strong></th><td>新对话，含到这条消息及其回复为止的历史；这段对话不变。它和回退也在右键菜单里。</td></tr>

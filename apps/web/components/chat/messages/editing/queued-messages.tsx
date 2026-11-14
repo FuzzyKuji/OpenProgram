@@ -120,7 +120,7 @@ function QueueEditor({ row, sessionId }: { row: QueuedMessage; sessionId: string
       text: value.trim(), images: files.pendingImages, docs: files.pendingDocs,
     });
   };
-  return <div className={styles.editor} ref={files.composerRootRef}
+  return <div className={styles.editor} ref={files.composerRootRef} data-file-drop=""
     onDragOver={files.onDragOver} onDragLeave={files.onDragLeave} onDrop={files.onDrop}>
     <AttachmentStrip sessionId={sessionId} pendingImages={files.pendingImages} pendingDocs={files.pendingDocs}
       imageError={files.imageError} fileInputRef={files.fileInputRef} onFileInputChange={files.onFileInputChange}

@@ -1,11 +1,13 @@
 <title>Turn occupancy</title>
-<meta name="description" content="One live turn per session: how stop, the queue and the session slot release and order.">
+<meta name="description" content="One live turn per branch: how stop, the queue and the session slot release and order.">
 <h1>Turn occupancy</h1>
-<p>A session admits one live turn. Typing while it runs queues. Stop is an interrupt: occupancy is released on cancel intent, not when the old turn's thread dies.</p>
+<p>A conversation branch admits one live turn. The composer holds the selected branch's slot, so typing while it runs queues; a turn on another branch takes that branch's own slot (<a href="../../runtime/execution/control.html#branch-run-slots">two branches running at once</a>).</p>
+<p>Switching branches never waits: the composer then holds the entered branch's slot, and the turn left runs on in its own (<a href="../../runtime/execution/control.html#branch-switch">switching branches</a>).</p>
+<p>Stop is an interrupt: occupancy is released on cancel intent, not when the old turn's thread dies.</p>
 
 <h2 id="stop">Stop</h2>
 <ol>
-<li>Send <code translate="no">execution.cancel</code> for the canonical execution (<code translate="no">stopSession</code> in <code translate="no">use-chat-submit.ts</code>).</li>
+<li>Send <code translate="no">execution.cancel</code> for the canonical execution (<code translate="no">stopSession</code> in <code translate="no">use-chat-submit.ts</code>). Before the ack gives the turn an id, the cancel names the send instead, by <code translate="no">session_id</code> and <code translate="no">client_request_id</code>; a <code translate="no">/compact</code> or rewind is stopped with <code translate="no">operation.cancel</code> (<a href="../../runtime/execution/control.html#branch-operations">one foreground operation per branch</a>).</li>
 <li>Draw the live reply as <code translate="no">cancelled</code> through a Stop overlay (<code translate="no">stopOverlay</code>), keeping streamed text. The overlay sits over the row and never writes it: it ends when the server's row reaches a settled status, or when the server rejects that cancel's command id.</li>
 <li><code translate="no">setRunningTaskFor(sessionId, null, "always")</code>: the queue drains at 0ms and send is enabled. Send is never disabled for the old unwind.</li>
 </ol>
@@ -29,9 +31,28 @@
 <ol>
 <li>Match the admitted <code translate="no">execution_id</code> to <code translate="no">session_id</code> and <code translate="no">msg_id</code>.</li>
 <li><code translate="no">_finish_owned_run(session_id, msg_id)</code> removes the transport slot. It no-ops on a mismatched <code translate="no">msg_id</code>, so a newer reservation is safe and the cancelled turn's <code translate="no">finally</code> is harmless.</li>
-<li>Broadcast <code translate="no">running_task_clear</code>, naming the finished turn.</li>
+<li>Broadcast the slot's state. While the execution is still ending the frame is <code translate="no">running_task</code> with status <code translate="no">cancelling</code>; the turn's end broadcasts <code translate="no">running_task_clear</code>, naming the finished turn. If another owner already holds the slot, the frame is still that clear, never a <code translate="no">running_task</code> for the new owner.</li>
 </ol>
 <p class="note">The next <code translate="no">_try_reserve_run</code> does not wait for the old driver thread. A clear is honored only when it matches the slot's execution; an unscoped clear after stop-and-send is stale.</p>
+
+<h2 id="finishing">A message sent the moment a turn ends</h2>
+<p>A turn's terminal frame (<code translate="no">result</code>, or <code translate="no">error</code>) goes out before its slot is free: the turn still closes its execution record and context figures, then sends <code translate="no">running_task_clear</code>, about a tenth of a second later. A message sent on seeing "done" used to be refused <code translate="no">run_active</code> in that gap, and only the web page re-sends a refusal.</p>
+<table class="stack">
+<caption>Holder of the branch's slot, as a request for it arrives</caption>
+<thead><tr><th scope="col">Holder</th><th scope="col">The request</th></tr></thead>
+<tbody>
+<tr><th scope="row">A turn that has sent its terminal frame</th><td>Waits, with no lock held, until the slot is given back, then takes it; up to 5 seconds (<code translate="no">FINISHING_WAIT_SECONDS</code>), after which it is refused as before</td></tr>
+<tr><th scope="row">A turn still running, any other operation</th><td>Refused at once, <code translate="no">run_active</code></td></tr>
+<tr><th scope="row">The same request (its key)</th><td>A repeat (<a href="../../runtime/execution/control.html#branch-operations">one foreground operation per branch</a>), never waited for</td></tr>
+</tbody>
+</table>
+<ul>
+<li><strong>The mark</strong>: the turn runtime calls <code translate="no">run_slot.finishing</code> just before it sends the frame, so no one sees "done" while the slot does not know it. The slot is the one the turn's message id holds, wherever a switch moved it (<code translate="no">mark_run_finishing</code>).</li>
+<li><strong>Every entry</strong>: a send, a side-branch send, <code translate="no">reserve_operation</code> (retry, edit, function run) and the runtime's own turns (owner turns, channels, <code translate="no">--print --resume</code> through the Worker) all wait the same way.</li>
+<li><strong>Why not free the slot first</strong>: the finish-up writes the branch's execution record and figures, so a turn admitted then could write beside it. Codex does the same as here: the active turn is marked <code translate="no">finishing</code> before <code translate="no">TurnComplete</code>, and input that arrives meanwhile waits on it (<code translate="no">codex-rs/core/src/tasks/mod.rs</code> <code translate="no">on_task_finished</code>, <code translate="no">session/inject.rs</code>).</li>
+<li><strong>Why not in the client</strong>: the terminal client, <code translate="no">--print</code>, channels and scripts would each need their own retry.</li>
+<li><strong>Test</strong>: <code translate="no">tests/component/webui/chat/test_send_after_result.py</code> sends through the real chat handler the instant the first turn's <code translate="no">result</code> is broadcast.</li>
+</ul>
 
 <h2 id="run-state-frames-are-ordered-by-run_seq">Run-state frames are ordered by <code translate="no">run_seq</code></h2>
 <p><code translate="no">running_task</code>, <code translate="no">running_task_clear</code>, <code translate="no">run_state</code> and <code translate="no">session_loaded</code> (<code translate="no">run_active</code>, <code translate="no">run_task</code>) carry it: a server-wide increasing number (<code translate="no">server._next_run_seq()</code>, microsecond wall time, increasing across worker restarts and exact in JSON), taken before the frame's run state is read.</p>

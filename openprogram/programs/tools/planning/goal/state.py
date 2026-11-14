@@ -90,18 +90,24 @@ def load_goal(session_id: str) -> Optional[dict]:
         db = _goal._db()
         read_disk_meta = getattr(db, "read_disk_meta", None)
         if callable(read_disk_meta):
-            goal = (read_disk_meta(session_id) or {}).get("goal")
+            meta = read_disk_meta(session_id) or {}
+            goal = meta.get("goal")
         else:
             invalidate = getattr(db, "invalidate_cache", None)
             if callable(invalidate):
                 invalidate(session_id)
-            sess = db.get_session(session_id) or {}
-            goal = (sess.get("extra_meta") or {}).get("goal")
+            meta = db.get_session(session_id) or {}
+            goal = (meta.get("extra_meta") or {}).get("goal")
         if goal is None:
             return None
         if not isinstance(goal, dict):
             raise ValueError("Invalid persisted Goal")
         value = normalize_goal(goal)
+        if not value.get("branch_id") and isinstance(meta, dict) and meta.get("active_branch_id"):
+            # A Goal saved before Goals recorded their branch belongs to the
+            # branch that was selected (Codex keeps a goal per thread):
+            # turns on other branches neither advance nor settle it.
+            value["branch_id"] = meta["active_branch_id"]
         if value.get("usage_mode") == "requests":
             # Read projection only: no lifecycle mutation or version increment.
             # Durable receipts are authoritative even if their publish hook failed.

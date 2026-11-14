@@ -67,6 +67,63 @@ class ProgressOperations:
                 shared._log.exception(
                     "failed to cancel job %s after budget expiry", job_id,
                 )
+        try:
+            self._delegation_tick(now)
+        except Exception:
+            shared._log.warning("delegation bounds check failed", exc_info=True)
+
+
+    def _delegation_tick(self, now: float) -> None:
+        """The default bounds on agent Jobs (runtime/jobs/delegation_watch.py):
+        hard stop, stall notice, and spend per delegation tree. Runs every
+        few seconds, not every tick, because it reads Job files and the
+        ledger."""
+        from openprogram.runtime.jobs import delegation_watch as watch
+        last = getattr(self, "_delegation_checked_at", None)
+        if last is not None and now - last < watch.CHECK_EVERY_S:
+            return
+        self._delegation_checked_at = now
+        with self._lock:
+            entries = [
+                (job_id, entry["session_id"], entry["started_monotonic"],
+                 entry.get("last_activity_monotonic", entry["started_monotonic"]))
+                for job_id, entry in self._jobs.items()
+                if entry.get("started_monotonic") is not None
+                and not entry.get("budget_cancelled") and entry.get("session_id")
+            ]
+        if not entries:
+            return
+        memory = getattr(self, "_delegation_memory", None)
+        if memory is None:
+            memory = self._delegation_memory = {}
+
+        def cancel(job_id: str, reason_code: str) -> None:
+            with self._lock:
+                entry = self._jobs.get(job_id)
+                if entry is not None:
+                    entry["budget_cancelled"] = True
+            try:
+                self._cancel_cascade(
+                    job_id, reason=reason_code.replace(".", " "),
+                    root_reason_code=reason_code,
+                )
+            except Exception:
+                shared._log.exception("failed to stop job %s (%s)", job_id, reason_code)
+
+        def stalled(job) -> None:
+            try:
+                from openprogram.runtime.jobs import notices
+                notices.queue_stalled(job, minutes=round(watch.stall_seconds() / 60))
+            except Exception:
+                shared._log.warning("stall notice for job %s not queued", job.id, exc_info=True)
+
+        try:
+            watch.check_running(
+                entries, now=now, load=shared._store_load, ledger=self._governor.ledger,
+                cancel=cancel, stalled=stalled, already=memory,
+            )
+        except Exception:
+            shared._log.warning("delegation bounds check failed", exc_info=True)
 
 
     def _wake_done(self, job_id: str) -> None:
@@ -137,7 +194,9 @@ class ProgressOperations:
             self._finalize_spawn_branch_meta(job)
             try:
                 from openprogram.runtime.jobs import notices
+                from openprogram.runtime.jobs.store import settle_notice
                 notices.queue(job)
+                settle_notice(job.parent_session_id, job.id)
             except Exception:
                 shared._log.warning("job notice for %s not queued", job.id, exc_info=True)
 
@@ -176,6 +235,15 @@ class ProgressOperations:
             attach["session_id"] = target_session
             attach["job_id"] = job.id
             attach["status"] = job.status.value
+            if shared.is_terminal(job.status):
+                # The result block's usage, kept on the card for the
+                # interface; the caller's prompt is not re-rendered.
+                try:
+                    from openprogram.runtime.jobs.agent_result import status_of, usage_of
+                    attach["usage"] = usage_of(job, ledger=self._governor.ledger)
+                    attach["result_status"], attach["result_reason"] = status_of(job)
+                except Exception:
+                    shared._log.debug("usage of job %s not stored", job.id, exc_info=True)
             execution = self._execution_store.get_execution(job.id)
             if execution is not None:
                 attach["execution_id"] = execution.execution_id
@@ -221,9 +289,10 @@ class ProgressOperations:
             # run_agent_turn does this too, but the call has slipped
             # through under specific paths — set it here as well so
             # every job → attach finalization guarantees the name.
+            # A name given meanwhile (a rename, an automatic label) stays.
             if job.label and job.head_id:
                 try:
-                    db.set_branch_name(
+                    db.name_spawned_branch(
                         target_session,
                         job.head_id,
                         job.label,
@@ -347,7 +416,12 @@ class ProgressOperations:
                     source_writable(j.parent_session_id, j.head_id) for j in jobs
                 ) else {"mode": "read_only"}
                 marks = [(self._execution_store.get_job_agent_input(j.id) or {}).get("turn_request") or {} for j in jobs]
+                # The result returns to the branch of the turn that started
+                # the job, even when the person selected another meanwhile.
+                from openprogram.runtime.conversation.branch_config import branch_holding
+                caller_branch = branch_holding(deliver_session, job.caller_msg_id or job.parent_msg_id)
                 req = TurnRequest(
+                    **({"branch_id": caller_branch} if caller_branch else {}),
                     session_id=deliver_session,
                     automation=next((mark["automation"] for mark in marks if mark.get("automation")), None),
                     detached=any(mark.get("detached") for mark in marks),
@@ -359,9 +433,10 @@ class ProgressOperations:
                     **conversation_permission(deliver_session),
                     **runtime_authority(job, "job_followup"),
                     # branch_from is left at INHERIT_PARENT: the dispatcher
-                    # resolves it to the delivery session's HEAD and advances
-                    # it, which is exactly the serial chain this method's
-                    # docstring describes.
+                    # resolves it to the tip of the turn's branch (the
+                    # delivery session's HEAD while that branch is selected)
+                    # and advances it, which is exactly the serial chain
+                    # this method's docstring describes.
                 )
                 from openprogram.runtime.events import emit_ws_frame
                 # The notice turn streams to the open chat like any turn.

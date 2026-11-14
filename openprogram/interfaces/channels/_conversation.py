@@ -500,15 +500,13 @@ def _run_turn_core(
     )
 
     # ---- run config 加载 (permission/tools/effort) ---------------------
-    from openprogram.runtime.conversation.session_config import (
-        load_session_run_config,
-        permission_from_config,
-        tools_override_from_config,
-        project_defaults,
-    )
-    from openprogram.runtime.permissions.rule import load_merged_rules as _load_merged_rules
+    from openprogram.runtime.conversation.session_config import load_session_run_config
+    # A channel turn continues the conversation's selected branch
+    # (``load_session_run_config`` resolves it through
+    # ``resolve_branch_settings``). What the branch leaves unset falls back
+    # at run time in the one order every entry shares (``FALLBACK_ORDER``):
+    # effort follows the Agent before the project, as on the web.
     run_cfg = load_session_run_config(session_key)
-    _pdef = project_defaults(session_key)
 
     # ---- progress streaming state ---------------------------------------
     # 仅在 progress_stream=True 且占位发送成功后激活. progress_handle 为
@@ -564,8 +562,8 @@ def _run_turn_core(
     turn["streamer"] = streamer
 
     # ---- canonical Agent admission + stream event 监听 ------------------
-    from openprogram.runtime.agent.turn_request import TurnRequest
     from openprogram.runtime.conversation.production_driver import CanonicalAgentAdapter
+    from openprogram.runtime.conversation.turn_input import build_turn_request
 
     captured_user_id: list[str] = []
 
@@ -596,7 +594,9 @@ def _run_turn_core(
             if ev_type == "text":
                 streamer.feed(ev.get("text") or "")
             elif ev_type == "tool_use":
-                streamer.flush()
+                streamer.flush(response_ended=not ev.get("provider_executed"))
+            elif ev_type == "retry" and ev.get("restart"):
+                streamer.restart()
 
         # Progress streaming: 按 tool 边界 edit 占位消息.
         if progress_handle is None:
@@ -620,23 +620,16 @@ def _run_turn_core(
         channel, account_id, speaker_id or "",
         speaker_display or user_display, peer, room_full_access,
     )
-    req = TurnRequest(
-        session_id=session_key,
-        user_text=user_text,
-        agent_id=agent_id,
-        source=channel,
+    req = build_turn_request(
+        session_key, user_text, agent_id=agent_id, source=channel, msg_id=slot["owner"],
+        authority=_authority,
+        run_config=("additional_working_dirs", "tools_override"),
+        run_cfg=run_cfg,
         peer_display=user_display or str(peer_id),
         peer_id=str(peer_id),
         peer_kind=peer.get("kind") or "direct",
-        user_msg_id=slot["owner"],
-        permission_mode=permission_from_config(
-            run_cfg, default=_pdef.get("permission_mode")),
-        permission_rules=_load_merged_rules(session_key),
-        additional_working_dirs=run_cfg.additional_working_dirs,
-        tools_override=tools_override_from_config(run_cfg),
-        thinking_effort=run_cfg.thinking_effort or _pdef.get("thinking_effort"),
+        thinking_effort=run_cfg.thinking_effort,
         attachments=attachments or None,
-        **_authority,
     )
     from openprogram.interfaces.channels._room import memory_override
     req.memory_policy_override = memory_override(memory_mode)
@@ -669,7 +662,9 @@ def _run_turn_core(
                 return None
             return BUSY_REPLY
         slot["execution_id"] = admission.execution_id
-        _active, result = asyncio.run(adapter.activate(admission))
+        activated = asyncio.run(adapter.activate(admission))
+        # ``None``: /stop reached the turn before it ran; handled as no result below.
+        result = activated[1] if activated is not None else None
     except Exception as e:  # noqa: BLE001
         # /stop 落在准入和启动之间时, 启动会因版本冲突失败 — 那不是错误.
         err_text = (
@@ -816,6 +811,10 @@ class _BlockStreamer:
     都不从中间切, 否则下一段认不出代码块, 里面的表格会被铺平. 工具调用时的
     :meth:`flush` 照常全发: 文字块到此结束, 表格也就写完了. ``sent_upto``
     始终按原始文本算.
+
+    一次模型响应传输失败后整个重发 (:meth:`restart`): 这次响应里还没发的
+    文字作废; 已经发出去的收不回来, 重发的响应再说到同样的开头时跳过,
+    不发第二遍. 重发的文字和已发的对不上时, 新的文字照常全发.
     """
 
     MIN_CHARS = 200
@@ -831,6 +830,11 @@ class _BlockStreamer:
         self.streamed = ""
         self.sent_upto = 0
         self.sent_any = False
+        # 当前这次模型响应在 ``streamed`` 里的起点.
+        self._response_from = 0
+        # 作废的响应里已经发出去的文字, 和重发的响应到目前为止说的文字.
+        self._repeats = ""
+        self._again = ""
         # 发失败的 SendResult, 按发生顺序; 绑定会话的回复投递据此告诉网页.
         self.failures: list = []
         self._closed = False
@@ -841,16 +845,38 @@ class _BlockStreamer:
     def feed(self, delta: str) -> None:
         if not delta:
             return
+        if self._repeats:
+            self._again += delta
+            if self._repeats.startswith(self._again):
+                return
+            said = self._again
+            delta = said[len(self._repeats):] if said.startswith(self._repeats) else said
+            self._repeats = self._again = ""
+            if not delta:
+                return
         self.streamed += delta
         pending = self.streamed[self.sent_upto:]
         cut = self._paragraph_cut(pending)
         if cut:
             self._emit(cut)
 
-    def flush(self) -> None:
+    def flush(self, *, response_ended: bool = True) -> None:
+        """工具调用开始: 缓冲全发. ``response_ended`` 为假表示这次响应还在继续
+        (模型供应商自己执行的工具)."""
         pending = self.streamed[self.sent_upto:]
         if pending.strip() and pending.count("```") % 2 == 0:
             self._emit(len(pending))
+        if response_ended:
+            self._response_from = len(self.streamed)
+            self._repeats = self._again = ""
+
+    def restart(self) -> None:
+        """当前这次响应作废, 从头重发: 没发的文字丢掉, 已发的记下来等着跳过."""
+        start = min(self._response_from, len(self.streamed))
+        kept = max(start, self.sent_upto)
+        self._repeats = self.streamed[start:kept]
+        self._again = ""
+        self.streamed = self.streamed[:kept]
 
     def _paragraph_cut(self, pending: str) -> int:
         from openprogram.interfaces.channels._transport import MAX_CHARS

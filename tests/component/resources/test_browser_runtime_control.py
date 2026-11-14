@@ -151,7 +151,7 @@ def _safe_point(service, executions, running, attempt, command_id):
 def test_page_resume_is_rejected_without_resuming_canonical_execution(
     tmp_path, monkeypatch,
 ):
-    from openprogram.programs.applications.browser.pages import BrowserResourceStore, writes_fenced
+    from openprogram.programs.applications.browser.pages import BrowserResourceStore
     from openprogram.interfaces.server.routes.execution import processes
 
     monkeypatch.setattr("openprogram.state.paths.get_state_dir", lambda: tmp_path)
@@ -196,7 +196,6 @@ def test_page_resume_is_rejected_without_resuming_canonical_execution(
         stored = store.get_resource("page:live")
         assert stored["control_state"] == "idle"
         assert not stored.get("pause_command_id")
-        assert writes_fenced("page:live") is False
         current = executions.get_execution(running.execution_id)
         assert current.status is ExecutionStatus.RUNNING
 

@@ -4,8 +4,9 @@ One reply, read a piece at a time (an SSE line over HTTP, a frame over the
 WebSocket), is bounded three ways, whichever trips first:
 
 * no bytes at all for ``STREAM_IDLE_TIMEOUT_S`` — a dead connection;
-* no real data for ``STREAM_DATA_STALL_TIMEOUT_S`` — a stream that only
-  sends keepalives (Codex pings during reasoning);
+* no real data for ``STREAM_DATA_STALL_TIMEOUT_S`` — the stream idle bound
+  every streamed request is read under (``utils/stream_idle.py``): a stream
+  that stalls, or only sends keepalives;
 * the optional total ``STREAM_TOTAL_TIMEOUT_S`` and the caller's own
   deadline (``runtime.exec(timeout_s=…)``).
 
@@ -23,6 +24,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar
 
 from openprogram.models.providers.utils.deadline import remaining as deadline_remaining
+from openprogram.models.providers.utils.stream_idle import StreamIdleTimeout
 from openprogram.models.providers.utils.timeouts import (
     STREAM_DATA_STALL_TIMEOUT_S,
     STREAM_IDLE_TIMEOUT_S,
@@ -32,10 +34,6 @@ from openprogram.models.providers.utils.timeouts import (
 T = TypeVar("T")
 
 _SIGNAL_POLL_S = 0.25
-
-
-class StreamIdleTimeout(Exception):
-    """Nothing, or nothing but keepalives, arrived within the stream's budget."""
 
 
 class StreamTotalTimeout(Exception):

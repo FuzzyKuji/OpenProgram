@@ -31,6 +31,61 @@ def filesystem_path(path) -> str:
     return "\\\\?\\" + absolute
 
 
+# ``os.open`` hands back a text-mode descriptor on Windows unless this flag
+# is set: ``os.write`` then turns every LF into CRLF and ``os.read`` stops at
+# Ctrl-Z, so byte offsets and hashes stop matching what was written. Every
+# descriptor that is written or read through ``os.write`` / ``os.read``
+# carries it. Zero on POSIX.
+O_BINARY = getattr(os, "O_BINARY", 0)
+
+# ERROR_ACCESS_DENIED, ERROR_SHARING_VIOLATION, ERROR_LOCK_VIOLATION.
+_SHARING_VIOLATIONS = frozenset({5, 32, 33})
+_SHARING_RETRY_SECONDS = 1.0
+
+
+def is_sharing_violation(error: BaseException) -> bool:
+    """True when ``error`` is Windows refusing a path another handle holds."""
+    return _sys.platform == "win32" and (
+        isinstance(error, PermissionError)
+        or getattr(error, "winerror", None) in _SHARING_VIOLATIONS
+    )
+
+
+def retry_sharing_violation(operation):
+    """Run ``operation`` through Windows' brief sharing violations.
+
+    Windows refuses to replace, rename, delete or open a file while another
+    handle holds it without delete sharing: a reader in this or another
+    process, an indexer, or an antivirus scan of the bytes just written. The
+    refusal clears within milliseconds, so it is retried for one second and
+    then raised. POSIX has no such refusal and runs ``operation`` once.
+    """
+    import time
+
+    deadline = time.monotonic() + _SHARING_RETRY_SECONDS
+    delay = 0.002
+    while True:
+        try:
+            return operation()
+        except OSError as exc:
+            if not is_sharing_violation(exc) or time.monotonic() >= deadline:
+                raise
+            time.sleep(delay)
+            delay = min(delay * 2, 0.05)
+
+
+def replace_file(source, target) -> None:
+    """Atomically publish ``source`` as ``target``, on every platform.
+
+    ``os.replace`` with the retry Windows needs while ``target`` is open
+    elsewhere. Every temp-file-then-rename write of profile state goes
+    through here, so a concurrent reader delays a save instead of failing it.
+    """
+    native_source = filesystem_path(source)
+    native_target = filesystem_path(target)
+    retry_sharing_violation(lambda: os.replace(native_source, native_target))
+
+
 def restrict_descriptor_to_user(descriptor: int) -> None:
     """Apply POSIX descriptor mode without rewriting inherited Windows ACLs."""
     if _sys.platform != "win32":

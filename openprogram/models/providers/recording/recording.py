@@ -45,7 +45,7 @@ RECORDING_FORMAT_VERSION = 2
 REDACTION_VERSION = 1
 
 PLACEHOLDER = "[secret removed]"
-_RUNTIME_ONLY_OPTION_FIELDS = frozenset({"signal", "on_payload", "cache_edits"})
+_RUNTIME_ONLY_OPTION_FIELDS = frozenset({"signal", "on_payload"})
 
 # Field names whose value is a secret wherever it appears — request options,
 # model headers, nested provider-specific dicts.
@@ -156,6 +156,10 @@ class RecordingProvider:
     def requires_credentials(self) -> bool:
         return getattr(self._provider, "requires_credentials", True)
 
+    @property
+    def bounds_own_stream_idle(self) -> bool:
+        return bool(getattr(self._provider, "bounds_own_stream_idle", False))
+
     def stream(
         self,
         model: Model,
@@ -240,12 +244,25 @@ class RecordingProvider:
 
 
 class RecordingSink:
-    """Cross-thread and cross-process append coordinator for one JSONL file."""
+    """Cross-thread and cross-process append coordinator for one JSONL file.
+
+    A new call's index is one past the highest request index in the file.
+    The sink remembers how far it has read and the highest index it saw, so
+    each call reads only the lines appended since its previous call (by this
+    sink or by another process writing the same file), one line at a time.
+    Memory per call stays the size of the largest new line, however long
+    the recording grows; reading the whole file again before each request
+    took twice the file's size per request.
+    """
 
     def __init__(self, recording_path: str | Path) -> None:
         self.path = Path(recording_path)
         self.lock_path = self.path.with_name(self.path.name + ".lock")
         self._thread_lock = threading.RLock()
+        # Bytes of the file already read for request indexes, and the
+        # highest index among them (see ``_next_call_index_locked``).
+        self._scanned_bytes = 0
+        self._last_call_index = -1
         from openprogram.state.paths import get_state_dir
         managed_root = get_state_dir() / "recordings"
         inside_managed_root = _is_managed_recording_path(self.path)
@@ -259,14 +276,7 @@ class RecordingSink:
 
     def begin_call(self, request: dict[str, Any]) -> int:
         with self._locked():
-            call_indexes = []
-            for raw in self.path.read_text(encoding="utf-8").splitlines():
-                if not raw.strip():
-                    continue
-                row = json.loads(raw)
-                if row.get("type") == "request":
-                    call_indexes.append(row["call_index"])
-            call_index = max(call_indexes, default=-1) + 1
+            call_index = self._next_call_index_locked()
             self._append_locked({
                 "type": "request",
                 "call_index": call_index,
@@ -297,6 +307,40 @@ class RecordingSink:
                 "event_count": event_count,
                 "outcome": outcome,
             }, fsync=True)
+
+    def _next_call_index_locked(self) -> int:
+        """One past the highest request index in the file, reading only the
+        lines appended since the last look. A file shorter than what was
+        read (replaced or cut) is read again from the start."""
+        flags = os.O_RDONLY
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        fd = os.open(self.path, flags)
+        with os.fdopen(fd, "rb") as handle:
+            _verify_private_regular_file(handle.fileno(), self.path)
+            if os.fstat(handle.fileno()).st_size < self._scanned_bytes:
+                self._scanned_bytes, self._last_call_index = 0, -1
+            handle.seek(self._scanned_bytes)
+            for raw in handle:
+                if not raw.endswith(b"\n"):
+                    break  # not a whole line yet; read again next time
+                self._scanned_bytes += len(raw)
+                # Every row is written by ``_encode_line`` with sorted keys, so
+                # a request row starts with its index and ends with its type;
+                # only a row that carries the type's text is looked at, and
+                # one of another shape is parsed.
+                if b'"type": "request"' not in raw:
+                    continue
+                head = _REQUEST_ROW_HEAD.match(raw)
+                if head is not None and raw.endswith(_REQUEST_ROW_END):
+                    index = int(head.group(1))
+                else:
+                    row = json.loads(raw)
+                    if row.get("type") != "request":
+                        continue
+                    index = int(row["call_index"])
+                self._last_call_index = max(self._last_call_index, index)
+        return self._last_call_index + 1
 
     @contextmanager
     def _locked(self) -> Iterator[None]:
@@ -342,6 +386,11 @@ class RecordingSink:
                 os.fsync(fd)
         finally:
             os.close(fd)
+
+
+#: How a request row :func:`_encode_line` wrote begins and ends.
+_REQUEST_ROW_HEAD = re.compile(rb'\{"call_index": (\d+), ')
+_REQUEST_ROW_END = b'"type": "request"}\n'
 
 
 def _encode_line(line: dict[str, Any]) -> bytes:

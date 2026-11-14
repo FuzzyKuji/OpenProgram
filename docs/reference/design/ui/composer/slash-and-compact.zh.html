@@ -36,20 +36,21 @@
 <table class="stack">
 <thead><tr><th scope="col">触发</th><th scope="col">条件</th><th scope="col">路径</th></tr></thead>
 <tbody>
-<tr><th scope="row">手动 <code translate="no">/compact</code></th><td>从输入框执行，可选保留最近 N token</td><td><code translate="no">action: compact</code>、<code translate="no">handle_compact</code></td></tr>
-<tr><th scope="row">自动，轮次开始前</th><td>预算达到 <code translate="no">context.auto_compact_percent</code>（默认 80）。压缩。</td><td><code translate="no">loop_runner.py</code></td></tr>
-<tr><th scope="row">溢出恢复</th><td>模型返回 413 或 <code translate="no">prompt_too_long</code>；每轮最多一次</td><td><code translate="no">reactive.py</code></td></tr>
+<tr><th scope="row">手动 <code translate="no">/compact</code></th><td>从输入框执行，可选保留最近 N token。是选中分支的前台操作（<code translate="no">op_kind: compact</code>）：每个客户端都在运行指示处显示“正在压缩上下文…”和停止按钮，刷新后也一样；停止发带 <code translate="no">op_id</code> 的 <code translate="no">operation.cancel</code>。该分支忙时被拒绝，并写明正在运行的是什么；其他分支照常运行。结束帧在槽释放后才发出，释放时发 <code translate="no">running_task_clear</code>。终端界面显示进度和结果。</td><td><code translate="no">action: compact</code>、<code translate="no">handle_compact</code></td></tr>
+<tr><th scope="row">自动，轮次开始前</th><td>预算达到 <code translate="no">context.auto_compact_percent</code>（默认 80）。压缩这一轮所在的链，任何分支都一样；head 不动。后台轮次跳过。</td><td><code translate="no">loop_runner.py</code></td></tr>
+<tr><th scope="row">自动，轮次之中</th><td>一轮工具结果越过同一阈值：每轮一次（<code translate="no">mid_turn</code>），然后继续这一轮。分支换到窗口更小的模型时，下一轮开始前由窗口更大的模型压缩（<code translate="no">model_downshift</code>）</td><td><code translate="no">loop_runner.py</code></td></tr>
+<tr><th scope="row">溢出恢复</th><td>模型返回 413 或 <code translate="no">prompt_too_long</code>：在 agent 循环里压缩，再发同一个请求；每个请求一次、每轮两次，这一轮不会从头重跑</td><td><code translate="no">reactive.py</code></td></tr>
 </tbody>
 </table>
-<p class="note">三者都用 <code translate="no">compaction_started</code>、<code translate="no">compaction_finished</code>、<code translate="no">compaction_failed</code>，各有一条系统消息。</p>
+<p class="note">它们都用 <code translate="no">compaction_started</code>、<code translate="no">compaction_finished</code>、<code translate="no">compaction_failed</code>。开始显示在运行指示处。<code translate="no">/compact</code> 结束时加一条系统消息，被停止的显示“已停止压缩，上下文保持不变”。回合自己的压缩失败时不显示：历史没有变，之后的请求会再试。</p>
 
 <h2>步骤</h2>
 <ol>
 <li><strong>读取</strong> SessionDB 渲染后的历史：摘要和剩余轮次。已被覆盖的原文不重读。</li>
 <li><strong>阈值。</strong>少于四条消息：停止，手动路径会说明。已经是摘要加尾部且没有有效切点：无可压缩，不调用模型。</li>
 <li><strong>摘要</strong>，单独一次模型调用。默认尾部：窗口的 10%，限制在 8k–40k token，至少四条非空消息。<code translate="no">/compact 2000</code> 可覆盖。</li>
-<li><strong>持久化</strong> <code translate="no">summary_*</code> 节点（<code translate="no">role=llm</code>、<code translate="no">name=context/summary</code>）；<code translate="no">covers_ids</code> 标记范围。会话元数据记录它。旧轮次保留，HEAD 不动。</li>
-<li><strong>图。</strong>DAG 显示胶囊。旧摘要被取代，不再参与渲染。</li>
+<li><strong>持久化</strong> <code translate="no">summary_*</code> 节点（<code translate="no">role=llm</code>、<code translate="no">name=context/summary</code>，以注明自己是摘要的用户消息发送）；<code translate="no">covers_ids</code> 标记范围。旧轮次保留，HEAD 不动。</li>
+<li><strong>图。</strong>DAG 显示胶囊。一条链只有一个生效的摘要，即覆盖最远的那个；更早的被取代，不再参与渲染（<a href="../../context/compaction.zh.html">压缩</a>）。</li>
 </ol>
 
 <h2>圆环</h2>

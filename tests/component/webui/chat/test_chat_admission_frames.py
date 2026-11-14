@@ -8,6 +8,7 @@ the run slot without holding up the requesting socket.
 from __future__ import annotations
 
 import asyncio
+import threading
 import json
 import types
 
@@ -69,11 +70,9 @@ def test_local_error_frames_carry_a_message_id():
 def chat_env(monkeypatch):
     """A handle_chat with the session and workspace phases stubbed."""
     from openprogram.interfaces.server import server as _s
-    import openprogram.runtime.conversation.workspace_alignment as alignment
 
     appended: list[dict] = []
     monkeypatch.setattr(_s, "_get_or_create_session", lambda sid, **kw: {"id": sid})
-    monkeypatch.setattr(alignment, "get_workspace_alignment", lambda sid: {})
     monkeypatch.setattr(
         _s, "_append_msg", lambda conv, msg, **kw: appended.append(msg),
     )
@@ -145,7 +144,7 @@ def test_committed_message_is_broadcast_to_other_tabs_only(monkeypatch):
         lambda msg, *, exclude=None: sent.append((json.loads(msg), exclude)),
     )
     sender = object()
-    turn = types.SimpleNamespace(session_id="s1", msg_id="m1")
+    turn = types.SimpleNamespace(session_id="s1", msg_id="m1", side_branch_id=None, branch_id=None)
 
     _broadcast_user_message(_s, sender, turn, {
         "content": "hello", "source": "web", "timestamp": 2.0, "predecessor": "r0",
@@ -157,6 +156,106 @@ def test_committed_message_is_broadcast_to_other_tabs_only(monkeypatch):
         "type": "user_message", "session_id": "s1", "msg_id": "m1",
         "content": "hello", "source": "web", "timestamp": 2.0, "predecessor": "r0",
     }}
+
+
+def test_a_stopped_turn_ends_with_a_clear_that_names_it(monkeypatch):
+    """A stop frees the slot while the execution is still ending, so the
+    frame it sends still shows the turn; the turn's end sends the clear."""
+    from openprogram.interfaces.server import server as _s
+    from openprogram.interfaces.server.ws_actions.chat.turn_launch import (
+        _AdmittedTurn, _canonical_runner,
+    )
+
+    session_id = "stopped-turn-clear"
+    sent: list[dict] = []
+    monkeypatch.setattr(
+        _s, "_broadcast", lambda text, **_kw: sent.append(json.loads(text)))
+    ending = {"task": {
+        "msg_id": "m1", "execution_id": "exec-1", "func_name": "agent",
+        "status": "cancelling", "reason_code": "cancel.user", "status_version": 4,
+    }}
+    monkeypatch.setattr(_s, "_canonical_foreground_task", lambda _sid: ending["task"])
+
+    class _Adapter:
+        async def activate(self, _admission, on_activated):
+            _s._release_session_occupancy_for_execution(
+                {"session_id": session_id, "execution_id": "exec-1"})
+            ending["task"] = None
+            return None
+
+    with _s._running_tasks_lock:
+        _s._running_tasks[session_id] = {
+            "msg_id": "m1", "execution_id": "exec-1", "func_name": "_chat",
+            "started_at": 0,
+        }
+    turn = _AdmittedTurn(
+        session_id=session_id, msg_id="m1", conv={}, adapter=_Adapter(),
+        admission=object(), surface_context=None,
+        release_surface_bindings=lambda _context: None,
+        response_format=None, execution_id="exec-1",
+    )
+    try:
+        _canonical_runner(_s, turn)()
+    finally:
+        _clear_slot(session_id)
+
+    assert [frame["type"] for frame in sent] == ["running_task", "running_task_clear"]
+    assert sent[0]["data"]["status"] == "cancelling"
+    clear = sent[1]["data"]
+    assert (clear["session_id"], clear["msg_id"], clear["execution_id"]) == (
+        session_id, "m1", "exec-1")
+
+
+def test_a_stopped_turns_end_does_not_announce_the_slots_next_owner(monkeypatch):
+    """/compact reserves the slot between the stop and the end of the stopped
+    turn's thread. That end clears the stopped turn by name and never
+    announces the next owner; the compaction announces itself and its
+    release clears it by its own name."""
+    from openprogram.interfaces.server import server as _s
+    from openprogram.interfaces.server.ws_actions.chat.turn_launch import (
+        _AdmittedTurn, _canonical_runner,
+    )
+
+    session_id = "stopped-turn-then-reserved"
+    sent: list[dict] = []
+    monkeypatch.setattr(
+        _s, "_broadcast", lambda text, **_kw: sent.append(json.loads(text)))
+    monkeypatch.setattr(_s, "_canonical_foreground_task", lambda _sid: None)
+
+    class _Adapter:
+        async def activate(self, _admission, on_activated):
+            _s._release_session_occupancy_for_execution(
+                {"session_id": session_id, "execution_id": "exec-1"})
+            assert _s.reserve_operation(session_id, "compact", "compact-1") is None
+            return None
+
+    with _s._running_tasks_lock:
+        _s._running_tasks[session_id] = {
+            "msg_id": "m1", "execution_id": "exec-1", "func_name": "_chat",
+            "started_at": 0,
+        }
+    turn = _AdmittedTurn(
+        session_id=session_id, msg_id="m1", conv={}, adapter=_Adapter(),
+        admission=object(), surface_context=None,
+        release_surface_bindings=lambda _context: None,
+        response_format=None, execution_id="exec-1",
+    )
+    try:
+        _canonical_runner(_s, turn)()
+        with _s._running_tasks_lock:
+            assert _s._running_tasks[session_id]["msg_id"] == "compact-1"
+        _s._release_run_reservation(session_id, "compact-1")
+    finally:
+        _clear_slot(session_id)
+
+    turn_frames = [frame for frame in sent if frame["data"].get("msg_id") != "compact-1"]
+    assert [frame["type"] for frame in turn_frames] == ["running_task_clear", "running_task_clear"]
+    assert all(
+        (frame["data"]["msg_id"], frame["data"]["execution_id"]) == ("m1", "exec-1")
+        for frame in turn_frames)
+    own = [(frame["type"], frame["data"].get("op_kind")) for frame in sent
+           if frame["data"].get("msg_id") == "compact-1"]
+    assert own == [("running_task", "compact"), ("running_task_clear", None)]
 
 
 @pytest.fixture
@@ -195,8 +294,10 @@ def test_compact_is_refused_while_a_turn_runs(compact_env):
 
     assert compact_env == []
     data = ws.sent[0]["data"]
-    assert (data["type"], data["code"], data["session_id"]) == (
-        "compaction_failed", "run_active", session_id)
+    assert (data["type"], data["code"], data["session_id"], data["kind"]) == (
+        "compaction_failed", "run_active", session_id, "reply")
+    # The refusal says what runs on the branch.
+    assert data["error"].startswith("A reply is being written on this branch")
 
 
 def test_compact_holds_the_slot_and_runs_in_the_background(compact_env):
@@ -224,12 +325,151 @@ def test_compact_holds_the_slot_and_runs_in_the_background(compact_env):
         assert session_id not in _s._running_tasks
 
 
+def test_compaction_ends_on_the_wire_only_after_its_slot_is_free(compact_env, monkeypatch):
+    """A client reloads the conversation on ``compaction_finished``; that load
+    must find the conversation idle, so the frame follows the release."""
+    from openprogram.interfaces.server import server as _s
+    import openprogram.runtime.conversation.turn_runtime as turn_runtime
+    from openprogram.interfaces.server.ws_actions.chat import commands
+
+    session_id = "compact-ending-order"
+    _clear_slot(session_id)
+    seen: list[tuple[str, bool]] = []
+    monkeypatch.setattr(_s, "_broadcast_chat_response", lambda sid, mid, data: seen.append(
+        (data.get("type"), _s._is_run_active(sid))))
+    monkeypatch.setattr(_s, "refresh_context_stats", lambda sid, mid="": seen.append(
+        ("context_stats", _s._is_run_active(sid))))
+
+    def _compact(sid, *, on_event, **_kw):
+        on_event({"type": "chat_response", "data": {"type": "compaction_started"}})
+        on_event({"type": "chat_response", "data": {"type": "compaction_finished"}})
+
+    monkeypatch.setattr(turn_runtime, "trigger_compaction", _compact)
+
+    async def _main():
+        await commands.handle_compact(_FakeWS(), {"session_id": session_id})
+        await asyncio.gather(*commands._compact_tasks)
+
+    asyncio.run(_main())
+
+    assert seen == [
+        ("compaction_started", True),
+        ("compaction_finished", False),
+        ("context_stats", False),
+    ]
+
+
+def test_a_compaction_is_the_branchs_operation_on_every_surface(monkeypatch):
+    """/compact is the selected branch's foreground operation: it announces
+    itself with its kind and op_id, a load shows it the same way (no reply
+    row, a Stop by op_id), and its release sends the clear that closes it."""
+    from openprogram.interfaces.server import server as _s
+    from openprogram.interfaces.server.ws_actions.session.load import _send_running_task_state
+
+    session_id = "compact-shown"
+    _clear_slot(session_id)
+    sent: list[dict] = []
+    monkeypatch.setattr(_s, "_broadcast", lambda text, **_kw: sent.append(json.loads(text)))
+    monkeypatch.setattr(_s, "_canonical_foreground_task", lambda _sid: None)
+
+    assert _s.reserve_operation(session_id, "compact", "compact_1") is None
+    ws = _FakeWS()
+    try:
+        run_task = _s._run_identity(session_id)
+        asyncio.run(_send_running_task_state(ws, _s, session_id, run_task))
+        # A second operation on the same branch is refused and named.
+        refusal = _s.reserve_operation(session_id, "rewind", "rewind_1")
+        _s._release_run_reservation(session_id, "compact_1")
+    finally:
+        _clear_slot(session_id)
+
+    assert run_task["op_kind"] == "compact" and run_task["op_id"].startswith("op_")
+    assert run_task["status_version"] == 1 and run_task["execution_id"] == ""
+    shown = ws.sent[0]["data"]
+    assert (ws.sent[0]["type"], shown["msg_id"], shown["reply_id"], shown["op_kind"], shown["op_id"]) == (
+        "running_task", "compact_1", None, "compact", run_task["op_id"])
+    assert (refusal["code"], refusal["kind"]) == ("run_active", "compact")
+    assert "compacted" in refusal["error"]
+    assert [(f["type"], f["data"].get("msg_id"), f["data"].get("op_kind")) for f in sent] == [
+        ("running_task", "compact_1", "compact"), ("running_task_clear", "compact_1", None)]
+
+
+def test_a_compaction_a_run_state_probe_showed_ends_with_a_clear(monkeypatch):
+    """``get_run_state`` hands a client the operation as its running slot
+    just as a load does, and its release sends the clear."""
+    from openprogram.interfaces.server import server as _s
+    from openprogram.interfaces.server.ws_actions.session.run_state import handle_get_run_state
+
+    session_id = "compact-run-state"
+    _clear_slot(session_id)
+    sent: list[dict] = []
+    monkeypatch.setattr(_s, "_broadcast", lambda text, **_kw: sent.append(json.loads(text)))
+    monkeypatch.setattr(_s, "_canonical_foreground_task", lambda _sid: None)
+
+    assert _s.reserve_operation(session_id, "compact", "compact_1") is None
+    ws = _FakeWS()
+    try:
+        asyncio.run(handle_get_run_state(ws, {"session_id": session_id}))
+        _s._release_run_reservation(session_id, "compact_1")
+    finally:
+        _clear_slot(session_id)
+
+    state = ws.sent[0]["data"]
+    assert (state["run_active"], state["run_task"]["msg_id"], state["run_task"]["op_kind"]) == (
+        True, "compact_1", "compact")
+    assert [(f["type"], f["data"].get("msg_id")) for f in sent][-1] == (
+        "running_task_clear", "compact_1")
+
+
+def test_stop_by_op_id_ends_a_compaction(compact_env, monkeypatch):
+    """Stop names the operation: its cancel event reaches the summary request,
+    the compaction ends and its slot is free."""
+    from openprogram.interfaces.server import server as _s
+    import openprogram.runtime.conversation.turn_runtime as turn_runtime
+    from openprogram.interfaces.server.ws_actions.chat import commands
+
+    session_id = "compact-stopped"
+    _clear_slot(session_id)
+    entered = threading.Event()
+    seen: dict = {}
+
+    def _compact(sid, *, on_event, cancel_event=None, **_kw):
+        seen["event"] = cancel_event
+        entered.set()
+        assert cancel_event is not None and cancel_event.wait(10)
+        on_event({"type": "chat_response", "data": {"type": "compaction_failed", "error": "cancelled"}})
+
+    monkeypatch.setattr(turn_runtime, "trigger_compaction", _compact)
+    monkeypatch.setattr(_s, "_broadcast_chat_response", lambda sid, mid, data: seen.setdefault("ending", data))
+
+    async def _main():
+        await commands.handle_compact(_FakeWS(), {"session_id": session_id})
+        await asyncio.to_thread(entered.wait, 10)
+        op_id = _s._run_identity(session_id)["op_id"]
+        ws = _FakeWS()
+        await commands.handle_operation_cancel(ws, {"session_id": session_id, "op_id": op_id})
+        seen["cancel"] = ws.sent[0]
+        await asyncio.gather(*commands._compact_tasks)
+        missing = _FakeWS()
+        await commands.handle_operation_cancel(missing, {"session_id": session_id, "op_id": op_id})
+        seen["again"] = missing.sent[0]
+
+    asyncio.run(_main())
+
+    assert seen["cancel"]["type"] == "operation_cancel_result"
+    assert (seen["cancel"]["data"]["ok"], seen["cancel"]["data"]["op_kind"],
+            seen["cancel"]["data"]["op_version"]) == (True, "compact", 2)
+    assert seen["event"].is_set() and seen["ending"]["type"] == "compaction_failed"
+    assert seen["again"]["data"]["code"] == "not_found"
+    assert not _s._is_run_active(session_id)
+
+
 def test_pre_ack_error_echoes_the_client_request_id(monkeypatch, chat_env):
     from openprogram.interfaces.server import server as _s
     from openprogram.interfaces.server.ws_actions.chat import handle_chat
     from openprogram.interfaces.server.ws_actions.chat.turn_request import _client_request_id
 
-    monkeypatch.setattr(_s, "_try_reserve_run", lambda sid, mid: False)
+    monkeypatch.setattr(_s, "_try_reserve_run", lambda sid, mid, **_k: False)
     ws = _FakeWS()
     asyncio.run(handle_chat(ws, {
         "text": "hi", "session_id": "s-echo", "client_request_id": "req-7",
@@ -242,3 +482,31 @@ def test_pre_ack_error_echoes_the_client_request_id(monkeypatch, chat_env):
     ws = _FakeWS()
     asyncio.run(handle_chat(ws, {"text": "hi", "session_id": "s-echo"}))
     assert "client_request_id" not in ws.sent[0]["data"]
+
+
+def test_a_refused_admission_ends_the_turn_with_its_reason(monkeypatch, chat_env):
+    """A refusal at admission (too large, a bad image) reaches the sender as
+    the turn's error with its code, not as a bare ``handler_error``."""
+    from openprogram.interfaces.server import server as _s
+    from openprogram.interfaces.server.ws_actions.chat import handle_chat, turn
+    from openprogram.runtime.conversation.production_driver import AgentDriverError
+
+    def refuse(*_args, **_kwargs):
+        raise AgentDriverError("image_too_large", "Images exceed the image size limit")
+
+    monkeypatch.setattr(turn, "_save_run_config",
+                        lambda *_a, **_k: (types.SimpleNamespace(), "ask"))
+    monkeypatch.setattr(turn, "_admit_and_commit", refuse)
+    session_id = "s-admission-refused"
+    _clear_slot(session_id)
+    ws = _FakeWS()
+    asyncio.run(handle_chat(ws, {"text": "look", "session_id": session_id,
+                                 "client_request_id": "req-9"}))
+
+    data = ws.sent[-1]["data"]
+    assert (data["type"], data["code"], data["kind"]) == (
+        "error", "image_too_large", "image_too_large")
+    assert data["content"] == "Images exceed the image size limit"
+    assert (data["session_id"], data["client_request_id"]) == (session_id, "req-9")
+    assert data["msg_id"]
+    _clear_slot(session_id)

@@ -10,9 +10,12 @@ place, the way Codex and Claude Code read theirs:
    directory itself when there is none) down to the working directory, in
    that order. Nothing above the project root is read.
 3. **Nested** — an ``AGENTS.md`` in a directory the agent reaches later,
-   below the working directory or in another project, is attached to the
-   result of the first file tool that touches a file there, once per
-   session.
+   below the working directory or in another project, is attached after
+   the result of the first file tool that touches a file there
+   (``shared.tool_attachments``), once for as long as the request's
+   history still carries it: the ledger is the attachment records in the
+   branch's model-visible history, so a branch from before it, or a
+   compaction that summarized it, attaches it again.
 
 Later files are closer to the work, so they are more specific and win on a
 conflict. Global and chain files go into the system prompt within
@@ -21,7 +24,6 @@ conflict. Global and chain files go into the system prompt within
 from __future__ import annotations
 
 import os
-from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -36,11 +38,6 @@ _PREAMBLE = (
     "in and everything below it; a file closer to the files being worked on is "
     "more specific and wins on a conflict."
 )
-
-#: session id → AGENTS.md paths already attached to a tool result there.
-_attached: "OrderedDict[str, set[str]]" = OrderedDict()
-_ATTACHED_SESSIONS = 256
-
 
 def global_path() -> Path:
     from openprogram.state.paths import get_state_dir
@@ -132,50 +129,35 @@ def system_prompt_block(cwd: Path | None = None) -> str:
     return render(chain(cwd))
 
 
-# -- Nested files, attached to file tool results ---------------------------
+# -- Nested files, attached after file tool results ------------------------
 
-def _session_seen(session_id: str) -> set[str]:
-    seen = _attached.get(session_id)
-    if seen is None:
-        seen = _attached[session_id] = set()
-        while len(_attached) > _ATTACHED_SESSIONS:
-            _attached.popitem(last=False)
-    else:
-        _attached.move_to_end(session_id)
-    return seen
-
-
-def nested_for(tool: str, args: Any, session_id: str, cwd: Path | None = None) -> str:
-    """AGENTS.md text to attach to this file tool's result, or ``""``.
+def nested_for(tool: str, args: Any, seen: "set[str]", cwd: Path | None = None) -> tuple[list[str], str]:
+    """``(paths, text)`` of the AGENTS.md files to attach after this file
+    tool's result, or ``([], "")``.
 
     The files are those on the way from the touched file's project root down
-    to its directory that the system prompt does not already carry and this
-    session has not been shown.
+    to its directory that the system prompt does not already carry and
+    ``seen`` (the paths the request's history already attaches, and those
+    claimed earlier in the same group of calls) does not hold.
     """
     if tool not in FILE_TOOLS or not isinstance(args, dict):
-        return ""
+        return [], ""
     raw = args.get("file_path")
     if not isinstance(raw, str) or not raw.strip():
-        return ""
+        return [], ""
     cwd = (cwd or working_dir()).resolve()
     target = Path(os.path.expanduser(raw))
     if not target.is_absolute():
         target = cwd / target
     directory = target.resolve().parent
     if not directory.is_dir():
-        return ""
+        return [], ""
     in_prompt = {p.resolve() for p in chain(cwd)}
-    seen = _session_seen(session_id or "-")
     fresh = []
     for d in _chain_dirs(directory):
         path = d / FILENAME
         if path.is_file() and path.resolve() not in in_prompt and str(path.resolve()) not in seen:
-            seen.add(str(path.resolve()))
             fresh.append(path)
     if not fresh:
-        return ""
-    return render(fresh)
-
-
-def _reset_for_tests() -> None:
-    _attached.clear()
+        return [], ""
+    return [str(path.resolve()) for path in fresh], render(fresh)

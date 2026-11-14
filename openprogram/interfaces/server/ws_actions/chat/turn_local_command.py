@@ -22,15 +22,9 @@ _STALE = object()
 
 
 def _resolve_local_command(text: str, session_id: str):
-    _local_res = None
-    try:
-        from openprogram.runtime.commands.dispatch import invoke as _cmd_invoke
-        _r = _cmd_invoke(text, session_id=session_id)
-        if _r.ok and _r.kind == "local" and callable(_r.local_handler):
-            _local_res = _r
-    except Exception:
-        _local_res = None
-    return _local_res
+    # One resolver for every surface (``--print`` runs the same commands).
+    from openprogram.runtime.conversation import local_commands
+    return local_commands.resolve(text, session_id)
 
 
 async def _validate_local_surface(ws, surface_ref: dict | None, session_id: str):
@@ -161,15 +155,11 @@ async def _run_local_command(ws, req: _ChatRequest) -> bool:
     )
     if _validated_surface is _STALE:
         return False
-    try:
-        _out = await asyncio.to_thread(
-            _local_res.local_handler,
-            {"session_id": session_id},
-            _local_res.raw_args,
-        ) or {}
-    except Exception as _cmd_err:  # noqa: BLE001 — reply, don't drop the WS
-        _out = {"text": (f"/{_local_res.command_name} failed: "
-                         f"{type(_cmd_err).__name__}: {_cmd_err}")}
+    from openprogram.runtime.conversation import local_commands
+    # The command runs on the branch it was sent on.
+    _outcome = await asyncio.to_thread(local_commands.run, _local_res, session_id,
+                                       branch_id=req.side_branch_id)
+    _out = {"text": _outcome.text, "invoke": _outcome.invoke, "send_text": _outcome.send_text}
     _reply_text = str(_out.get("text") or "")
     if _reply_text:
         await ws.send_text(json.dumps({

@@ -467,7 +467,7 @@ def _end_jobs(target: Path) -> int:
         if not document.exists():
             continue
         try:
-            value = json.loads(document.read_text())
+            value = json.loads(document.read_text(encoding="utf-8"))
         except ValueError:
             continue
         jobs = value.get("jobs") if isinstance(value, dict) else None
@@ -479,7 +479,7 @@ def _end_jobs(target: Path) -> int:
             job["completed_at"] = job.get("completed_at") or time.time()
             job["error"] = _REASON
         if active:
-            document.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n")
+            document.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             ended += len(active)
     return ended
 

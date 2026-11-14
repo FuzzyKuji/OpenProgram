@@ -19,6 +19,7 @@ from openprogram.runtime.jobs.resource_governance.limits import (
     _less_or_equal,
     global_resource_limits,
     resolve_resource_limits,
+    running_agents_default,
     session_resource_limits,
 )
 from openprogram.runtime.jobs.resource_governance.usage import (
@@ -82,7 +83,7 @@ class ResourceGovernor(TablesAccess, DispatchOperations, BorrowedOperations, Fin
         )
         return resolve_resource_limits(
             global_resource_limits(), session=session_resource_limits(session_id),
-            job=job_limits,
+            job=job_limits, default_live_limit=running_agents_default(),
         )
 
 
@@ -103,6 +104,7 @@ class ResourceGovernor(TablesAccess, DispatchOperations, BorrowedOperations, Fin
             clamped_session[name] = session_value
         return resolve_resource_limits(
             global_limits, session=ResourceLimits.from_mapping(clamped_session),
+            default_live_limit=running_agents_default(),
         )
 
 

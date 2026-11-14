@@ -12,7 +12,8 @@ from openprogram.models.providers.types import (
     Context,
     Tool,
 )
-from openprogram.models.providers.utils.event_stream import EventStream
+from openprogram.models.providers.utils.errors import ExecInterrupt
+from openprogram.models.providers.utils.event_stream import EventStream, leave_unwinding
 
 from openprogram.runtime.events import emit_safe
 from openprogram.runtime.agent.loop.types import (
@@ -37,7 +38,6 @@ from openprogram.runtime.agent.loop.message_context import (
     _durable_message,
     _inject_memory_prefetch,
     _latest_user_text,
-    memory_prefetch_enabled,
 )
 from openprogram.runtime.agent.loop.lifecycle import (
     _job_operation_timeout,
@@ -96,6 +96,28 @@ async def _cancel_response_stream(response_stream: Any, iterator: Any, *, cleanu
     """Stop a discarded provider response before starting its recovery."""
     from openprogram.models.providers.utils.event_stream import close_stream
     await close_stream(response_stream, iterator, timeout=cleanup_timeout)
+
+
+def _note_tool_loaded(config: Any, messages: Any) -> None:
+    """Announce the cache break a searched tool makes where it is loaded
+    into the tools array (no native form for the model): the request after
+    a search that loaded something re-reads what follows the array."""
+    from openprogram.models.providers.settings.tool_search_spec import model_tool_search_form
+    from openprogram.models.providers.shared.tool_loads import loaded_names
+
+    if model_tool_search_form(getattr(config, "model", None)) is not None:
+        return
+    for message in reversed(list(messages or ())):
+        if getattr(message, "role", None) != "toolResult":
+            break
+        if not getattr(message, "is_error", False) and loaded_names(getattr(message, "details", None)):
+            try:
+                from openprogram.models.usage.prefix_fingerprint import expect_break
+
+                expect_break(getattr(config, "session_id", None), "tool_loaded")
+            except Exception:
+                _log.debug("tool_loaded break not announced", exc_info=True)
+            return
 
 
 async def _stream_assistant_response(
@@ -163,8 +185,11 @@ async def _stream_in_conversation(
     # turn — the single largest source of avoidable input cost. In the user
     # turn it only ever invalidates the tail it sits in.
     prefetch_block = context.memory_prefetch
-    if prefetch_block is None and not memory_prefetch_enabled.get():
+    if prefetch_block is None and not getattr(config, "recall", True):
         prefetch_block = ""
+    anchored = context._prefetch_anchor
+    if prefetch_block is None and anchored is not None:
+        prefetch_block = anchored[1]
     if prefetch_block is None:
         prefetch_block = ""
         latest_user_text = _latest_user_text(messages)
@@ -180,8 +205,18 @@ async def _stream_in_conversation(
     from openprogram.state.memory.policy import current as _memory_policy, allowed as _memory_allowed
     if _memory_policy() is not None and not _memory_allowed():
         prefetch_block = ""
-    if context.run_note:
-        prefetch_block = "\n\n".join(part for part in (prefetch_block, context.run_note) if part)
+    if anchored is None:
+        # The first request of the turn fixes where the block goes and what
+        # was recalled; a note the loop adds later does not move or change it.
+        anchored = context._prefetch_anchor = (_latest_user_text(llm_messages), prefetch_block)
+        if context.current_date is None:
+            # The date the turn was sent on, fixed for all its requests.
+            from openprogram.runtime.context.components import current_date_note
+
+            context.current_date = current_date_note() if getattr(config, "dated", False) else ""
+    from openprogram.runtime.context.render import turn_block
+
+    prefetch_block = turn_block(prefetch_block, context.run_note, context.current_date, context.turn_notes)
     sys_prompt = context.system_prompt or None
     if structured_plan is not None and structured_plan.mode == "prompt":
         from openprogram.models.providers.structured_output import build_prompt_fallback
@@ -189,33 +224,48 @@ async def _stream_in_conversation(
         instruction = build_prompt_fallback(config.response_format)
         sys_prompt = f"{sys_prompt}\n\n{instruction}" if sys_prompt else instruction
     if prefetch_block:
-        _inject_memory_prefetch(llm_messages, prefetch_block)
+        _inject_memory_prefetch(llm_messages, prefetch_block, anchored[0])
 
     # Build LLM context
-    # Use the resolved tools and the turn's membership set, including tools
-    # explicitly promoted by tool_search since the previous provider call.
-    from openprogram.programs import split_tools_for_dispatch
+    # Use the resolved tools and the deferred tools this request's own
+    # messages loaded: the load records of its tool results and the names a
+    # compaction summary among them carries.
+    # The array is fixed for the epoch (``tool_epoch``): a tool every call of
+    # which is refused is left out only from an epoch's first request, and a
+    # mode change leaves it alone; the dispatcher refuses the calls. A loaded
+    # tool that is no longer offered stays, and a call of it says why.
+    from openprogram.models.providers.shared.tool_loads import loaded_records
+    from openprogram.programs import loaded_tools, note_request_loaded, split_tools_for_dispatch
+    from openprogram.runtime.agent.loop import tool_epoch
+    _loaded = loaded_tools(llm_messages)
+    note_request_loaded(_loaded)
+    _submit = None
+    if structured_plan is not None and structured_plan.mode == "tool":
+        _submit = {
+            "name": structured_plan.submit_tool_name,
+            "description": "Submit the final response matching the required schema.",
+            "parameters": structured_plan.provider_schema,
+        }
+    _epoch = tool_epoch.epoch_for(
+        config.session_id, tool_epoch.epoch_key(config.model, llm_messages),
+        context.tools or [], _submit)
     _provider_tools, _ = split_tools_for_dispatch(
-        [tool for tool in (context.tools or [])
-         if not callable(getattr(tool, "_permission_visible", None)) or tool._permission_visible()]
+        [tool for tool in (context.tools or []) if tool.name not in _epoch.withheld],
+        _loaded,
+        loaded_records(llm_messages),
     )
+    _note_tool_loaded(config, llm_messages)
     try:
         from openprogram.runtime.context.session_db import default_db
         from openprogram.runtime.context.tool_snapshot_node import record_tool_snapshot
 
-        record_tool_snapshot(default_db(), config.session_id, list(context.tools or []))
+        record_tool_snapshot(default_db(), config.session_id, list(context.tools or []),
+                             epoch=_epoch.as_json())
     except Exception:
         # The snapshot is a record for replay; the provider call proceeds without it.
         _log.warning("tool snapshot not recorded for session %s", config.session_id, exc_info=True)
-    if structured_plan is not None and structured_plan.mode == "tool":
-        _provider_tools = [
-            *_provider_tools,
-            Tool(
-                name=structured_plan.submit_tool_name,
-                description="Submit the final response matching the required schema.",
-                parameters=structured_plan.provider_schema,
-            ),
-        ]
+    if _epoch.submit is not None:
+        _provider_tools = [*_provider_tools, Tool(**_epoch.submit)]
     llm_context = Context(
         system_prompt=sys_prompt,
         messages=llm_messages,
@@ -372,9 +422,21 @@ async def _stream_in_conversation(
     # A stale session/agent preference can outlive a model switch, so never
     # forward it to a model whose list is empty: OpenAI-compatible upstreams
     # commonly reject an unsupported ``reasoning_effort`` with HTTP 400.
-    from openprogram.models.providers.settings.thinking_spec import normalize_reasoning_level
+    from openprogram.models.providers.settings.thinking_spec import (
+        normalize_reasoning_level,
+        off_wire_value,
+    )
 
-    reasoning = normalize_reasoning_level(config.model, config.reasoning)
+    if config.reasoning in ("off", "none"):
+        # Thinking turned off reaches only a provider that has a wire value
+        # for it (OpenAI Responses: ``effort: "none"``); elsewhere it is
+        # "send no reasoning field", as before.
+        model = config.model
+        reasoning = "off" if getattr(model, "reasoning", False) and off_wire_value(
+            model.provider, model.id, getattr(model, "api", None),
+        ) is not None else None
+    else:
+        reasoning = normalize_reasoning_level(config.model, config.reasoning)
     stream_opts = SimpleStreamOptions(
         reasoning=reasoning,
         thinking_budgets=config.thinking_budgets,
@@ -406,6 +468,12 @@ async def _stream_in_conversation(
     if context._request_compactor is None:
         context._request_compactor = RequestCompactor()
     llm_context = await context._request_compactor.prepare(llm_context, config.model, stream_opts, get_api_key=config.get_api_key)
+    anchor = getattr(config.compact_turn, "anchor_id", None)
+    if anchor:
+        # A conversation turn's own request: a compaction of this chain may
+        # send it again with the summary prompt (compaction/fork.py).
+        from openprogram.runtime.context.compaction.fork import remember_request
+        remember_request(config.session_id, anchor, config.model, llm_context)
 
     # Estimate the dispatched request, before its in-flight assistant/tool
     # messages are coalesced into the persisted conversation graph.
@@ -479,12 +547,11 @@ async def _stream_in_conversation(
         response_stream = fn(config.model, llm_context, stream_opts)
 
         iterator = response_stream.__aiter__()
+        reader_left = False
         next_steer_check = 0.0
         instant_steer = _instant_steer_enabled()
         while True:
             if structured_plan is not None and cancel_event and cancel_event.is_set():
-                from openprogram.models.providers.utils.errors import ExecInterrupt
-
                 raise ExecInterrupt("cancelled")
             timeout = _job_operation_timeout(None)
             try:
@@ -506,6 +573,7 @@ async def _stream_in_conversation(
                     next_event = asyncio.ensure_future(iterator.__anext__())
                     deadline = time.monotonic() + timeout if timeout is not None else None
                     interrupt = False
+                    stopped = False
                     try:
                         while True:
                             now = time.monotonic()
@@ -525,14 +593,28 @@ async def _stream_in_conversation(
                             if ready:
                                 event = next_event.result()
                                 break
+                    except (asyncio.CancelledError, ExecInterrupt):
+                        # A stop, seen by the safe point or delivered as a
+                        # cancel; the other of the two may still follow.
+                        stopped = True
+                        raise
                     finally:
                         if not next_event.done():
                             next_event.cancel()
-                            ready, _ = await asyncio.wait({next_event}, timeout=0.5)
-                            if not ready:
-                                # Do not overlap a new request with an unclosed reader.
-                                next_event.add_done_callback(lambda task: task.exception() if not task.cancelled() else None)
-                                raise RuntimeError("Provider did not stop after stream interruption")
+                            if stopped:
+                                # Nothing follows a stopped response, so the
+                                # stop does not wait for the provider to close:
+                                # the read unwinds on the loop, whose owner
+                                # finishes it before closing the loop.
+                                reader_left = True
+                                leave_unwinding(next_event)
+                            else:
+                                ready, _ = await asyncio.wait({next_event}, timeout=0.5)
+                                if not ready:
+                                    # Do not overlap a new request with an unclosed reader.
+                                    reader_left = True
+                                    leave_unwinding(next_event)
+                                    raise RuntimeError("Provider did not stop after stream interruption")
                         if next_event.done() and not next_event.cancelled():
                             next_event.exception()
                     if interrupt:
@@ -545,7 +627,7 @@ async def _stream_in_conversation(
                         finally:
                             if not cleanup.done():
                                 cleanup.cancel()
-                            cleanup.add_done_callback(lambda task: task.exception() if not task.cancelled() else None)
+                            leave_unwinding(cleanup)
                         message = (_steered_partial(partial_message) if partial_message is not None else AssistantMessage(
                             content=[], api=config.model.api, provider=config.model.provider, model=config.model.id,
                         ))
@@ -563,15 +645,15 @@ async def _stream_in_conversation(
             except StopAsyncIteration:
                 break
             except BaseException:
-                await _cancel_response_stream(
-                    response_stream, iterator,
-                    cleanup_timeout=0.5 if cancel_event and cancel_event.is_set() else None,
-                )
+                # A read left unwinding closes the response itself as it ends.
+                if not reader_left:
+                    await _cancel_response_stream(
+                        response_stream, iterator,
+                        cleanup_timeout=0.5 if cancel_event and cancel_event.is_set() else None,
+                    )
                 raise
             _record_job_activity("provider_data")
             if structured_plan is not None and cancel_event and cancel_event.is_set():
-                from openprogram.models.providers.utils.errors import ExecInterrupt
-
                 raise ExecInterrupt("cancelled")
             if repetition_guard is not None and event.type in {
                 "text_start",
@@ -629,6 +711,15 @@ async def _stream_in_conversation(
                     ))
 
             elif event.type == "retry" and partial_message is not None:
+                if getattr(event, "restart", None):
+                    # The request goes out again and what it streamed is void:
+                    # a steer before the new response's first content must not
+                    # commit the failed response's partial.
+                    partial_message = partial_message.model_copy(update={"content": []})
+                    if added_partial:
+                        context.messages[-1] = partial_message
+                    if repetition_guard is not None:
+                        repetition_guard.reset()
                 ev_stream.push(AgentEventMessageUpdate(
                     message=partial_message,
                     assistant_message_event=event,
@@ -640,7 +731,11 @@ async def _stream_in_conversation(
                 )
                 final_message = event.message if event.type == "done" else event.error
                 if event.type == "done" and structured_plan is None:
-                    recover_text_tool_calls(final_message, context.tools)
+                    if final_message.stop_reason == "length":
+                        # This response did not finish authorizing its tool calls.
+                        final_message = _steered_partial(final_message)
+                    else:
+                        recover_text_tool_calls(final_message, context.tools)
                 if final_message.usage.tokens_reported:
                     final_message.usage.request_input_estimate = request_input_estimate
                     if (final_message.model == config.model.id

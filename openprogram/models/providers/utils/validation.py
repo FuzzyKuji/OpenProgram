@@ -213,7 +213,6 @@ def validate_tool_arguments(tool: Tool, tool_call: ToolCall) -> dict[str, Any]:
     
     # Restore strict optional defaults, then coerce without mutating input.
     coerced_args = _prepare_arguments(args, schema)
-    coerced_args = _normalize(tool, coerced_args)
     
     # Validate with jsonschema
     try:
@@ -237,13 +236,6 @@ def validate_tool_arguments(tool: Tool, tool_call: ToolCall) -> dict[str, Any]:
         raise ValueError(error_message)
 
 
-def _normalize(tool: Tool, args: dict[str, Any]) -> dict[str, Any]:
-    """The arguments in the normal form the tool's Program registered, if any."""
-    from openprogram.models.providers.utils.argument_normalizers import normalizer_for
-    normalizer = normalizer_for(tool.name)
-    return normalizer(tool.name, args) if normalizer else args
-
-
 def _validate_basic(tool: Tool, tool_call: ToolCall, args: dict[str, Any], schema: dict[str, Any]) -> dict[str, Any]:
     """
     Basic validation fallback when jsonschema is not available.
@@ -252,7 +244,6 @@ def _validate_basic(tool: Tool, tool_call: ToolCall, args: dict[str, Any], schem
     path so callers get consistent behavior across environments.
     """
     coerced_args = _prepare_arguments(args, schema)
-    coerced_args = _normalize(tool, coerced_args)
 
     required = schema.get("required", [])
     for field in required:

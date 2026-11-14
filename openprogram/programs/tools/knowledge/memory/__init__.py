@@ -49,7 +49,7 @@ def _register(name, spec, fn, *, max_chars=20_000):
         description=spec["description"],
         parameters=spec["parameters"],
         toolset=["core"],
-        max_result_chars=max_chars,
+        max_result_weight=max_chars // 4,  # characters of English text
         # A memory path names a file inside the workspace, or a chat
         # citation, never a filesystem path; the workspace resolves and
         # contains it itself.

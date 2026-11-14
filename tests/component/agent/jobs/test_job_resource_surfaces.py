@@ -313,7 +313,7 @@ def test_spawn_rejection_transport_preserves_usage_without_inventing_job(
     assert data["usage"] == {"tokens": 7, "unknown_cost_events": 1}
 
 
-def test_exhausted_delegation_keeps_owned_job_output_available(monkeypatch):
+def test_exhausted_delegation_keeps_owned_results_readable(monkeypatch):
     from openprogram.runtime.execution.run_control.binding import _current_session_id
     from openprogram.programs import agent_tools
     from openprogram.programs.tools.agents.send_message.send_message import depth
@@ -332,10 +332,12 @@ def test_exhausted_delegation_keeps_owned_job_output_available(monkeypatch):
     session_token = _current_session_id.set('session-1')
     try:
         tools = {tool.name: tool for tool in agent_tools(toolset='full', only_available=True)}
-        assert 'job_output' in tools
+        # job_output is no longer offered; read_conversation reads an
+        # execution id the same way.
+        assert 'read_conversation' in tools and 'job_output' not in tools
         assert 'agent' not in tools
-        result = asyncio.run(tools['job_output'].execute(
-            'read-owned-job', {'job_id': job.id, 'block': False}, None, None,
+        result = asyncio.run(tools['read_conversation'].execute(
+            'read-owned-job', {'session_id': job.id}, None, None,
         ))
         assert not result.is_error
         assert 'existing-result' in '\n'.join(block.text for block in result.content)
@@ -344,8 +346,8 @@ def test_exhausted_delegation_keeps_owned_job_output_available(monkeypatch):
 
         foreign_token = _current_session_id.set('another-session')
         try:
-            denied = asyncio.run(tools['job_output'].execute(
-                'read-foreign-job', {'job_id': job.id, 'block': False}, None, None,
+            denied = asyncio.run(tools['read_conversation'].execute(
+                'read-foreign-job', {'session_id': job.id}, None, None,
             ))
             assert 'was not dispatched by this session' in '\n'.join(block.text for block in denied.content)
             assert waited == [job.id]

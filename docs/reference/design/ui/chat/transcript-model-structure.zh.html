@@ -30,6 +30,7 @@
 </ol>
 <p><code translate="no">spawn_branch_root</code> 行绝不通过 caller 边被收进父轮次。caller 后代只匹配 <code translate="no">_collect_exec_rows</code> 的工具和叶子规则。</p>
 <p>索引随 head 前进而扩展，在结构变化时重建。没有 socket 持有的视图放在容量 16 的 LRU 中。socket 持有的视图绝不淘汰。</p>
+<p>存储的转录状态在索引保留而非重新读取的内容变化时前移：重挂，以及对摘要的元数据补丁，因为压缩行由摘要元数据画出。压缩在插入之后才写入 <code translate="no">tokens_before</code>、<code translate="no">tokens_after</code> 和 <code translate="no">compacted_at</code>。其他补丁只改行内容，每次读取都重新取。</p>
 <p>所有非局部内容都从索引元数据计算，因此一个轮次可以单独投影：压缩槽位和 <code translate="no">superseded_summary</code> 来自摘要节点，<code translate="no">spawned_from</code> 来自 attach 节点，同级导航来自子节点表，目标标记来自对该会话执行的一次扫描，保存为 <code translate="no">{assistant id: execution id}</code> 并在新轮次出现时扩展。</p>
 <h3>轮次</h3>
 <p><code translate="no">{ id, rows }</code>。<code translate="no">id</code> 是起始行的 id。放在第一个起始行之前的压缩行加入该轮次，但绝不成为它的 id，因此 id 稳定。</p>

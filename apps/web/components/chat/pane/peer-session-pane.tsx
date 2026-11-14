@@ -27,6 +27,7 @@ import { Button } from "@/components/ui/button";
 
 import { selectRow, selectViewRows, useMessageIds, useSessionStore } from "@/lib/session-store";
 import { HISTORY_PROTOCOL, holdsHistoryWindow, useSessionHistory } from "@/lib/chat/history/session-history";
+import { COMPOSER_TUCK_SHIFT_EVENT, visibleComposerHeight } from "@/lib/chat/history/chat-scroll";
 import { useCenterTabs } from "@/lib/tabs/center-tabs-store";
 import {
   RECYCLE_MIN_ROWS,
@@ -117,15 +118,19 @@ export const PeerSessionPane = memo(function PeerSessionPane({
     const target = host.firstElementChild as HTMLElement | null;
     if (!target) return;
     const apply = () => {
-      const h = target.offsetHeight;
-      if (h > 0) {
+      if (target.offsetHeight > 0) {
+        const h = visibleComposerHeight(target);
         pane.style.setProperty("--peer-composer-h", `${Math.round(h) + 24}px`);
       }
     };
     apply();
     const ro = new ResizeObserver(apply);
     ro.observe(target);
-    return () => ro.disconnect();
+    target.addEventListener(COMPOSER_TUCK_SHIFT_EVENT, apply);
+    return () => {
+      ro.disconnect();
+      target.removeEventListener(COMPOSER_TUCK_SHIFT_EVENT, apply);
+    };
   }, [sessionId]);
 
   const columnRef = useRef<HTMLDivElement | null>(null);

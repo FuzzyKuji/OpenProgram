@@ -32,6 +32,7 @@ def request_goal_stop(goal: dict, session_id: str) -> None:
                 continue  # Rechecked below; a terminal parent may have children.
             if isinstance(result, dict) and result.get("issue_code") not in (
                 None, "owner_not_local", "owner_not_active", "already_delivered",
+                "already_terminal",
             ):
                 raise GoalStopUnconfirmed(goal)
         latest = goal_execution_state(goal, session_id)

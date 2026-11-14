@@ -37,6 +37,11 @@ class WorkflowRecordingService:
     RecordingError = session.RecordingError
 
     @staticmethod
+    def support() -> dict:
+        """Whether this computer can record a demonstration, and why not."""
+        return session.support()
+
+    @staticmethod
     def start(purpose: str = "workflow") -> session.Recording:
         return session.start(purpose)
 

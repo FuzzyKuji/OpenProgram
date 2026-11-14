@@ -18,7 +18,7 @@
   --meter-track: #ebebef;
   --foreground: var(--text-primary);
   --card: var(--bg-secondary);
-  --font-shell: -apple-system, "Segoe UI", sans-serif;
+  --font-shell: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
   --font-mono: Menlo, Monaco, Consolas, ui-monospace, monospace;
 }
 @media (prefers-color-scheme: dark) {

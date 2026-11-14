@@ -14,7 +14,8 @@ from openprogram.models.providers.schema.strict import fixup_for_strict
 def _fixture(tmp_path, kind):
     path = tmp_path / ("read." + kind)
     if kind == "txt":
-        path.write_text("\n".join(f"line {i}" for i in range(1, 2003)))
+        # Short lines, so the default 2,000 fit in one read's page.
+        path.write_text("\n".join(f"L{i}" for i in range(1, 2003)))
     else:
         writer = PdfWriter()
         font = DictionaryObject({NameObject("/Type"): NameObject("/Font"),

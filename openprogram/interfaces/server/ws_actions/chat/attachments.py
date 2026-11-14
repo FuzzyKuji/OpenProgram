@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import asyncio
 import json
+from openprogram.host._platform.filesystem import replace_file
 
 _log = logging.getLogger(__name__)
 
@@ -39,7 +40,7 @@ def _write_private_json(path, data: dict) -> None:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             fd = -1
             json.dump(data, handle, ensure_ascii=False)
-        os.replace(temp_path, path)
+        replace_file(temp_path, path)
         temp_path = ""
         restrict_to_user(path)
     except (OSError, TypeError):
@@ -288,7 +289,7 @@ def _persist_attachments(session_id: str, incoming: list, text: str) -> str:
     dedup: dict = {}
     try:
         if index_path.exists():
-            loaded = json.loads(index_path.read_text())
+            loaded = json.loads(index_path.read_text(encoding="utf-8"))
             if isinstance(loaded, dict):
                 dedup = loaded
     except Exception:

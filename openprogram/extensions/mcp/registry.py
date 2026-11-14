@@ -301,6 +301,9 @@ async def _stop_and_unregister(name: str) -> None:
         # Defer the import to avoid a cycle: functions._runtime imports
         # nothing from us, but pulling it in at module load time would
         # tie startup ordering tighter than necessary.
-        from openprogram.programs._host.runtime import _registry
+        from openprogram.programs._host.runtime import _registry, mark_unavailable
+        # A conversation that loaded one keeps its definition; a call of it
+        # says the server is disconnected (deferred-tools.html).
+        mark_unavailable(tool_names, f"MCP server '{name}' is disconnected")
         for tname in tool_names:
             _registry.pop(tname, None)

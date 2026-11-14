@@ -1,6 +1,7 @@
 <title>File changes, Review and recovery</title>
 <meta name="description" content="File attribution, version history, Undo, Revert, Rewind, Review scopes, conflicts and recovery storage across App, Web, TUI and runtime.">
 <h1>File changes, Review and recovery</h1>
+<p>A historical rewind marker is shown only beside its anchor message in the loaded history window. An offscreen anchor must not move its marker to the latest message. Pending rewind controls remain at the current end.</p>
 
 <h2 id="model">Undo, Revert, Rewind</h2>
 <table class="stack">
@@ -8,13 +9,30 @@
 <tbody>
 <tr><th scope="row">Scope</th><td>Latest turn on the current branch</td><td>One historical turn</td><td>Suffix of the source branch after the chosen checkpoint</td></tr>
 <tr><th scope="row">Files</th><td>Restored after every file passes preflight</td><td>Restored only with no later same-path dependency and a matching digest</td><td>Target state projected from the journal, applied under a durable intent</td></tr>
-<tr><th scope="row">Conversation</th><td>HEAD and all messages stay</td><td>Unchanged</td><td>A stable target branch is created and activated</td></tr>
-<tr><th scope="row">Branch</th><td>None created or moved</td><td>HEAD stays</td><td>Source ref and HEAD unchanged; later messages extend the target branch</td></tr>
+<tr><th scope="row">Conversation</th><td>HEAD and all messages stay</td><td>Unchanged</td><td>The current branch moves back; its withdrawn suffix is recovery history, not another branch</td></tr>
+<tr><th scope="row">Branch</th><td>None created or moved</td><td>HEAD stays</td><td>The same branch identity and name stay; later messages extend its rewound head</td></tr>
 <tr><th scope="row">Conflict</th><td>Any path mismatch blocks the whole operation</td><td>No automatic reverse merge</td><td>Any unrecoverable item blocks it</td></tr>
-<tr><th scope="row">After</th><td>Revert transaction appended; card shows Reverted; Redo when preflight allows</td><td>Current branch Review folds the revert; Reapply when preflight allows</td><td>Original prompt prefilled; alignment shown</td></tr>
+<tr><th scope="row">After</th><td>Revert transaction appended; card shows Reverted; Redo when preflight allows</td><td>Current branch Review folds the revert; Reapply when preflight allows</td><td>Original prompt prefilled; no workspace-alignment choice</td></tr>
 </tbody>
 </table>
 <p class="note">Turn cards show the applicable Undo or Revert; user checkpoints open a Restore sheet. Redo and Reapply are new transactions, with no linear redo stack. The transcript offers no branching; Copy conversation is in the conversation's ⋯ menu.</p>
+
+<h2 id="shared-workspace-contract">Shared workspace and same-branch rewind</h2>
+<p>A conversation branch records a route through messages, not a private filesystem. Fork and retry retain their existing explicit conversation versions; switching them never restores files, pauses tools or asks which files to use. The model receives a current-workspace note and must reread files before editing. </p>
+<p>Rewind is a different operation: withdraw the selected prompt and its suffix on the current branch, and restore its recorded file changes when code recovery is selected.</p>
+<p>Existing sibling branches and their shared messages remain intact. Withdrawn messages remain in durable recovery storage for Undo and crash recovery, but disappear from branch lists, version navigation, the conversation graph and normal context. </p>
+<p>A later message extends the same named branch. Undo and Redo change the withdrawal view on that same branch; their existing message-only semantics are stated explicitly and do not restore files.</p>
+<p>Recovery must not overwrite later writes by another branch, another session or a human. A code recovery with an unsafe, missing or conflicting file is blocked before any file or conversation change; conversation-only recovery remains an explicit alternative. </p>
+<p>Previews bind the head, target, file states and mode. Duplicate requests replay their recorded outcome; failures roll back and interrupted operations recover before exposure. Existing legacy intents retain their original recovery semantics. Old workspace-alignment flags have no authority to stop a message or tool.</p>
+<table class="stack"><thead><tr><th scope="col">Acceptance path</th><th scope="col">Required outcome</th></tr></thead><tbody>
+<tr><th scope="row">Switch after edits, failed retry, old mismatch flag</th><td>Files unchanged; message and ordinarily permitted tools work; stale read baselines cleared on switch.</td></tr>
+<tr><th scope="row">Rewind then send, including first prompt</th><td>Same branch identity and name; no withdrawn version offered; current file contents match the confirmed recovery.</td></tr>
+<tr><th scope="row">Sibling shares part of withdrawn history</th><td>The sibling and its necessary ancestors survive; only the selected branch is withdrawn.</td></tr>
+<tr><th scope="row">Conflict, stale preview, running writer, archive</th><td>No partial conversation or file change; a specific refusal explains recovery eligibility.</td></tr>
+<tr><th scope="row">Undo, Redo, duplicate request, restart during apply</th><td>Consistent branch visibility, identity and files; recorded transactions determine the outcome.</td></tr>
+</tbody></table>
+
+<p>Branch identity is independent of its head message. When two rewinds converge at one checkpoint or ROOT, each ref retains its name and remains selectable by branch id. Undo marks belong to that identity. Selecting by head alone remains compatible for unambiguous legacy clients.</p>
 
 <h2 id="architecture">Sources of truth</h2>
 <svg class="fig-wide" viewBox="0 0 680 244" role="img" aria-label="Trusted file mutators (write, edit, apply_patch, validated adapters) produce mutation receipts into the mutation journal, which feeds This turn and Current branch Review. Git feeds Workspace Review. Generic Bash and external processes produce no receipt. The history planner reads the journal, the conversation DAG and Git, then writes a durable intent, applies a workspace transaction, and moves HEAD only for conversation modes.">
@@ -290,10 +308,11 @@
 <tbody>
 <tr><th scope="row">Resolve lineage</th><td>Predecessors from HEAD to the target non-root user turn; subtrees only through explicit ownership</td><td>Off the active branch: rejected</td></tr>
 <tr><th scope="row">Target state</th><td>Each prompt that starts a turn has a checkpoint, <code translate="no">.file-recovery/&lt;session&gt;/checkpoints/&lt;user_msg_id&gt;.json</code>: every tracked path to a state, content in shared <code translate="no">blobs/&lt;sha256&gt;</code>. A path it does not list takes the state recorded just before its first later edit. A prompt with no checkpoint (older sessions, steered messages) folds the journal on read, with no data rewrite.</td><td>A failed capture never blocks the tool; the path is <code translate="no">unavailable</code>. A prompt with no usable backup (<code translate="no">evicted</code>, <code translate="no">journal_gap</code>, <code translate="no">no_checkpoint</code>) reports <code translate="no">unavailable</code> for code modes; Conversation only stays.</td></tr>
-<tr><th scope="row">Plan rows</th><td>Each target against the file on disk: <code translate="no">restore</code>, <code translate="no">delete</code> or <code translate="no">skip</code> with a reason and +A &minus;D (1 MiB per file, 3 s budget). Shell, manual, hunk Revert and Undo changes are restored over. Planning writes nothing and runs no crash recovery while a run owns the session.</td><td>Skipped per file, the rest proceeds: <code translate="no">other_session</code> (another session started or finished a trusted write after the target state was read; per-path index of each session's newest write under <code translate="no">mutation-locks/last-writers/</code>), <code translate="no">changed_since_edit</code> (no checkpoint, file no longer matches the journal), <code translate="no">unsafe_path</code>, <code translate="no">parent_missing</code>, <code translate="no">no_backup</code>, <code translate="no">changed_while_reading</code>. A running owned job blocks with <code translate="no">job_running</code>.</td></tr>
+<tr><th scope="row">Plan rows</th><td>Each target against the file on disk: <code translate="no">restore</code>, <code translate="no">delete</code> or <code translate="no">skip</code> with a reason and +A &minus;D (1 MiB per file, 3 s budget). Only paths written by the withdrawn turns are eligible. Later changes outside that range are protected, including shell, manual, hunk Revert and Undo changes. Planning writes nothing and runs no crash recovery while a run owns the session.</td><td>Any skipped row blocks the entire code recovery before mutation: <code translate="no">other_session</code> (another session started or finished a trusted write after the target state was read; per-path index of each session's newest write under <code translate="no">mutation-locks/last-writers/</code>), <code translate="no">changed_since_edit</code> (the file no longer matches the recorded writes, or those writes have an intervening change), <code translate="no">unsafe_path</code>, <code translate="no">parent_missing</code>, <code translate="no">no_backup</code>, <code translate="no">changed_while_reading</code>. A running owned job blocks with <code translate="no">job_running</code>.</td></tr>
+<tr><th scope="row">Other branches</th><td>A checkpoint names its turns (<code translate="no">turn_ids</code>); a file's state before a turn's first edit is recorded in that turn's checkpoint. The target is the listing read earliest in the range. For a path another prompt's turn also wrote, it is the earliest listing read after that write and before the range's own first write (<code translate="no">first_sequence</code> in the turn's journal record). A write a committed rewind took back (<code translate="no">restores_through</code> on its intent) is not counted.</td><td>That write is later than the range's own first write, or no listing was read between the two: <code translate="no">changed_since_edit</code>. See <a href="../execution/control.html#branch-rewind">two branches</a>.</td></tr>
 <tr><th scope="row">Prepare intent</th><td>Holding the run slot, save the current content of each planned path as a blob, so a change no journal saw can still roll back; persist plan id, expected head, before and target images, mode, skipped rows; idempotent</td><td>Plan rebuilt under the workspace lock; a different hash returns <code translate="no">stale_plan</code>, zero writes</td></tr>
 <tr><th scope="row">Apply</th><td>Workspace lock; per-action state persisted; atomic replace; delete only on matching digest</td><td>Rollback only if the digest still equals what this transaction applied; otherwise <code translate="no">recovery_required</code>, external content kept</td></tr>
-<tr><th scope="row">Branch</th><td>Stable target ref first, then activate with expected-head compare-and-set. A pre-first-turn target uses the persistent ROOT.</td><td>Files restored per intent; source and active branch stay</td></tr>
+<tr><th scope="row">Branch</th><td>Move the current branch with expected-head compare-and-set. The branch identity, withdrawal visibility and recovery metadata commit together. A pre-first-turn target uses the persistent ROOT.</td><td>Files restored per intent; source and active branch stay</td></tr>
 <tr><th scope="row">Finalize</th><td>Append transaction and navigation events; old nodes not marked; writer epoch advances so old tasks cannot write back</td><td>Startup finishes or rolls back open intents, never guesses</td></tr>
 </tbody>
 </table>
@@ -302,8 +321,8 @@
 <table class="stack" id="recovery-modes">
 <thead><tr><th scope="col">Mode</th><th scope="col">Files</th><th scope="col">Conversation</th><th scope="col">Next turn</th></tr></thead>
 <tbody>
-<tr><th scope="row">Code and conversation</th><td>Restored</td><td>Target branch activated after commit; prompt prefilled; source ref and HEAD kept</td><td>Normal</td></tr>
-<tr><th scope="row">Conversation only (<code translate="no">conversation</code>)</th><td>Kept</td><td>HEAD compare-and-set to the message before the target; later messages stay as a branch</td><td>Told files were not reverted; send not blocked</td></tr>
+<tr><th scope="row">Code and conversation</th><td>Restored</td><td>Current branch rewound after commit; prompt prefilled; withdrawn messages remain only as recovery history</td><td>Normal</td></tr>
+<tr><th scope="row">Conversation only (<code translate="no">conversation</code>)</th><td>Kept</td><td>Current branch HEAD compare-and-set to the message before the target; later messages are withdrawn, not exposed as a branch</td><td>Told files were not reverted; send not blocked</td></tr>
 <tr><th scope="row">Code only (<code translate="no">code</code>)</th><td>Restored</td><td>Kept; the transaction compares and sets HEAD to itself</td><td>Told files went back without the conversation</td></tr>
 </tbody>
 </table>
@@ -314,9 +333,9 @@
 <tbody>
 <tr><th scope="row">Rewind edge</th><td>Session meta <code translate="no">rewind_edges</code>, written with the HEAD move. Marks computed for the current chain: <code translate="no">pending</code> until the next send, then <code translate="no">back</code>; <code translate="no">forward</code> after Undo.</td></tr>
 <tr><th scope="row">Undo, Redo</th><td>Compare-and-set HEAD along the edge while holding the run slot. Messages only.</td></tr>
-<tr><th scope="row">Note to the model</th><td>Session meta <code translate="no">pending_rewind_note</code>, read once when the next turn builds its system prompt: <code translate="no">conversation_only</code>, <code translate="no">restored</code>, <code translate="no">partial</code>, <code translate="no">code_only</code>, <code translate="no">undo_kept_files</code>.</td></tr>
+<tr><th scope="row">Note to the model</th><td>Session meta <code translate="no">pending_rewind_note</code>, read once when the next turn builds its system prompt: <code translate="no">conversation_only</code>, <code translate="no">restored</code>, <code translate="no">branch_kept_files</code>, <code translate="no">partial</code> (an earlier conversation-only rewind still warns about files), <code translate="no">code_only</code>, <code translate="no">undo_kept_files</code>.</td></tr>
 <tr><th scope="row">Read tracking</th><td>Rewind, Undo and Redo drop the session's read baselines; the next edit reads the file first.</td></tr>
-<tr><th scope="row">Copying a session</th><td><code translate="no">branch_session</code> carries checkpoints and blobs for the copied messages and records source and mutation sequence in <code translate="no">origin.json</code>, so the source's earlier writes do not count as another session.</td></tr>
+<tr><th scope="row">Copying a session</th><td><code translate="no">branch_session</code> carries checkpoints, blobs and write provenance for the copied messages and records source and mutation sequence in <code translate="no">origin.json</code>, so the source's earlier writes do not count as another session.</td></tr>
 <tr><th scope="row">Retention</th><td>100 turn directories and 100 checkpoints per session, counted separately. <code translate="no">intents</code>, <code translate="no">intent-locks</code>, <code translate="no">checkpoints</code>, <code translate="no">blobs</code> are never turn directories. Removed turn ids go to <code translate="no">evicted-turns.json</code>; a blob goes when no kept checkpoint or open intent refers to it.</td></tr>
 </tbody>
 </table>
@@ -326,7 +345,7 @@
 <table class="stack fixed">
 <thead class="sr"><tr><th scope="col">Object</th><th scope="col">Purpose</th></tr></thead>
 <tbody>
-<tr><th scope="row">Branch</th><td>Stable id, HEAD, <code translate="no">head_version</code>, writer epoch; sessions store <code translate="no">active_branch_id</code>. A source HEAD never moves backward; browsing moves only cursors.</td></tr>
+<tr><th scope="row">Branch</th><td>Stable id, HEAD, <code translate="no">head_version</code>, writer epoch; sessions store <code translate="no">active_branch_id</code>. Explicit Rewind moves the current branch HEAD backward; normal branch navigation never restores files.</td></tr>
 <tr><th scope="row">Checkpoint</th><td>The recovery destination, without duplicating file lists</td></tr>
 <tr><th scope="row">Change set</th><td>Producer and origin turn, actor. Cards group by origin and keep producers.</td></tr>
 <tr><th scope="row">Plan</th><td>Read-only preview; plan hash prevents preview-to-confirm races</td></tr>
@@ -340,13 +359,13 @@
 <thead><tr><th scope="col">Scenario</th><th scope="col">Meaning</th><th scope="col">Files</th></tr></thead>
 <tbody>
 <tr><th scope="row">Branch from a result</th><td>Target branch created and activated; source HEAD unchanged</td><td>Unchanged, “Files stay as they are”</td></tr>
-<tr><th scope="row">Fork into a new task</th><td>Source task and HEAD kept; conversation or checkpoint files copied</td><td>Git prefers isolated worktrees. Non-Git never copies directories silently.</td></tr>
-<tr><th scope="row">Checkout sibling</th><td>Switches the conversation lineage; one HEAD compare-and-set records the mismatch</td><td>Before the next mutating turn: Keep current files or Restore branch code, both bound to source and target</td></tr>
+<tr><th scope="row">Fork into a new task</th><td>Source task and HEAD kept; conversation history copied</td><td>Files stay shared unless the user explicitly requests filesystem isolation.</td></tr>
+<tr><th scope="row">Checkout sibling</th><td>Selects another conversation lineage, without changing files or demanding file alignment</td><td>All ordinary branches share the current workspace. Clear read baselines and tell the model that files were not restored. Reads and writes follow normal permissions and current-file checks.</td></tr>
 <tr><th scope="row">Owned child</th><td>By relation, <code translate="no">creates_agent</code>, origin turn; own producer and change sets</td><td>Running blocks parent restore. Finished joins the closure.</td></tr>
 <tr><th scope="row">Independent actor</th><td>Background terminals, job runners, channels, schedulers</td><td>Running blocks same-workspace restore; writer epoch stops old write-backs</td></tr>
 <tr><th scope="row">Existing peer, cross-session</th><td>Linked, not owned</td><td>Not modified; listed in impact; overlap blocks code recovery</td></tr>
 <tr><th scope="row">Worktree child</th><td>Independent state</td><td>Parent Undo or Rewind never touches it; a merge is its own transaction</td></tr>
-<tr><th scope="row">Sibling branch</th><td>Outside Rewind</td><td>Journals unchanged; alignment recalculated on return</td></tr>
+<tr><th scope="row">Sibling branch</th><td>Outside Rewind</td><td>Journals unchanged; current files shared on return</td></tr>
 </tbody>
 </table>
 <details>
@@ -367,7 +386,7 @@
 <thead><tr><th scope="col">Situation</th><th scope="col">Result</th></tr></thead>
 <tbody>
 <tr><th scope="row">Later edit to the same file: Revert</th><td class="deny">No reverse merge</td></tr>
-<tr><th scope="row">Later edit to the same file: Rewind</th><td class="review">Whole file restored over shell, manual and own changes; skipped and reported if another session changed it later</td></tr>
+<tr><th scope="row">Later edit to the same file: Rewind</th><td class="review">Later changes outside the withdrawn range block the complete code recovery; conversation-only remains available</td></tr>
 <tr><th scope="row">Plan changed after confirmation</th><td class="deny"><code translate="no">stale_plan</code>, zero writes</td></tr>
 <tr><th scope="row">Running turn or background task</th><td class="deny">No confirmable plan</td></tr>
 <tr><th scope="row">Symlink, hardlink, special file</th><td class="deny">Not followed or overwritten; path and reason shown</td></tr>
@@ -391,7 +410,7 @@
 <tr><th scope="row">Conversation ⋯ menu</th><td>Copy conversation</td><td>History only; files stay</td><td>Implicit restore</td></tr>
 <tr><th scope="row">Changes tab</th><td>Three scopes; file list and single-file diff; source labels; counts over the full filtered result</td><td>Unified or side-by-side, line comments, Open file, Reveal. A scope or filter change clears cursor, selection and diff.</td><td>Turn Undo in Workspace; client-only filtering</td></tr>
 <tr><th scope="row">Impact sheet</th><td>Prompt, turn and file counts, branch result, mode, conflicts</td><td>Confirm; cancel has no effect</td><td>Force while blocked</td></tr>
-<tr><th scope="row">Alignment banner</th><td>Branch and workspace mismatch</td><td>Keep current files, Restore branch code</td><td>Warn and mutate anyway</td></tr>
+<tr><th scope="row">Branch switch</th><td>Conversation changes; files stay</td><td>Continue talking and working on current files</td><td>File-alignment prompts or tool restrictions caused by branch history</td></tr>
 </tbody>
 </table>
 
@@ -512,7 +531,7 @@
 <thead><tr><th scope="col">System</th><th scope="col">Confirmed</th><th scope="col">Taken</th><th scope="col">Not taken or unknown</th></tr></thead>
 <tbody>
 <tr><th scope="row">Claude Code <a href="https://code.claude.com/docs/en/checkpointing">checkpoints</a> (<a href="https://code.claude.com/docs/en/agent-sdk/file-checkpointing">SDK</a>)</th><td>Per prompt, tracks Write, Edit, NotebookEdit, not Bash. Restore code, conversation or both. Other subagent changes not restored except foreground <code translate="no">context: fork</code>. Non-regular paths skipped with warnings. 100 per session; cleaned by <code translate="no">cleanupPeriodDays</code>, default 30.</td><td>Prompt checkpoints, separate options, explicit unavailable</td><td>We block or roll back on any path failure; skipped paths cannot succeed</td></tr>
-<tr><th scope="row"><a href="https://code.claude.com/docs/en/sessions">Fork</a>, <a href="https://code.claude.com/docs/en/vs-code">VS Code</a></th><td><code translate="no">/branch</code> copies conversation only</td><td>Same-task Branch plus source-preserving Fork, with worktrees in Git</td><td>Undisclosed reuse of current files after fork</td></tr>
+<tr><th scope="row"><a href="https://code.claude.com/docs/en/sessions">Fork</a>, <a href="https://code.claude.com/docs/en/vs-code">VS Code</a></th><td><code translate="no">/branch</code> copies conversation only</td><td>Explicit conversation Branch and source-preserving Fork share current files; worktree isolation is a separate explicit action</td><td>Undisclosed reuse of current files after fork</td></tr>
 <tr><th scope="row"><a href="https://code.claude.com/docs/en/desktop">Desktop</a>, <a href="https://code.claude.com/docs/en/web-quickstart">Web</a></th><td>File list and single-file diff, line comments; Web also Create PR</td><td>Separate Review, on-demand diffs, line feedback</td><td>Branding, dimensions, PR controls. Review code on Web unconfirmed.</td></tr>
 <tr><th scope="row"><a href="https://github.com/openai/codex/blob/main/codex-rs/core/src/turn_diff_tracker.rs">Codex turn diff</a></th><td>In-memory aggregator of exact deltas for the current turn; inexact data invalidates it</td><td>Exact deltas as attribution; we add durable receipts and blobs</td><td>A durable Undo journal is not claimed for Codex</td></tr>
 <tr><th scope="row"><a href="https://github.com/openai/codex/blob/main/codex-rs/app-server-protocol/src/protocol/v2/thread.rs">Codex history</a>, <a href="https://github.com/openai/codex/blob/main/codex-rs/tui/src/app_backtrack.rs">backtrack</a></th><td><code translate="no">thread/fork</code> copies history; <code translate="no">thread/rollback</code> deprecated; <code translate="no">thread/revert</code> conversation only</td><td>Source-preserving forks, immutable history</td><td>Unpublished per-turn file Undo unknown</td></tr>
@@ -532,7 +551,7 @@
 <tr><th scope="row">Undo, Revert</th><td><code translate="no">conversation/revert.py</code>, workspace lock, intent</td><td>Later same-file edits: zero writes. Mismatched digests prevent deletion. Mid-operation I/O never partly succeeds.</td><td>Multi-turn HEAD moves</td></tr>
 <tr><th scope="row">Rewind</th><td><code translate="no">conversation/rewind.py</code>, head API, intent recovery</td><td>One file across three turns; file failure keeps HEAD; siblings unaffected; stale plans write nothing</td><td>Compaction, DAG schema</td></tr>
 <tr><th scope="row">Review</th><td><code translate="no">turn_files/</code>, metadata, center tab, card</td><td>History does not query per message; Workspace excludes ignored files; one bounded diff mounted; consistent provenance. Plain replies mount no card; empty hides; failures retry.</td><td>Third pane, new window</td></tr>
-<tr><th scope="row">Alignment, ownership</th><td>Checkout, active-lineage fold, ownership</td><td>Mutation never starts silently after a mismatch. Running owned children block parent restore; finished ones join. Peers and worktrees untouched.</td><td>Workspace cloning</td></tr>
+<tr><th scope="row">Shared workspace, ownership</th><td>Checkout, active-lineage fold, ownership</td><td>Switching permits normal work on current files, with rereads before edits. Running owned children block parent restore; finished ones join. Peers and worktrees untouched.</td><td>Workspace cloning</td></tr>
 <tr><th scope="row">Query snapshots</th><td><code translate="no">files/</code> query, <code translate="no">FileTree</code></td><td>Search finds unexpanded files. Directory changes after page one cannot enter old cursors; cross-project cursors rejected. Concurrent create or rename restarts in stable order.</td><td>Full-text search, layout</td></tr>
 <tr><th scope="row">Request identity</th><td>File dispatch, <code translate="no">ws-request.ts</code>, idempotency</td><td>Out-of-order responses reach the right caller. Missing <code translate="no">request_id</code> rejected. Retries replay; different fingerprints conflict.</td><td>Non-file protocols</td></tr>
 <tr><th scope="row">Cache, drafts</th><td><code translate="no">files-shared.ts</code>, IndexedDB, tab lifecycle</td><td>Only clean LRU entries evicted. Dirty drafts survive reload, tab and project changes. Quota failure keeps old drafts atomically and shows a notice.</td><td>Collaboration, remote sync</td></tr>
@@ -549,10 +568,12 @@
 <table class="stack fixed">
 <thead class="sr"><tr><th scope="col">Item</th><th scope="col">State</th></tr></thead>
 <tbody>
-<tr><th scope="row">Built</th><td>Journal, Undo, Revert, code-and-conversation Rewind, three Review scopes, checkout alignment, query snapshots, request identity, durable mutations, bounded cache, drafts, unified file window, History, format adapters, optional Office install, document publication</td></tr>
+<tr><th scope="row">Built</th><td>Journal, Undo, Revert, code-and-conversation Rewind, three Review scopes, query snapshots, request identity, durable mutations, bounded cache, drafts, unified file window, History, format adapters, optional Office install, document publication</td></tr>
 <tr><th scope="row" id="pdf-reading-status">PDF</th><td>Reader, annotations and runtime compatibility built</td></tr>
 <tr><th scope="row" id="markdown-reading-status">Markdown</th><td>Rendering and heading navigation built; installed-App acceptance pending</td></tr>
 <tr><th scope="row">Not built</th><td>Project unlink and its draft cleanup; Office semantic diffs; remote conditional storage</td></tr>
 </tbody>
 </table>
 <p class="next"><a href="../../ui/chat/chat-turn-visual-spec.html">Chat turn visual specification</a></p>
+
+<p class="note" id="shared-workspace-status">Shared workspace and same-branch rewind are implemented. Independent specification and quality reviews and the affected verification suite pass.</p>

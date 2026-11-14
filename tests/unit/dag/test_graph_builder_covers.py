@@ -295,3 +295,19 @@ def test_delivered_message_preview_drops_the_receipt_and_names_the_sender(store)
 
     assert row["preview"] == "Done: 3 files."
     assert row["message_from"] == "PDF agent"
+
+
+
+def test_internal_check_in_branch_is_hidden_but_reports_and_user_words_remain(store):
+    _seed(store, "s1", 1)
+    store.append_message("s1", {"id":"check", "role":"user", "content":"Always-on check-in.",
+        "predecessor":"a0", "speaker_kind":"runtime", "speaker_id":"runtime/always_on"})
+    store.append_message("s1", {"id":"check_reply", "role":"assistant", "content":"nothing new", "predecessor":"check"})
+    store.append_message("s1", {"id":"check_tool", "role":"tool", "content":"internal", "caller":"check_reply"})
+    store.append_message("s1", {"id":"report", "role":"assistant", "content":"useful report", "predecessor":"a0",
+        "speaker_kind":"runtime", "speaker_id":"runtime/always_on", "always_on_report":True})
+    store.append_message("s1", {"id":"person", "role":"user", "content":"Always-on check-in.", "predecessor":"a0"})
+    ids = {row["id"] for row in build_session_graph("s1", "a0")}
+    assert not ids & {"check", "check_reply", "check_tool"}
+    assert {"u0", "a0", "report", "person"} <= ids
+    assert {"check", "check_reply", "check_tool"} <= {row["id"] for row in store.get_messages("s1")}

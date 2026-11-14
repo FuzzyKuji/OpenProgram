@@ -169,10 +169,15 @@ def _manifests(root: Path) -> list[dict]:
     return sorted(found, key=lambda item: str(item["id"]), reverse=True)
 
 
-def _git(root: Path) -> str | None:
-    for base in sorted((root / "bases").glob("*/git/bin/git*")):
-        if base.is_file():
-            return str(base)
+def _git(root: Path, *, windows: bool = os.name == "nt") -> str | None:
+    """A base's own Git, where ``install_seed.py`` and the version itself look.
+
+    The bundled Git for Windows keeps its command in ``cmd``; it has no ``bin``.
+    """
+    relative = "git/cmd/git.exe" if windows else "git/bin/git"
+    for base in sorted((root / "bases").glob("*")):
+        if (base / relative).is_file():
+            return str(base / relative)
     return shutil.which("git")
 
 

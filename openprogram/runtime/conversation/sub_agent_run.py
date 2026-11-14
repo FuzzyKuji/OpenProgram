@@ -135,7 +135,7 @@ def _execute_agent_turn(
     """
     from openprogram.runtime.context.session_db import default_db
     from openprogram.runtime.agent.turn_request import TurnRequest
-    from openprogram.runtime.conversation.production_driver import CanonicalAgentAdapter
+    from openprogram.runtime.conversation.production_driver import CanonicalAgentAdapter, STOPPED_BEFORE_START
 
     if source in {"self_update_verify", "self_update_diagnose", "self_update_repair"} and (
         profile_snapshot is None or not isinstance(model_override, str)
@@ -190,36 +190,18 @@ def _execute_agent_turn(
             error=f"session {session_id!r} not found",
         )
 
-    # A same-session spawn runs on the session's picked model, exactly
-    # like a chat turn: the web model picker stores
-    # provider_override/model_override in the session meta
-    # (the Server chat turn composes the same string). Without this,
-    # spawned turns fell back to the agent profile's default provider —
-    # a goal decision could fail on a dead default while every chat
-    # turn of the session ran fine on the picked model.
-    if model_override is None:
-        try:
-            meta = (store.get_session(session_id) or {}).get("extra_meta") or {}
-            if isinstance(meta, str):
-                import json as _json
-                meta = _json.loads(meta)
-            _prov = meta.get("provider_override")
-            _model = meta.get("model_override")
-            if _prov and _model:
-                model_override = f"{_prov}/{_model}"
-            elif _model:
-                model_override = _model
-        except Exception:
-            # No pinned model: the sub-agent resolves its own default.
-            _log.debug("model override not read from session %s", session_id, exc_info=True)
+    # Canonical admission freezes branch/parent model and tool intent. Do not
+    # consult the page-selected session model before that boundary.
 
     # Clean start: pass ``history_override=[]`` so the dispatcher's
     # context assembly doesn't pull in any conversation history.
     # Inherit: history is whatever leads to ``predecessor``, which the
     # dispatcher already resolves from ``predecessor``.
     # A sub-agent works under its parent's mode and rules, so Ask means Ask
-    # all the way down; nobody attends the spawned lane, so what would ask
-    # there is refused instead of waiting.
+    # all the way down. A Job admitted for it also takes its own Agent's
+    # narrowing and, in the foreground, asks through its caller's card
+    # (jobs/input.py); this direct path asks nobody, so what would ask is
+    # refused instead of waiting.
     from openprogram.runtime.agent.turn_request import get_turn_request
     from openprogram.runtime.permissions.authority import runtime_authority
     from openprogram.runtime.permissions.lifecycle import current_permission_request
@@ -264,12 +246,16 @@ def _execute_agent_turn(
             user_message_id=req.user_msg_id,
             config_snapshot_ref=f"agent-spawn:{session_id}",
         )
-        _active, turn = asyncio.run(adapter.activate(admission))
+        activated = asyncio.run(adapter.activate(admission))
     except Exception as e:  # noqa: BLE001
         return AgentTurnResult(
             failed=True,
             error=f"{type(e).__name__}: {e}",
         )
+    if activated is None:
+        # A stop reached the spawned turn before it ran; it ended cancelled.
+        return AgentTurnResult(failed=True, error=STOPPED_BEFORE_START)
+    _active, turn = activated
     if turn is None:
         return AgentTurnResult(
             failed=True,
@@ -322,8 +308,14 @@ def run_agent_turn(
     source: str = "agent_spawn",
     profile_snapshot: Optional[dict[str, Any]] = None,
     response_format: Optional[dict[str, Any]] = None,
+    job_id: Optional[str] = None,
+    worktree_id: Optional[str] = None,
 ) -> AgentTurnResult:
-    """Durably admit one agent turn and wait for its Job result."""
+    """Durably admit one agent turn and wait for its Job result.
+
+    ``worktree_id``: the run's own worktree (``agent(isolation=
+    "worktree")``); its tools work there. ``job_id`` lets the caller mint
+    the id first so the worktree record can name its job."""
     from openprogram.runtime.context.session_db import default_db
     if default_db().get_session(session_id) is None:
         return AgentTurnResult(
@@ -336,7 +328,7 @@ def run_agent_turn(
 
     runner = get_runner()
     borrow_current_claim = runner.can_borrow_current_claim(session_id)
-    job_id = mint_job_id()
+    job_id = job_id or mint_job_id()
     direct_lock = WorkerLock()
     owns_worker = False
     claim_scope = None
@@ -380,9 +372,14 @@ def run_agent_turn(
             on_accepted=on_accepted,
             attach_pointer_id=attach_pointer_id,
             borrow_current_claim=borrow_current_claim,
+            worktree_id=worktree_id,
         )
         if borrow_current_claim or owns_worker:
             job = runner.await_job(job_id)
+            while _asking_the_person(runner, job):
+                # Its question is on the caller's card: wait for the answer
+                # and the run it resumes (lifecycle.spawn_question_route).
+                job = _await_answer(runner, job_id)
         else:
             def take_over_if_worker_exited() -> None:
                 nonlocal owns_worker, claim_scope
@@ -403,6 +400,8 @@ def run_agent_turn(
             job = runner.await_job_durable(
                 job_id, on_poll=take_over_if_worker_exited,
             )
+            while _asking_the_person(runner, job):
+                job = _await_answer(runner, job_id, on_poll=take_over_if_worker_exited)
             if not owns_worker:
                 runner.retire_external_waiter(job_id)
     finally:
@@ -430,6 +429,47 @@ def run_agent_turn(
         failed=job.status != JobStatus.COMPLETED,
         error=job.error,
     )
+
+
+#: How often a caller waiting on a sub-agent's question looks again.
+ANSWER_POLL_S = 0.2
+
+
+def _asking_the_person(runner, job) -> bool:
+    """Whether a waited-on sub-agent stopped at a question its caller's
+    conversation shows (an approval card), rather than for good."""
+    from openprogram.runtime.jobs.types import is_terminal
+    if job is None or is_terminal(job.status):
+        return False
+    stopped = runner.stopped_execution(job.id)
+    if (stopped is None or stopped.status.value != "paused"
+            or stopped.reason_code != "wait_open"):
+        return False
+    try:
+        stored = runner._execution_store.get_job_agent_input(job.id) or {}  # noqa: SLF001
+    except Exception:  # noqa: BLE001 - unreadable input: report the pause as before
+        return False
+    return bool((stored.get("turn_request") or {}).get("asks_through"))
+
+
+def _await_answer(runner, job_id: str, *, on_poll=None):
+    """Wait until the person answers and the sub-agent runs on, then wait for it again.
+
+    The answer resumes the paused execution through the runner's own queue
+    (``JobRunner._queue_wait_resume``); a stop of the caller cancels the
+    sub-agent with it, which ends this wait too.
+    """
+    import time as _time
+    while True:
+        job = runner.get_job(job_id)
+        if not _asking_the_person(runner, job):
+            break
+        if on_poll is not None:
+            on_poll()
+        _time.sleep(ANSWER_POLL_S)
+    if job is None:
+        return None
+    return runner.await_job_durable(job_id, on_poll=on_poll)
 
 
 def _attach_node(store, session_id: str, node_id: Optional[str]):
@@ -645,6 +685,7 @@ def run_agent_turn_async(
     defer_dispatch: bool = False,
     resume_deferred: bool = False,
     message_origin: Optional[str] = None,
+    worktree_id: Optional[str] = None,
 ) -> str:
     """Submit an agent turn to the job runner, return ``job_id``.
 
@@ -691,4 +732,5 @@ def run_agent_turn_async(
         defer_dispatch=defer_dispatch,
         resume_deferred=resume_deferred,
         message_origin=message_origin,
+        worktree_id=worktree_id,
     )

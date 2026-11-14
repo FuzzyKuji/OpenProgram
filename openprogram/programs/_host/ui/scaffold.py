@@ -57,10 +57,10 @@ def create(path: str, app_id: str, title: str) -> dict:
                 'required': ['text', 'version'], 'additionalProperties': False}, 'output': {'type': 'object'}},
         }}
     (target / 'backend').mkdir()
-    (target / 'backend/__init__.py').write_text('')
-    (target / 'backend/operations.py').write_text(BACKEND)
+    (target / 'backend/__init__.py').write_text('', encoding="utf-8")
+    (target / 'backend/operations.py').write_text(BACKEND, encoding="utf-8")
     (target / 'ui').mkdir()
-    (target / 'ui/index.html').write_text(UI.format(title=html.escape(title)))
-    (target / 'application.json').write_text(json.dumps(definition, indent=2) + '\n')
+    (target / 'ui/index.html').write_text(UI.format(title=html.escape(title)), encoding="utf-8")
+    (target / 'application.json').write_text(json.dumps(definition, indent=2) + '\n', encoding="utf-8")
     return {'path': str(target), 'application': definition,
             'next': 'Review package, then POST /api/applications/install with path and trust=true.'}

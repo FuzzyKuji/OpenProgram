@@ -51,6 +51,7 @@ import {
 } from "../animated-icons";
 import { FileTree } from "../files/tree/file-tree";
 import { RunningPanel } from "./running/running-panel";
+import { PANEL_SNAP_WIDTHS } from "./running/agent-chart-model";
 import { useCenterTabs } from "@/lib/tabs/center-tabs-store";
 import { resourceSessionId } from "@/lib/chat/resources/session-resources";
 import { useCurrentProject } from "@/lib/files/files-shared";
@@ -92,11 +93,14 @@ export function RightSidebar() {
   } = useResizableRail({
     open,
     minWidth: 240,
-    maxWidth: 720,
-    defaultWidth: 288,
+    // A drag rests where one, two or three columns of an Agent's time chart
+    // fit whole (288, 544, 800); the first is the default.
+    maxWidth: PANEL_SNAP_WIDTHS[PANEL_SNAP_WIDTHS.length - 1],
+    defaultWidth: PANEL_SNAP_WIDTHS[0],
+    snapWidths: PANEL_SNAP_WIDTHS,
     direction: -1,
     storageKey: "openprogram.right-sidebar-width",
-    maxWindowShare: 0.45,
+    maxWindowShare: 0.5,
   });
   // Animated nav icons (pqoqubbw/icons), driven from each row's / the
   // toggle button's hover.

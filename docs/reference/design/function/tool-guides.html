@@ -16,7 +16,7 @@
 <tr><th scope="row"><code translate="no">text</code></th><td>The guide, or a function returning it (platform variants, lists read from code)</td></tr>
 <tr><th scope="row"><code translate="no">when(args)</code></th><td>Calls an <code translate="no">included</code> or <code translate="no">on_error</code> guide applies to; for <code translate="no">lookup</code>, whether it is in the index</td></tr>
 <tr><th scope="row"><code translate="no">required_for(args)</code></th><td>Calls that may not run until the guide is known</td></tr>
-<tr><th scope="row"><code translate="no">activates</code></th><td>Deferred tools the guide teaches; delivery loads their schemas, as <code translate="no">tool_search</code> would</td></tr>
+<tr><th scope="row"><code translate="no">activates</code></th><td>Deferred tools the guide teaches; delivery ends the guide with a line naming them and the <code translate="no">tool_search select:</code> call that loads them (<a href="deferred-tools.html#activation">Deferred tools</a>)</td></tr>
 </tbody>
 </table>
 <table class="stack">
@@ -35,7 +35,7 @@
 <li><code translate="no">_run_loop</code> opens a view (<code translate="no">guides.begin_loop</code>). Outside a loop guides do nothing: direct Python calls and tests see plain results.</li>
 <li>Before each model request, <code translate="no">_stream_assistant_response</code> records the text being sent (<code translate="no">guides.observe_request</code>).</li>
 <li>Before a call is decided, <code translate="no">prechecks.call_problem</code> returns <code translate="no">GUIDE_REQUIRED</code> if a <code translate="no">required_for</code> guide is unknown: an ordinary tool error, no approval card. The model reads the attached guide and calls again.</li>
-<li>When a call ends, <code translate="no">_rewrite_tool_result</code> (<code translate="no">guides.attach</code>) puts due guides in front of the result, each wrapped in <code translate="no">&lt;guide name="…"&gt;</code>.</li>
+<li>When a call ends, <code translate="no">_rewrite_tool_result</code> (<code translate="no">guides.attach</code>) records due guides, each wrapped in <code translate="no">&lt;guide name="…"&gt;</code>, on the result's attachment (<code translate="no">details["attachment"]</code>), not in the tool's own text; they are sent after the group of results and counted as part of the request's text (<a href="../context/overview.html#cross-turn-tool-context">Tool output</a>).</li>
 </ol>
 <p>A guide is <strong>known</strong> while its marker is in the last request's text, or it was delivered since. No ledger: compaction, microcompaction, a worker restart or a fresh agent removes the marker, and the next call that needs the guide receives it. An agent whose prompt already holds a marked guide is not sent it again.</p>
 

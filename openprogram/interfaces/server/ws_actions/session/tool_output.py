@@ -180,6 +180,33 @@ def _truncate_tool_outputs_for_wire(messages: list[dict]) -> list[dict]:
     return output
 
 
+# The most of a saved whole output one request returns; a longer one says
+# where the rest is.
+FULL_OUTPUT_MAX_CHARS = 1_000_000
+
+
+def _whole_output(row: dict):
+    """A tool row's whole output: the file a bounded result saved
+    (``details.output.full_path``, ``tool_dispatch._as_stored``), which
+    holds the tool's own text without the note written for the model, or
+    the row's text when it has none or the file is gone."""
+    details = row.get("details") if isinstance(row.get("details"), dict) else {}
+    output = details.get("output") if isinstance(details.get("output"), dict) else {}
+    path = output.get("full_path")
+    if isinstance(path, str) and path:
+        try:
+            with open(path, encoding="utf-8", errors="replace") as stream:
+                text = stream.read(FULL_OUTPUT_MAX_CHARS + 1)
+        except OSError:
+            text = None
+        if text is not None:
+            if len(text) > FULL_OUTPUT_MAX_CHARS:
+                text = (text[:FULL_OUTPUT_MAX_CHARS]
+                        + f"\n[... the rest is in {path} ...]")
+            return text
+    return row.get("content", "")
+
+
 async def handle_get_full_tool_output(ws, cmd: dict) -> None:
     """Return one persisted tool node's untruncated output."""
     from openprogram.runtime.context.session_db import default_db
@@ -213,7 +240,7 @@ async def handle_get_full_tool_output(ws, cmd: dict) -> None:
     if row is None:
         data["error"] = "tool output not found"
     else:
-        data["result"] = row.get("content", "")
+        data["result"] = _whole_output(row)
     await ws.send_text(json.dumps({
         "type": "full_tool_output",
         "data": data,

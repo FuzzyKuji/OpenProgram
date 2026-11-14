@@ -187,6 +187,18 @@ def test_dispatcher_sends_exactly_what_the_assembler_produced(
                              tools=tools, **kw)
 
     monkeypatch.setattr(_budget.BudgetAllocator, "allocate", _spy)
+    # The conversation's own turn keeps tools its profile does not list
+    # (the browser screen tool, refused without a Page), so the assembler
+    # is checked against the inputs this turn handed it.
+    assembled: list = []
+    orig_build = C.build_system_prompt
+
+    def _build_spy(*args, **kwargs):
+        out = orig_build(*args, **kwargs)
+        assembled.append((args, kwargs, out))
+        return out
+
+    monkeypatch.setattr(C, "build_system_prompt", _build_spy)
 
     sink: list = []
     _run_turn("hi", sink)
@@ -196,8 +208,12 @@ def test_dispatcher_sends_exactly_what_the_assembler_produced(
     assert budgeted, "budget never ran"
     # The engine budgeted the exact string that shipped.
     assert budgeted[0] == wire
-    # And that string is the assembler's own output for this turn.
-    assert wire == C.build_system_prompt(profile, tools=None)
+    # And that string is the assembler's own output for this turn, the same
+    # again when assembled from the same inputs.
+    assert assembled, "the assembler never ran"
+    args, kwargs, out = assembled[0]
+    assert args[0] == profile
+    assert wire == out == orig_build(*args, **kwargs)
 
 
 def test_engine_budgets_the_prompt_it_was_handed():
@@ -314,6 +330,18 @@ def fake_prefetch(monkeypatch: pytest.MonkeyPatch):
         def system_prompt(self, *, tier=None): return ""
         def write(self, *a, **kw): return None
     monkeypatch.setattr("openprogram.state.memory.get_backend", lambda: _Provider())
+    # The execution wrapper and the streaming read check consult the saved
+    # Agent independently of D._load_agent_profile. Keep their real policy
+    # checks enabled, but give this fake backend a matching, isolated policy.
+    from openprogram.runtime.agent_registry import manager
+    main = manager.AgentSpec(
+        id="main", memory_policy_epoch=0,
+        memory={"mode": "read_write", "read_spaces": ["legacy_global"],
+                "write_space": "legacy_global"},
+    )
+    original_get = manager.get
+    monkeypatch.setattr(manager, "get", lambda agent_id: main if agent_id == "main" else original_get(agent_id))
+    monkeypatch.setattr("openprogram.state.memory.is_enabled", lambda: True)
 
 
 def test_prefetch_renders_in_the_user_message_not_the_system_prompt(
@@ -357,7 +385,9 @@ def test_a_turn_with_its_own_recall_query_recalls_by_it(
         ))
     written = next(row for row in tmp_db.get_messages("recall1") if row.get("role") == "user")
     assert "fixed instructions" not in str(written.get("memory_prefetch"))
-    assert (recalled in written["memory_prefetch"]) if recalled else "memory_prefetch" not in written
+    from openprogram.runtime.context import turn_context
+    prefetch = turn_context.entry_text(turn_context.entries(written), "memory_prefetch")
+    assert (recalled in prefetch) if recalled else prefetch == ""
 
 
 def test_system_prompt_is_byte_identical_across_turns(
@@ -428,6 +458,23 @@ def test_inject_prefetch_is_a_noop_without_a_user_message():
     assert msgs[0]["content"] == "only me"
 
 
+def test_inject_prefetch_never_edits_the_shared_message():
+    # The default converter hands the stored messages through unchanged; a
+    # block written into them would be stored and added again every round.
+    from openprogram.models.providers.types import TextContent, UserMessage
+    from openprogram.runtime.agent.loop import _inject_memory_prefetch
+    stored = [UserMessage(content=[TextContent(text="hi")], timestamp=0),
+              {"role": "user", "content": [{"type": "text", "text": "yo"}]}]
+    for original in stored:
+        request = [original]
+        assert _inject_memory_prefetch(request, "NOTE")
+        assert request[0] is not original
+        again = [original]
+        assert _inject_memory_prefetch(again, "NOTE")
+        assert _text_of(again[0]).count("NOTE") == 1
+        assert _text_of(original) in ("hi", "yo")
+
+
 def _text_of(msg) -> str:
     content = getattr(msg, "content", None)
     if content is None and isinstance(msg, dict):
@@ -442,3 +489,22 @@ def _text_of(msg) -> str:
         if t:
             parts.append(str(t))
     return "\n".join(parts)
+
+
+def test_the_block_stays_on_the_turns_message_when_the_loop_adds_a_note():
+    # A progress note or a "continue" instruction is a user-role message added
+    # after the turn's own; the block must not move onto it, or the prefix the
+    # provider cached up to the turn's message stops matching.
+    from openprogram.runtime.agent.loop import _inject_memory_prefetch
+    first = [{"role": "user", "content": "do the task"}]
+    assert _inject_memory_prefetch(first, "NOTE", "do the task")
+    later = [{"role": "user", "content": "do the task"},
+             {"role": "assistant", "content": "working"},
+             {"role": "user", "content": "say where things stand"}]
+    assert _inject_memory_prefetch(later, "NOTE", "do the task")
+    assert later[0] == first[0]
+    assert later[2]["content"] == "say where things stand"
+    # A request that no longer holds the turn's message falls back to the last one.
+    gone = [{"role": "user", "content": "summary of earlier work"}]
+    assert _inject_memory_prefetch(gone, "NOTE", "do the task")
+    assert gone[0]["content"].startswith("NOTE")

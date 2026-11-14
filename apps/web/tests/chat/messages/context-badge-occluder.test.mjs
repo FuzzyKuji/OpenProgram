@@ -37,7 +37,7 @@ const source = readFileSync(new URL("../../../components/chat/badges/context-bad
 let view;
 beforeEach(() => {
   globalThis.fetch = async () => ({ json: async () => ({ total_used: 1, window: 10 }) });
-  useSessionStore.setState({ currentSessionId: "ring", heads: {}, tokens: {}, contextWindow: {}, compactionUi: {} });
+  useSessionStore.setState({ currentSessionId: "ring", heads: {}, tokens: {}, contextWindow: {}, runningTasks: {} });
 });
 afterEach(async () => { await view?.unmount(); view = undefined; });
 

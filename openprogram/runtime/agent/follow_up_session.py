@@ -31,6 +31,7 @@ import sys
 import tempfile
 import time
 import uuid
+from openprogram.host._platform.filesystem import replace_file
 
 
 # Kept as a legacy constant for back-compat; _sessions_dir() is the
@@ -126,7 +127,7 @@ class Session:
             ) as stream:
                 staged_path = stream.name
                 stream.write(answer)
-            os.replace(staged_path, self._answer_path())
+            replace_file(staged_path, self._answer_path())
         finally:
             if staged_path and os.path.exists(staged_path):
                 os.remove(staged_path)

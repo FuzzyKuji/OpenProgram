@@ -12,6 +12,7 @@ from openprogram.models.providers.types import (
     AssistantMessage, Context, EventDone, Model, SimpleStreamOptions,
     TextContent, ToolCall, ToolResultMessage, UserMessage,
 )
+from tests.support.summary_stream import install_summary_reply, sectioned
 
 
 def model():
@@ -46,8 +47,8 @@ def install_summary(monkeypatch):
         assert (_text_tokens(context.system_prompt or '')
                 + estimate_history_tokens(context.messages) + options.max_tokens < m.context_window)
         calls.append(context)
-        return answer('Goal: inspect only. Pending: verify the failing check. Evidence remains unverified.')
-    monkeypatch.setattr('openprogram.models.providers.complete_simple', summary)
+        return answer(sectioned('Goal: inspect only. Pending: verify the failing check. Evidence remains unverified.'))
+    install_summary_reply(monkeypatch, summary)
     return calls
 
 
@@ -123,8 +124,8 @@ def test_summary_overflow_retries_smaller_without_omitting_source(monkeypatch):
         seen.append(text)
         if len(seen) == 1:
             return answer('').model_copy(update={'stop_reason': 'error', 'error_message': 'context_length_exceeded'})
-        return answer('Completed inspection; still need verification.')
-    monkeypatch.setattr('openprogram.models.providers.complete_simple', summary)
+        return answer(sectioned('Completed inspection; still need verification.'))
+    install_summary_reply(monkeypatch, summary)
     messages = [{'role': role, 'content': f'{i} ' + ('detail ' * 300 if role == 'assistant' else 'inspect only')}
                 for i in range(6) for role in ('user', 'assistant')]
     result = asyncio.run(Summarizer(max_summary_tokens=512).summarise(
@@ -163,7 +164,7 @@ def test_failed_checkpoint_preserves_input_and_does_not_cache(monkeypatch, mode)
         if mode == 'auth':
             raise PermissionError('authentication denied')
         raise ValueError('context_length_exceeded')
-    monkeypatch.setattr('openprogram.models.providers.complete_simple', summary)
+    install_summary_reply(monkeypatch, summary)
     raw = Context(messages=[UserMessage(content='Read only.', timestamp=0),
                             answer('large text ' * 6000), answer('Current step.')])
     before = raw.model_dump_json()
@@ -200,7 +201,7 @@ def test_summary_keeps_call_credentials_but_not_main_request_identity(monkeypatc
         assert options.idempotency_key is None and options.session_id is None
         assert options.tool_choice is None and options.on_payload is None
         return answer('summary')
-    monkeypatch.setattr('openprogram.models.providers.complete_simple', summary)
+    install_summary_reply(monkeypatch, summary)
     opts = SimpleStreamOptions(api_key='fixture', idempotency_key='main-call',
                                session_id='main-session', tool_choice='required',
                                on_payload=lambda *_: pytest.fail('main request callback'))
@@ -241,7 +242,7 @@ def test_overflow_chunk_retry_covers_each_source_character(monkeypatch):
         pieces.append(prompt.split('<source>\n', 1)[1].removesuffix('\n</source>'))
         options_seen.append(options.max_tokens)
         return answer('Prior evidence retained; further verification needed.')
-    monkeypatch.setattr('openprogram.models.providers.complete_simple', summary)
+    install_summary_reply(monkeypatch, summary)
     asyncio.run(summarize_text(original, model(), SimpleStreamOptions(),
                               instruction='Preserve findings.', max_tokens=512))
     assert ''.join(pieces) == original

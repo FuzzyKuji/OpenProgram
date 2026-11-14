@@ -87,7 +87,7 @@ def _looks_like_tui_invocation(argv: list[str]) -> bool:
     """
     bypass_words = {
         "agents", "sessions", "channels", "environments", "config", "permissions", "programs", "skills", "plugins", "doctor",
-        "providers", "web", "resume", "init", "doctor", "browser",
+        "providers", "web", "resume", "init", "doctor",
         "worker", "update", "memory", "mcp", "trash", "backup",
         "recordings", "stop", "status", "restart", "upgrade", "help",
         "execution", "jobs", "scheduler-worker", "cron-worker", "self-update", "dev", "versions",
@@ -375,8 +375,38 @@ def _parse_arguments():
         sys.argv[1] = "--help"
 
     args = parser.parse_args()
-    if getattr(args, "json_schema", None) and not args.print_prompt:
+    printing = _runs_print(args)
+    if getattr(args, "json_schema", None) and not printing:
         parser.error("--json-schema requires --print")
+    for flag, dest in (("--model", "print_model"), ("--effort", "print_effort"),
+                       ("--usage-file", "usage_file"),
+                       ("--transcript-file", "transcript_file"),
+                       ("--standalone", "standalone"), ("--output-format", "output_format"),
+                       ("--include-partial-messages", "include_partial_messages"),
+                       ("--permission-mode", "print_permission_mode"),
+                       ("--continue", "print_continue"), ("--session-id", "print_session_id"),
+                       ("--at", "print_at"), ("--no-project-binding", "no_project_binding"),
+                       ("--no-web", "no_web")):
+        if getattr(args, dest, None) and not printing:
+            parser.error(f"{flag} requires --print")
+    if (getattr(args, "include_partial_messages", False)
+            and getattr(args, "output_format", None) != "stream-json"):
+        parser.error("--include-partial-messages requires --output-format stream-json")
+    if getattr(args, "print_continue", False) and getattr(args, "resume", None):
+        parser.error("--continue and --resume cannot be used together")
+    if getattr(args, "print_session_id", None) and (
+            getattr(args, "resume", None) or getattr(args, "print_continue", False)):
+        parser.error("--session-id starts a new conversation: not with --resume or --continue")
+    if getattr(args, "print_at", None) and not (
+            getattr(args, "resume", None) or getattr(args, "print_continue", False)):
+        parser.error("--at requires --resume or --continue")
+    if getattr(args, "print_model", None):
+        from openprogram.interfaces.cli.print_turn import parse_model
+        try:
+            provider, model_id = parse_model(args.print_model)
+        except ValueError as exc:
+            parser.error(str(exc))
+        args.print_model = f"{provider}/{model_id}"
     return parser, args
 
 
@@ -478,10 +508,27 @@ def _dispatch_maintenance_command(args) -> None:
         _need_subcommand(args._cmd_parser)
 
 
+def _runs_print(args) -> bool:
+    """Whether the invocation is a ``--print`` run. ``-p ""`` is one, with
+    an empty prompt (a usage error, exit 2), not the interactive chat: only
+    an absent ``-p`` leaves ``print_prompt`` ``None``."""
+    return getattr(args, "print_prompt", None) is not None
+
+
 def _run_print_prompt(args, parser, tui_enabled) -> None:
-    """Run one ``--print`` turn, with an optional ``--json-schema`` response format."""
+    """Run one ``--print`` turn, with an optional ``--json-schema`` response format.
+
+    The prompt is the argument, standard input, or both
+    (``print_input.resolve_prompt``); a usage error exits 2."""
+    from openprogram.interfaces.cli.print_input import PromptInputError, resolve_prompt
+
     response_format = None
     schema_path = getattr(args, "json_schema", None)
+    try:
+        args.print_prompt = resolve_prompt(args.print_prompt,
+                                           schema_from_stdin=schema_path == "-")
+    except PromptInputError as exc:
+        parser.error(str(exc))
     if schema_path:
         from openprogram.models.providers.structured_output import (
             StructuredOutputError,
@@ -491,8 +538,6 @@ def _run_print_prompt(args, parser, tui_enabled) -> None:
         )
         try:
             if schema_path == "-":
-                if args.print_prompt == "-":
-                    parser.error("prompt and JSON schema cannot both read from stdin")
                 raw_schema = sys.stdin.read()
             else:
                 from pathlib import Path
@@ -522,6 +567,7 @@ def _run_print_prompt(args, parser, tui_enabled) -> None:
                 response_format=response_format,
                 no_alt_screen=args.no_alt_screen,
                 screen_reader=args.screen_reader,
+                **_print_options(args),
             )
         except StructuredOutputError as exc:
             if isinstance(exc, StructuredOutputSchemaError):
@@ -548,7 +594,31 @@ def _run_print_prompt(args, parser, tui_enabled) -> None:
             tui=tui_enabled,
             no_alt_screen=args.no_alt_screen,
             screen_reader=args.screen_reader,
+            **_print_options(args),
         )
+
+
+def _print_options(args) -> dict:
+    """The options of a ``--print`` call that were given (``--model``,
+    ``--effort``, the files, the transport, output and session options)."""
+    options = {}
+    if getattr(args, "print_model", None):
+        options["model"] = args.print_model
+    if getattr(args, "print_effort", None):
+        options["effort"] = args.print_effort
+    if getattr(args, "usage_file", None):
+        options["usage_file"] = args.usage_file
+    if getattr(args, "transcript_file", None):
+        options["transcript_file"] = args.transcript_file
+    for dest, name in (("standalone", "standalone"), ("output_format", "output_format"),
+                       ("include_partial_messages", "include_partial_messages"),
+                       ("print_permission_mode", "permission_mode"),
+                       ("print_continue", "continue_last"), ("print_session_id", "new_session_id"),
+                       ("print_at", "at"), ("no_project_binding", "no_project_binding"),
+                       ("no_web", "no_web")):
+        if getattr(args, dest, None):
+            options[name] = getattr(args, dest)
+    return options
 
 
 def _run_interactive_chat(args, tui_enabled) -> None:
@@ -1026,7 +1096,7 @@ def _dispatch_worker_command(args) -> None:
 
 
 def _dispatch_integration_command(args) -> None:
-    """Run the environments, channels, mcp and browser commands."""
+    """Run the environments, channels and mcp commands."""
     if args.command == "environments":
         from openprogram.interfaces.cli.commands.environments import dispatch
         sys.exit(dispatch(args))
@@ -1093,22 +1163,6 @@ def _dispatch_integration_command(args) -> None:
         if verb == "test":
             sys.exit(_cmd_mcp_test(args.name, args.server_command,
                                     env=args.env, timeout=args.timeout))
-        _need_subcommand(args._cmd_parser)
-
-    if args.command == "browser":
-        verb = getattr(args, "browser_verb", None)
-        if verb == "install":
-            sys.exit(_cmd_browser_install(getattr(args, "target", "playwright")))
-        if verb == "status":
-            sys.exit(_cmd_browser_status())
-        if verb == "refresh":
-            sys.exit(_cmd_browser_refresh())
-        if verb == "reset":
-            sys.exit(_cmd_browser_reset())
-        if verb == "list":
-            sys.exit(_cmd_browser_list())
-        if verb == "rm":
-            sys.exit(_cmd_browser_rm(args.name))
         _need_subcommand(args._cmd_parser)
 
 
@@ -1212,8 +1266,24 @@ def _dispatch_setup_command(args) -> None:
         sys.exit(_sw.run_full_setup())
 
 
+def _dispatch_transcript_command(args) -> None:
+    """``openprogram transcript``: rebuild a ``--print`` run's transcript
+    from its state (``print_turn.transcript_from_state``); exit 1 when the
+    state names no single run."""
+    from openprogram.interfaces.cli import print_turn
+
+    try:
+        with print_turn.state_directory(args.state):
+            records = print_turn.transcript_from_state(args.session)
+    except print_turn.PrintTurnError as exc:
+        print(f"[error] {exc}", file=sys.stderr)
+        sys.exit(1)
+    print_turn.write_transcript_records(args.output, records)
+
+
 # Subcommand name -> the helper that runs its family.
 _COMMAND_DISPATCH = {
+    "transcript": _dispatch_transcript_command,
     "rescue": _dispatch_maintenance_command,
     "dev": _dispatch_maintenance_command,
     "versions": _dispatch_maintenance_command,
@@ -1245,7 +1315,6 @@ _COMMAND_DISPATCH = {
     "environments": _dispatch_integration_command,
     "channels": _dispatch_integration_command,
     "mcp": _dispatch_integration_command,
-    "browser": _dispatch_integration_command,
     "acp": _dispatch_agent_command,
     "agents": _dispatch_agent_command,
     "subagent": _dispatch_agent_command,
@@ -1277,7 +1346,7 @@ def main():
     tui_enabled = True
 
     if args.command in (None, "tui", "chat"):
-        if args.print_prompt:
+        if _runs_print(args):
             _run_print_prompt(args, parser, tui_enabled)
             return
         _run_interactive_chat(args, tui_enabled)
@@ -1315,15 +1384,6 @@ from openprogram.interfaces.cli.commands.skills import (  # noqa: E402,F401
     _cmd_skills_install,
     _cmd_skills_update,
     _cmd_skills_remove,
-)
-from openprogram.interfaces.cli.commands.browser import (  # noqa: E402,F401
-    _python_pkg_present,
-    _cmd_browser_install,
-    _cmd_browser_status,
-    _cmd_browser_refresh,
-    _cmd_browser_reset,
-    _cmd_browser_list,
-    _cmd_browser_rm,
 )
 from openprogram.interfaces.cli.commands.subagent import (  # noqa: E402,F401
     _cmd_subagent_spawn,

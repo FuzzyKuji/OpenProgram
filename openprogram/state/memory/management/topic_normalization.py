@@ -13,7 +13,6 @@ from ..markdown import (
     TopicFormatError,
     definition_match,
     paragraph_spans,
-    parse_topic_tree,
     render_definition,
 )
 from ..markdown.syntax import (
@@ -79,8 +78,21 @@ def _source_identity_seed(value: str) -> str:
     )
 
 
+def holds_no_paragraph(text: str) -> bool:
+    """Whether a Topic's text is headings only, which pruning removes.
+
+    Such a Topic and no Topic are the same state of memory.
+    """
+    return next(paragraph_spans(text.splitlines()), None) is None
+
+
 def prune_empty_topic_file(path: Path) -> None:
-    """Remove record-free sections and delete a Topic with no records."""
+    """Remove record-free sections and delete a Topic with no records.
+
+    Every paragraph of a file normalization has passed carries a block ID,
+    so a record is any paragraph at all; what goes is headings with
+    nothing under them.
+    """
     if not path.is_file():
         return
     original = path.read_text(encoding="utf-8")
@@ -167,14 +179,37 @@ class TopicNormalizationMixin:
         existing_block_ids: set[str],
         previous_units: list[Any] | None = None,
     ) -> None:
+        """Give the files this write wrote their IDs and canonical form.
+
+        Only those files: a file the write left alone keeps its bytes,
+        whatever they hold, and a file written outside OpenProgram is
+        never rewritten (see ``ownership``). Every paragraph of a written
+        file gets a block ID, cited or not; whether a paragraph must cite
+        depends on who wrote it, and the commit checks that.
+        """
         # Callers that need to report assigned IDs read these afterwards.
         self.last_block_id_map: dict[str, str] = {}
         self.last_evidence_id_map: dict[str, str] = {}
         topics = self.stage_dir / "topics"
         if not topics.exists():
             return
-        paths = sorted(topics.rglob("*.md"))
-        texts = {path: path.read_text(encoding="utf-8") for path in paths}
+        written = getattr(self, "_written_paths", None)
+        written = written() if written is not None else None
+        outside = getattr(self, "is_outside", lambda _relative: False)
+        all_paths = sorted(
+            path for path in topics.rglob("*.md")
+            if not outside(path.relative_to(topics).as_posix())
+        )
+        # IDs already used anywhere in memory's own files stay taken.
+        every_text = {
+            path: path.read_text(encoding="utf-8", errors="replace")
+            for path in all_paths
+        }
+        paths = [
+            path for path in all_paths
+            if written is None or path.relative_to(topics).as_posix() in written
+        ]
+        texts = {path: every_text[path] for path in paths}
         # What is on disk now. `texts` is rewritten in place below, so the
         # final write needs its own record of the original to compare against.
         on_disk = dict(texts)
@@ -183,7 +218,7 @@ class TopicNormalizationMixin:
         # footnote ID no matter what else the edit touched.
         used_evidence = {
             match.group(1)
-            for text in texts.values()
+            for text in every_text.values()
             for match in re.finditer(r"(?m)^\[\^([A-Za-z0-9_-]+)\]:", text)
             if not _is_local_label(match.group(1))
         }
@@ -270,22 +305,26 @@ class TopicNormalizationMixin:
         # ID is never rewritten: other views reach the paragraph through it.
         used_blocks = set(existing_block_ids) | {
             match.group(1)
-            for text in texts.values()
+            for text in every_text.values()
             for match in re.finditer(r"(?m)\^([A-Za-z0-9-]+)\s*$", text)
         }
         assigned: dict[Path, dict[int, str]] = {}
+        from ..markdown.parser import without_front_matter
+
         for path, text in texts.items():
             lines = text.splitlines()
-            for start, end in self._paragraph_spans(text):
+            # Front matter is metadata, not a paragraph.
+            prose = without_front_matter(lines)
+            for start, end, _headings in paragraph_spans(prose):
                 last = lines[end - 1]
                 if re.search(r"\s\^[A-Za-z0-9-]+\s*$", last):
                     continue
                 body = " ".join(
                     " ".join(lines[start:end]).split()
                 )
-                # Only evidence-bearing prose is a memory. Topic intros
-                # carry no footnote and stay unidentified.
-                if not body or "[^" not in body:
+                # Every paragraph is a memory, cited or not: a person's
+                # note gets its ID like a writer's claim.
+                if not body:
                     continue
                 citation_ids = CITATION.findall(body)
                 if citation_ids and all(
@@ -372,8 +411,13 @@ class TopicNormalizationMixin:
             normalized = "\n".join(rendered).rstrip() + "\n"
             if normalized != on_disk[path]:
                 path.write_text(normalized, encoding="utf-8")
-        for path in sorted(topics.rglob("*.md")):
-            prune_empty_topic_file(path)
+        from ..policy import owner_editing
+
+        # A person's save keeps what they wrote, headings included, and the
+        # file with it; a writer's edit drops what it left empty.
+        if not owner_editing():
+            for path in paths:
+                prune_empty_topic_file(path)
 
     def _validate_topic_contract(
         self,
@@ -387,7 +431,7 @@ class TopicNormalizationMixin:
         ID that existed before the edit must still be findable after it.
         """
         before = {unit.memory_id: unit for unit in before_units}
-        units = parse_topic_tree(self.stage_dir / "topics")
+        units = self._parse_stage()
         if before_block_ids:
             lost = before_block_ids - {unit.memory_id for unit in units}
             if lost:
@@ -396,6 +440,8 @@ class TopicNormalizationMixin:
                     + ", ".join(sorted(lost)[:5])
                 )
         for unit in units:
+            if unit.outside:
+                continue
             previous = before.get(unit.memory_id)
             if previous is not None and (
                 unit.content,

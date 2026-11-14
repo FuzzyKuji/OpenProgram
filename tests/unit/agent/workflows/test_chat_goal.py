@@ -126,6 +126,9 @@ def session(tmp_path, monkeypatch):
     db = SessionDB(tmp_path / "sessions")
     db.create_session("chat-goal", "main")
     monkeypatch.setattr(goals, "_db", lambda: db)
+    # The todo board is per branch and reads the selected branch from the
+    # same store the Goal records its branch in.
+    monkeypatch.setattr("openprogram.runtime.context.session_db.default_db", lambda: db)
     monkeypatch.setattr(goals, "_emit_goal_update", lambda *a, **k: None)
     monkeypatch.setattr(goals, "goal_usage", lambda *a: {"total_tokens": 0, "cost_usd": 0, "cost_known": True})
     yield goals, db
@@ -148,7 +151,7 @@ def test_chat_goal_completion_rejects_unfinished_todos(session, monkeypatch):
     from openprogram.programs.tools.planning.todo import shared
     goals, _ = session
     goal = chat.create("chat-goal", "implement and verify")
-    monkeypatch.setattr(shared, "load", lambda sid: [{
+    monkeypatch.setattr(shared, "load", lambda sid, branch_id=None: [{
         "id": "1", "subject": "verify", "status": "pending",
         "goal_id": goal["goal_id"], "goal_revision": goal["revision"],
     }])

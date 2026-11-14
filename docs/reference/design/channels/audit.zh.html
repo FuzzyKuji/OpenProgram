@@ -48,7 +48,7 @@ class Channel(abc.ABC):
 <tr><th scope="row">2. 键</th><td>按 <code translate="no">agent.session_scope</code> 计算 <code translate="no">session_key</code></td></tr>
 <tr><th scope="row">3. 重置</th><td><code translate="no">daily_reset</code> 或 <code translate="no">idle_minutes</code></td></tr>
 <tr><th scope="row">4. 存储</th><td><code translate="no">_load_or_init_session</code> 写入会话存储</td></tr>
-<tr><th scope="row">5. 轮次</th><td>构造 <code translate="no">TurnRequest</code>，调用 <code translate="no">process_user_turn</code></td></tr>
+<tr><th scope="row">5. 轮次</th><td><code translate="no">build_turn_request</code> 构造 <code translate="no">TurnRequest</code>，<code translate="no">CanonicalAgentAdapter</code> 接纳并运行</td></tr>
 <tr><th scope="row">6. 回复</th><td>追加</td></tr>
 <tr><th scope="row">7. 广播</th><td>向 Web UI 发 <code translate="no">channel_turn</code> 信封</td></tr>
 </tbody></table>

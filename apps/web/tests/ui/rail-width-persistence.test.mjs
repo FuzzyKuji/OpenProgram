@@ -15,7 +15,7 @@ window.clearTimeout = clearTimeout;
 
 const { act, createElement } = await import("react");
 const { createRoot } = await import("react-dom/client");
-const { useResizableRail } = await import("../../components/layout/use-resizable-rail.ts");
+const { snapWidth, useResizableRail } = await import("../../components/layout/use-resizable-rail.ts");
 
 let rail;
 function Host(props) { rail = useResizableRail({ open: true, minWidth: 240, maxWidth: 720, defaultWidth: 288, direction: -1, ...props }); return null; }
@@ -130,6 +130,33 @@ test("the handle says when a drag rests on the default width", async () => {
   assert.equal(rail.resizeHandleProps["data-snapped"], "");
   await act(async () => rail.resizeHandleProps.onPointerUp());
   assert.equal(rail.resizeHandleProps["data-snapped"], undefined);
+  await unmount();
+});
+
+test("a drag rests on the nearest snap width within reach, and is free elsewhere", () => {
+  const snaps = [288, 544, 800];
+  assert.equal(snapWidth(292, snaps), 288);
+  assert.equal(snapWidth(537, snaps), 544);
+  assert.equal(snapWidth(808, snaps), 800);
+  assert.equal(snapWidth(535, snaps), 535);
+  assert.equal(snapWidth(420, snaps), 420);
+  assert.equal(snapWidth(300, [296, 304]), 296, "the nearer of two");
+});
+
+test("a rail with several snap widths rests on each, and the handle says so", async () => {
+  saved.set("rail", "288");
+  const unmount = await mount({ storageKey: "rail", maxWidth: 800, snapWidths: [288, 544, 800] });
+  await act(async () => rail.resizeHandleProps.onPointerDown({ button: 0, clientX: 1000, pointerId: 1, preventDefault() {}, currentTarget: handle }));
+  await act(async () => rail.resizeHandleProps.onPointerMove({ buttons: 1, clientX: 1000 - 230 }));
+  assert.equal(rail.style.width, "518px");
+  assert.equal(rail.resizeHandleProps["data-snapped"], undefined);
+  await act(async () => rail.resizeHandleProps.onPointerMove({ buttons: 1, clientX: 1000 - 260 }));
+  assert.equal(rail.style.width, "544px", "two columns' width");
+  assert.equal(rail.resizeHandleProps["data-snapped"], "");
+  await act(async () => rail.resizeHandleProps.onPointerMove({ buttons: 1, clientX: 1000 - 515 }));
+  assert.equal(rail.style.width, "800px", "three columns' width");
+  await act(async () => rail.resizeHandleProps.onPointerUp());
+  assert.equal(saved.get("rail"), "800");
   await unmount();
 });
 

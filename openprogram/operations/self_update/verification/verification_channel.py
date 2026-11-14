@@ -30,6 +30,17 @@ def _digest(value) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
 
 
+#: Job fields that track delivering the result to its parent, not the
+#: result: the terminal write sets ``notice_pending`` and the queued notice
+#: clears it later, so a receipt must not bind to it.
+_JOB_DELIVERY_FIELDS = frozenset({"notice_pending"})
+
+
+def job_digest(job) -> str:
+    """The digest a receipt binds a Job's result by."""
+    return _digest({k: v for k, v in job.to_dict().items() if k not in _JOB_DELIVERY_FIELDS})
+
+
 def _sign(value, token: str) -> str:
     return hmac.new(token.encode(), _digest(value).encode(), hashlib.sha256).hexdigest()
 
@@ -280,11 +291,11 @@ def consume_result(store, update_id: str, token: str) -> dict | None:
             return None
         if job.result_text is not None and (not isinstance(job.result_text, str) or len(job.result_text.encode()) > _MAX_JSON):
             raise ValueError("verifier Job result exceeds the size limit")
-        job_digest = _digest(job.to_dict())
+        result_digest = job_digest(job)
         if result_path.exists() or result_path.is_symlink():
             receipt = _read(result_path)
             _check_signature(receipt, grant["token"])
-            if receipt.get("grant_sha256") != _digest(grant) or receipt.get("job_sha256") != job_digest:
+            if receipt.get("grant_sha256") != _digest(grant) or receipt.get("job_sha256") != result_digest:
                 raise ValueError("verifier authorization was already consumed for another result")
             return receipt
         verdict, reason, result = "inconclusive", "verifier did not complete successfully", None
@@ -303,7 +314,7 @@ def consume_result(store, update_id: str, token: str) -> dict | None:
                 result, reason = None, f"invalid verifier result or unresolved observation evidence: {error}"[:500]
         receipt = dict(schema=1, update_id=update_id, candidate_sha=record.request.candidate_sha,
                        attempt=record.state.attempt, job_id=grant["job_id"], grant_sha256=_digest(grant),
-                       job_sha256=job_digest, verdict=verdict, reason=reason, consumed_at=time.time(),
+                       job_sha256=result_digest, verdict=verdict, reason=reason, consumed_at=time.time(),
                        result=None if result is None else result.to_dict())
         receipt["signature"] = _sign(receipt, grant["token"])
         store._write_json(result_path, receipt)

@@ -52,8 +52,8 @@
 <table class="stack fixed">
 <thead class="sr"><tr><th scope="col">时机</th><th scope="col">行为</th></tr></thead>
 <tbody>
-<tr><th scope="row">连接、切换会话或模型、每轮 ack 和 settle</th><td><code translate="no">loadAgentSettings()</code> 读 <code translate="no">GET /api/agent_settings</code>；重算 <code translate="no">chat.fast</code>；输入框重渲染，不用刷新</td></tr>
-<tr><th scope="row">偏好</th><td>按会话和供应商/模型保存；选 Standard 覆盖代理默认值</td></tr>
+<tr><th scope="row">连接、切换会话、分支或模型、每轮 ack 和 settle</th><td><code translate="no">loadAgentSettings()</code> 读 <code translate="no">GET /api/agent_settings</code>；重算 <code translate="no">chat.fast</code>；输入框重渲染，不用刷新</td></tr>
+<tr><th scope="row">偏好</th><td>按会话分支保存；派发时重新检查供应商/模型是否支持。选 Standard 覆盖代理默认值</td></tr>
 <tr><th scope="row">发送</th><td>开启且支持时才发 <code translate="no">service_tier: "priority"</code>，否则 <code translate="no">default</code></td></tr>
 <tr><th scope="row">派发</th><td><code translate="no">resolve_service_tier</code> 按实际模型重新校验</td></tr>
 <tr><th scope="row">证据</th><td>Usage 分别保存请求和实际档位；每次调用的证据随消息保存，重新加载后显示在用量页脚。缺元数据即未确认。xAI 上报的费用优先于目录费用；不从请求档位推断速度比。</td></tr>

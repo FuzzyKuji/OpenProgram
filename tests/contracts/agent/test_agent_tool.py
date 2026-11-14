@@ -217,7 +217,12 @@ def test_agent_resolves_parent_agent_when_not_supplied(store, fake_dispatcher):
     assert fake_dispatcher["agent_id"] == "main"
 
 
-def test_agent_explicit_agent_id_wins(store, fake_dispatcher):
+def test_agent_explicit_agent_id_wins(store, fake_dispatcher, monkeypatch):
+    # A saved Agent other agents may start (the registry is not shared
+    # state between tests).
+    from openprogram.runtime.agent_registry.manager import AgentSpec
+    monkeypatch.setattr("openprogram.runtime.agent_registry.manager.list_all",
+                        lambda: [AgentSpec(id="researcher", name="Researcher")])
     _call_agent(
         prompt="x",
         agent_id="researcher",
@@ -225,6 +230,15 @@ def test_agent_explicit_agent_id_wins(store, fake_dispatcher):
         turn_id="a1",
     )
     assert fake_dispatcher["agent_id"] == "researcher"
+
+
+def test_agent_unknown_agent_lists_the_roster(store, fake_dispatcher, monkeypatch):
+    from openprogram.runtime.agent_registry.manager import AgentSpec
+    monkeypatch.setattr("openprogram.runtime.agent_registry.manager.list_all",
+                        lambda: [AgentSpec(id="explorer", name="Explorer")])
+    out = _call_agent(prompt="x", agent_id="nobody", session_id="p1", turn_id="a1")
+    assert "[agent error]" in out and "Explorer" in out
+    assert "agent_id" not in fake_dispatcher
 
 
 def test_agent_without_session_returns_error(store, fake_dispatcher):
@@ -470,7 +484,7 @@ def test_fanout_refuses_the_spawn_past_the_limit(store, fake_dispatcher, monkeyp
     out = _call_agent(prompt="one too many", session_id="p1", turn_id="a1")
     assert "[blocked by setting]" in out
     assert "reached 8 agents" in out
-    assert "agent(to=" in out  # points at reusing the agents it has
+    assert "send_message" in out  # points at reusing the agents it has
 
 
 def test_fanout_is_counted_per_turn(store, fake_dispatcher, monkeypatch):
@@ -511,3 +525,51 @@ def test_fanout_slot_is_not_spent_by_a_refused_spawn(store, fake_dispatcher, mon
         tok.var.reset(tok)
     assert "generations" in out
     assert _fanout_used.get(("p1", "a1"), 0) == 0
+
+
+def test_a_waited_agent_stopped_by_the_person_reports_where_its_work_is(monkeypatch):
+    """A foreground helper stopped on its own row has no final text: its
+    caller reads the same "(no reply)" pointer a stopped background helper's
+    notice carries, not an error line with ``None`` in it."""
+    from openprogram.programs.tools.agents.agent.agent.agent import _sync_result
+    from openprogram.runtime.conversation.sub_agent_run import AgentTurnResult
+    from openprogram.runtime.jobs.types import Job, JobStatus
+
+    job = Job(id="j_stop", parent_session_id="s1", prompt="sleep", agent_id="main",
+              label="sleeper", status=JobStatus.CANCELLED, reason_code="cancel.user",
+              head_id="j_stop_user_reply")
+    monkeypatch.setattr("openprogram.runtime.jobs.store.load_job", lambda _sid, _jid: job)
+
+    out = _sync_result(
+        AgentTurnResult(head_id=None, final_text="", failed=True, error=None),
+        run_session="s1", job_id="j_stop", label="sleeper", chosen_agent="main",
+        worktree=None,
+    )
+
+    assert 'status="stopped" reason="user"' in out
+    assert '(no reply) Its work so far: read_conversation("j_stop").' in out
+    assert "agent error" not in out and "None" not in out
+    assert out.endswith("[spawned agent branch=s1:j_stop_user_reply]")
+
+
+def test_agent_name_is_the_description_as_written(store, fake_dispatcher):
+    """The name people and the model read is the description, spaces
+    and all, not an identifier form of it ("Spell_the_word_harbor")."""
+    from openprogram.runtime.jobs.store import list_jobs
+    out = _call_agent(prompt="spell it", description="  Spell the word harbor ",
+                      session_id="p1", turn_id="a1")
+    assert 'name="Spell the word harbor"' in out
+    jobs = list_jobs("p1")
+    assert [j.label for j in jobs] == ["Spell the word harbor"]
+    names = {b.get("name") for b in store.list_branches("p1")}
+    assert "Spell the word harbor" in names or "Spell the word harbor" in {
+        store.get_branch_meta("p1", jobs[0].head_id).get("name")}
+
+
+def test_agent_name_is_trimmed_at_a_word():
+    from openprogram.programs.tools.agents.agent.agent.agent import AGENT_NAME_MAX, agent_name
+    long = "Check every tide table along the northern coast for spring tides"
+    name = agent_name(long)
+    assert len(name) <= AGENT_NAME_MAX and long.startswith(name) and long[len(name)] == " "
+    assert agent_name("x" * 80) == "x" * AGENT_NAME_MAX
+    assert agent_name("two\nlines") == "two lines"

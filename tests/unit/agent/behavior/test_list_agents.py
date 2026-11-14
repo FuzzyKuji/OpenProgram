@@ -136,3 +136,21 @@ def test_list_agents_unknown_scope_errors(two_sessions):
     assert "'archive'" in out
     for legal in ("session", "all", "archived"):
         assert f'"{legal}"' in out
+
+
+def test_list_agents_preview_comes_from_each_branch_itself(two_sessions):
+    """A branch whose tip has no text yet (a helper stopped mid-turn)
+    previews its own last text, not the latest message of another branch."""
+    s = two_sessions
+    s.append_message("p1", {"id": "hu", "role": "user", "content": "helper task text",
+                            "timestamp": 2, "predecessor": "a1"})
+    s.append_message("p1", {"id": "hu_reply", "role": "assistant", "content": "",
+                            "timestamp": 3, "predecessor": "hu"})
+    s.append_message("p1", {"id": "mu", "role": "user", "content": "main branch latest",
+                            "timestamp": 4, "predecessor": "a1"})
+    s.commit_turn("p1", "t4")
+    out = list_agents()
+    lines = out.splitlines()
+    helper = next(i for i, ln in enumerate(lines) if "to=p1:hu_reply" in ln)
+    assert "helper task text" in lines[helper + 1]
+    assert "main branch latest" not in lines[helper + 1]

@@ -41,7 +41,33 @@ export type RewindResult = {
   marks?: RewindMark[];
   errors?: string[];
   error?: string;
+  /** `branch_running`: another branch runs or waits, named in `blocking`. */
+  code?: string;
+  kind?: string;
+  blocking?: import("./rewind-store").RewindBlocking;
 };
+
+/** Why a rewind that restores files waits for another branch. */
+export function blockingText(
+  blocking: { branch_name?: string; reason_code?: string; selected?: boolean },
+  text: Text,
+): string {
+  const waiting = blocking.reason_code === "wait_open" || blocking.reason_code === "system_access_required";
+  if (blocking.selected) {
+    return waiting
+      ? text("A turn on this branch is waiting for an approval. Stop it, then rewind.", "这个分支上有一轮在等待批准。先停止它，再回退。")
+      : text("A turn on this branch is paused. Stop it, then rewind.", "这个分支上有一轮已暂停。先停止它，再回退。");
+  }
+  const name = blocking.branch_name;
+  if (waiting) {
+    return name
+      ? text(`Branch “${name}” is waiting for an approval. Rewinding files now could undo its work; stop it, then rewind.`, `分支“${name}”正在等待批准。现在回退文件可能会撤掉它的工作；先停止它，再回退。`)
+      : text("Another branch is waiting for an approval. Rewinding files now could undo its work; stop it, then rewind.", "另一个分支正在等待批准。现在回退文件可能会撤掉它的工作；先停止它，再回退。");
+  }
+  return name
+    ? text(`Branch “${name}” is running. Rewinding files now could undo its work; stop it, then rewind.`, `分支“${name}”正在运行。现在回退文件可能会撤掉它的工作；先停止它，再回退。`)
+    : text("Another branch is running. Rewinding files now could undo its work; stop it, then rewind.", "另一个分支正在运行。现在回退文件可能会撤掉它的工作；先停止它，再回退。");
+}
 
 export type RewindPoint = {
   msg_id: string;
@@ -135,7 +161,7 @@ export function planOutcome(plan: RewindPlan, elapsedMs: number, text: Text): Pl
   if (plan.error_code === "archived") {
     return { kind: "refuse", message: sessionUnavailableText(text) };
   }
-  if (plan.status === "unavailable") {
+  if (plan.status === "unavailable" || plan.error_code === "file_conflict") {
     return { kind: "dialog", preview: { kind: "no_code", reason: plan.code_unavailable_reason ?? null } };
   }
   if (plan.transient) return { kind: "dialog", preview: { kind: "none" } };
@@ -193,6 +219,8 @@ export function skippedLine(skipped: RewindRow[], text: Text): string {
 
 export function noCodeLine(reason: string | null, text: Text): string {
   switch (reason) {
+    case "conflict":
+      return text("Some files changed later or cannot be safely restored. No files will be changed. You can rewind the conversation only.", "部分文件后来被修改或无法安全恢复。所有文件都将保持原样，你可以选择仅回退对话。");
     case "evicted":
       return text("Code can't be restored: the saved copies for this point were cleaned up.", "无法恢复代码：这个位置保存的副本已被清理。");
     case "journal_gap":
@@ -290,9 +318,8 @@ export function markTip(mark: RewindMark, text: Text): string {
   );
 }
 
-/** Marks to draw, by the row they follow. A pending mark is the last row
- *  while rewinding is possible; a mark whose anchor is not shown also goes
- *  last, unless a pending mark holds that place. */
+/** Anchored marks appear only with their row. Pending and legacy unanchored
+ *  marks can appear at the tail; offscreen anchors must not move there. */
 export function placeMarks(
   marks: RewindMark[],
   ids: readonly string[],
@@ -306,7 +333,7 @@ export function placeMarks(
     if (mark.variant === "pending") continue;
     if (mark.anchor_head_id && shown.has(mark.anchor_head_id)) {
       after.set(mark.anchor_head_id, [...(after.get(mark.anchor_head_id) ?? []), mark]);
-    } else {
+    } else if (!mark.anchor_head_id) {
       stray.push(mark);
     }
   }

@@ -11,6 +11,7 @@ import tempfile
 
 from openprogram.host._platform.locking import flock, LOCK_EX
 from openprogram.host._platform.filesystem import is_link_metadata
+from openprogram.host._platform.filesystem import replace_file
 
 _active_files: ContextVar[dict | None] = ContextVar("approval_files", default=None)
 
@@ -171,7 +172,7 @@ def write_checked_atomic(path: str, content: bytes, *, expected_state: dict,
                     # before rename; this is not an OS-level compare-and-swap.
                     locks.close()
                     validate({path: expected_state})
-                os.replace(temporary, path)
+                replace_file(temporary, path)
             else:
                 validate(files)
                 validate(checks)

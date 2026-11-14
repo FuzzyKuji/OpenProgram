@@ -94,56 +94,6 @@ def test_closed_rebind_does_not_adopt(tmp_path, monkeypatch):
     webtab.release_binding(rebound)
 
 
-def test_fresh_successor_accepts_first_human_input(tmp_path, monkeypatch):
-    from openprogram.programs.applications.browser.pages import BrowserResourceStore, writes_fenced
-
-    monkeypatch.setattr("openprogram.state.paths.get_state_dir", lambda: tmp_path)
-    webtab._bindings.clear()
-    webtab._connection_revisions.clear()
-    webtab._page_revisions.clear()
-    webtab._desktop_windows.clear()
-    owner = _WS(trusted=True)
-    webtab.ensure_connection_revision(owner)
-    webtab._desktop_windows[owner] = "win"
-    old = webtab.register_binding(owner, "win", "tab-a", "target-old")
-    old_key = webtab.binding_page_key(old)
-    store = BrowserResourceStore()
-    store.retain(
-        page_key=old_key, window_id="win", tab_id="tab-a", title="X",
-        target="https://example.test/", session_id="parent",
-        conversation_session_id="parent", live=True,
-    )
-    store.set_control_state(old_key, "idle", input_seq=50)
-    store.mark_restoring(old_key)
-    webtab.release_binding(old)
-    pauses = []
-    fenced_during_pause = []
-    rebound = webtab.register_binding(owner, "win", "tab-a", "target-new")
-    new_key = webtab.binding_page_key(rebound)
-    assert new_key != old_key
-    assert int((store.get_resource(new_key) or {}).get("last_input_seq") or 0) == 0
-
-    async def fake_pause(*args, **kwargs):
-        pauses.append(kwargs)
-        fenced_during_pause.append(writes_fenced(new_key))
-        return None
-
-    monkeypatch.setattr("openprogram.programs.applications.browser.pages.request_page_pause", fake_pause)
-    asyncio.run(webtab.handle_webtab_human_input(owner, {
-        "window_id": "win", "tab_id": "tab-a", "sequence": 1, "kind": "pointer",
-    }))
-    assert fenced_during_pause == []
-    assert pauses == []
-    assert int((store.get_resource(new_key) or {}).get("last_input_seq") or 0) == 0
-    stale = _WS(trusted=True)
-    webtab.ensure_connection_revision(stale)
-    webtab._desktop_windows[stale] = "other"
-    asyncio.run(webtab.handle_webtab_human_input(stale, {
-        "window_id": "win", "tab_id": "tab-a", "sequence": 1, "kind": "pointer",
-    }))
-    assert pauses == []
-    webtab.release_binding(rebound)
-
 
 def test_paused_same_target_register_keeps_control(tmp_path, monkeypatch):
     from openprogram.programs.applications.browser.pages import BrowserResourceStore

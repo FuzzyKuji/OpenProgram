@@ -114,7 +114,7 @@ PATCH /api/agents/general
 <tr><th scope="row"><code translate="no">agent()</code>, <code translate="no">llm()</code></th><td>Execution node with the selected config; no saved Agent</td><td>Same DAG storage, separately filtered model view</td></tr>
 <tr><th scope="row"><code translate="no">agent</code> tool without <code translate="no">to</code></th><td>Durable child task or branch</td><td><code translate="no">start_from=clean/inherit/exact-node</code></td></tr>
 <tr><th scope="row"><code translate="no">agent</code> tool with <code translate="no">to</code></th><td>Next turn on the addressed branch</td><td>Target Agent unchanged; conflicting <code translate="no">agent_id</code> rejected</td></tr>
-<tr><th scope="row">Chat, CLI, scheduler</th><td>Existing session and job types, same resolver</td><td>Scheduled jobs resolve Agent ID at each firing; resume keeps its snapshot</td></tr>
+<tr><th scope="row">Chat, CLI, scheduler</th><td>Existing session and job types, same resolver</td><td>Scheduled jobs resolve Agent ID at each firing and set it on the task's branch; resume keeps its snapshot</td></tr>
 </tbody>
 </table>
 <ul>
@@ -338,3 +338,40 @@ classify = _example_agent.classify</pre>
 <dt>Target</dt><dd>Schema 2 migration, transactional multi-file lifecycle, Python <code translate="no">AgentConfig</code>, resolver parity across entries, shared-space catalogs, effective preview, embedded trial, portable import/export, automatic Agent/model selection.</dd>
 </dl>
 <p class="next"><a href="../../../../capabilities/agents.html">Configure an Agent</a></p>
+
+<h2 id="branch-settings">Configuration belongs to a conversation branch</h2>
+<p>A conversation shares its project and working directories. Each branch stores its own Agent, model and provider, effort, tool intent, search toggle, permission mode and rules, Plan, sandbox override and service tier.</p>
+<p>A new branch copies its source's settings once, then changes alone. Switching restores the destination's settings, empty overrides included; Rewind, Undo and Redo keep them. A scheduled task's branch copies the selected branch with the task's Agent at its first run; later runs keep that record and take the task's Agent again.</p>
+<p>Branch references own the settings; the session's top-level fields mirror the selected branch. A switch saves the source and restores the destination with the head in one commit. Old sessions seed a branch from their settings once; missing history is not reconstructed.</p>
+<p>Admission freezes the turn's Agent, model, effort, Fast, tool intent, Sandbox, and permission mode and rules from its branch, the first of:</p>
+<ol>
+<li>the branch the request names;</li>
+<li>the record reserved for the run's message (a scheduled run's);</li>
+<li>the live same-session parent's branch;</li>
+<li>the record at the turn's starting message;</li>
+<li>the selected branch.</li>
+</ol>
+<p>A chat, scheduled, background or headless turn on an unselected branch runs that branch's Agent and permission. A Job keeps what it was given, same-session children inherit their parent, and Trial Agents keep their snapshot.</p>
+<table class="stack">
+<thead><tr><th scope="col">Change</th><th scope="col">Stored on</th></tr></thead>
+<tbody>
+<tr><th scope="row">Composer control, model pick, Agent switch, permission, Sandbox</th><td>The branch the request names, the one the pane shows, whatever is selected elsewhere. Without a branch: the selected one, guarded by an older client's <code translate="no">expected_branch_id</code>.</td></tr>
+<tr><th scope="row">Message send</th><td>The message's branch: effort, web search, Fast, Sandbox, and the composer's mode while the branch has no versioned permission. Never the Agent.</td></tr>
+<tr><th scope="row"><code translate="no">/skill</code> message</th><td>Nothing. Its allowed-tools list narrows that turn only.</td></tr>
+<tr><th scope="row">"Allow for this conversation" during a turn</th><td>The turn's branch.</td></tr>
+<tr><th scope="row"><code translate="no">null</code>, or the effort menu's default</th><td>Inherit: the project, Agent or global value decides.</td></tr>
+<tr><th scope="row">Read or write of a branch with no record</th><td>Answered as <code translate="no">branch_gone</code>, with the selected branch. The composer reads the branch the conversation shows and applies the change there.</td></tr>
+</tbody>
+</table>
+<p>An unfocused pane rereads its model settings when its branch or that branch's Agent changes. A model pick or Agent switch on a branch that is not selected leaves the live runtime alone and is not broadcast, so other panes and the sidebar keep the selected branch's model; the pane takes the model and its controls from the reply.</p>
+<p>Every model settings read names the pane's branch, so after any broadcast a pane on a branch that is not selected reads back that branch's model, not the selected one's. A broadcast names no conversation, so no chip takes its model: each keeps what it shows until its own read lands.</p>
+<p>The read also carries the branch's stored effort and web search toggle. A pane takes them unless one of its own writes is still on the way, so a setting changed from another window or the API reaches an open pane without a reload.</p>
+<h3 id="branch-settings-status">Implementation status</h3>
+<table class="stack">
+<thead><tr><th scope="col">Not yet implemented</th><th scope="col">Today</th></tr></thead>
+<tbody>
+<tr><th scope="row">Two branches of one conversation side by side</th><td>A pane shows the selected branch. The server already runs a turn on each branch at once, each with its branch's settings (<a href="../execution/control.html#branch-run-slots">Two branches running at once</a>).</td></tr>
+<tr><th scope="row">ACP turns on the branch's Agent</th><td>The ACP server sends its own Agent, so a branch switched in the app runs the server's Agent from ACP.</td></tr>
+<tr><th scope="row">Scheduler Sandbox policy per branch</th><td>The run's request carries its branch's Sandbox; the scheduler process installs the selected branch's policy.</td></tr>
+</tbody>
+</table>

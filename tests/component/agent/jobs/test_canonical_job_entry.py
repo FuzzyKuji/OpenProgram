@@ -713,7 +713,7 @@ def test_cancel_conflict_records_exact_barrier_and_recovers_deferred_dispatch(
     ledger = UsageLedger(tmp_path / "usage.db")
     runner = JobRunner(max_workers=1, governor=ResourceGovernor(ledger))
     monkeypatch.setattr(runner_module.shared, "_runner", runner)
-    original_accept = runner._execution_control.executions.accept_command_with_transition
+    original_accept = runner._execution_control.executions.accept_cancel
 
     try:
         job_id = runner.spawn_job(
@@ -733,7 +733,7 @@ def test_cancel_conflict_records_exact_barrier_and_recovers_deferred_dispatch(
 
         monkeypatch.setattr(
             runner._execution_control.executions,
-            "accept_command_with_transition", conflict,
+            "accept_cancel", conflict,
         )
         result = execution_run_control.cancel_execution(job_id)
         assert result["recovery_required"] is True
@@ -747,7 +747,7 @@ def test_cancel_conflict_records_exact_barrier_and_recovers_deferred_dispatch(
 
         monkeypatch.setattr(
             runner._execution_control.executions,
-            "accept_command_with_transition", original_accept,
+            "accept_cancel", original_accept,
         )
         runner._reconcile_terminal_dispatch_barriers()
         assert _admission_columns(ledger, job_id, "dispatch_ready", "terminal_blocked") == (0, 0)
@@ -925,3 +925,44 @@ def test_reconciler_reconstructs_completed_when_local_owner_is_gone(
         assert recovered.status is JobStatus.COMPLETED
         assert recovered.result_text is None
         assert ledger.run_tables().handle.first("job_admissions", job_id=job_id)["state"] == "released"
+
+
+def test_stopped_job_keeps_the_reply_row_it_wrote_as_its_branch_tip(
+    tmp_path, store_fixture, fake_worker, monkeypatch,
+):
+    """A stop projects the Job without a turn result; its branch tip is still
+    the reply row admission named for it, when that row was written."""
+    from openprogram.runtime.execution import run_control as execution_run_control
+    import openprogram.runtime.jobs.runner as runner_module
+    from openprogram.runtime.jobs.runner import JobRunner
+    from openprogram.runtime.jobs.resource_governance import ResourceGovernor
+    from openprogram.models.usage.ledger import UsageLedger
+
+    execution_db = tmp_path / "execution.sqlite3"
+    monkeypatch.setattr(
+        "openprogram.state.paths.get_run_state_path", lambda: execution_db,
+    )
+    ledger = UsageLedger(tmp_path / "usage.db")
+    runner = JobRunner(max_workers=1, governor=ResourceGovernor(ledger))
+    monkeypatch.setattr(runner_module.shared, "_runner", runner)
+    try:
+        wrote = runner.spawn_job(
+            session_id="p1", prompt="stopped mid-reply", agent_id="main",
+            defer_dispatch=True,
+        )
+        store_fixture.append_message("p1", {
+            "id": f"{wrote}_user_reply", "role": "assistant",
+            "content": "partial", "timestamp": 1, "predecessor": "a1",
+        })
+        store_fixture.commit_turn("p1", "partial reply")
+        silent = runner.spawn_job(
+            session_id="p1", prompt="stopped before writing", agent_id="main",
+            defer_dispatch=True,
+        )
+        for job_id in (wrote, silent):
+            assert execution_run_control.cancel_execution(job_id)["status"] == "cancelled"
+        assert runner.get_job(wrote).head_id == f"{wrote}_user_reply"
+        assert runner.get_job(silent).head_id is None
+    finally:
+        fake_worker[1].set()
+        runner.shutdown()

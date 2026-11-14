@@ -1,6 +1,7 @@
 """Platform terminal."""
 from __future__ import annotations
 import logging
+import ntpath
 import os
 import subprocess as _subprocess
 import sys as _sys
@@ -173,16 +174,46 @@ def _utf8_shell_environment(env=None):
     return child_env
 
 
+# Before the command: UTF-8 on all three console streams (a pipe otherwise
+# carries the OEM code page), and no progress records, which Windows
+# PowerShell writes to a redirected stderr as CLIXML. After it: -Command and
+# -EncodedCommand report any failure as 1, so the last program's own exit code
+# is passed on, as bash does.
+_POWERSHELL_BEFORE = (
+    "try { $OutputEncoding=[Console]::OutputEncoding=[Console]::InputEncoding="
+    "[Text.UTF8Encoding]::new() } catch {}; "
+    "$ProgressPreference='SilentlyContinue'\n"
+)
+# Windows PowerShell 5.1 writes `>` and Out-File as UTF-16, which read and
+# grep see as text full of NUL bytes. As Claude Code does, Out-File (and so
+# `>`) writes UTF-8 instead; 5.1 adds a byte order mark, which read and grep
+# decode. Set-Content and Add-Content keep their own default, so one file never
+# mixes two encodings. PowerShell 7 already writes UTF-8 without a mark.
+_POWERSHELL_51_FILE_ENCODING = (
+    "try { $PSDefaultParameterValues['Out-File:Encoding']='utf8' } catch {}\n"
+)
+_POWERSHELL_AFTER = "\nif (-not $?) { if ($LASTEXITCODE) { exit $LASTEXITCODE }; exit 1 }"
+POWERSHELL_FLAGS = (
+    "-NoLogo", "-NoProfile", "-NonInteractive",
+    # npm, pnpm and yarn resolve to .ps1 shims, which the default Restricted
+    # policy refuses. This holds for this process only and a Group Policy
+    # setting still wins.
+    "-ExecutionPolicy", "Bypass",
+    # Errors reach stderr as text, not as CLIXML.
+    "-OutputFormat", "Text",
+)
+
+
 def powershell_invocation(executable: str, command: str, env=None):
     """Keep PowerShell source/Unicode independent of native argv quoting."""
     import base64
 
-    source = (
-        '$OutputEncoding=[Console]::OutputEncoding=[Text.UTF8Encoding]::new(); '
-        + command
-    )
+    before = _POWERSHELL_BEFORE
+    if not ntpath.basename(executable).lower().startswith("pwsh"):
+        before += _POWERSHELL_51_FILE_ENCODING
+    source = before + command + _POWERSHELL_AFTER
     encoded = base64.b64encode(source.encode("utf-16-le")).decode("ascii")
-    return [executable, "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], _utf8_shell_environment(env)
+    return [executable, *POWERSHELL_FLAGS, "-EncodedCommand", encoded], _utf8_shell_environment(env)
 
 
 def git_bash_invocation(bash: str, command: str, env=None):

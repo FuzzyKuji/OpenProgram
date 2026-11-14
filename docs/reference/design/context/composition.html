@@ -6,7 +6,7 @@
 <p>Layers follow Hermes's stable, context and volatile split. Hermes reaches them through a hard-wired <code translate="no">if</code> chain with two registration points; here every component is a registration.</p>
 
 <figure>
-<svg class="fig-wide" viewBox="0 0 680 262" role="img" aria-label="A request runs top to bottom from most to least stable. Tools carry L0 toolset and MCP, then breakpoint 1. System carries L0 base prompt, output style and agent instructions, then breakpoint 2, then L1 environment, AGENTS.md, memory, open work, capabilities, date and plan mode, then breakpoint 3. Messages carry the L1 history, then breakpoint 4, then L2 this call, which is not cached.">
+<svg class="fig-wide" viewBox="0 0 680 262" role="img" aria-label="A request runs top to bottom from most to least stable. Tools carry L0 toolset and MCP, then breakpoint 1. System carries L0 base prompt, output style and agent instructions, then breakpoint 2, then L1 environment, AGENTS.md, memory, open work, capabilities and plan mode, then breakpoint 3. Messages carry the L1 history, then breakpoint 4, then L2 this call, which is not cached.">
   <text class="t-soft" x="0" y="20">Most stable</text>
   <rect class="tile" x="84" y="30" width="596" height="44" rx="6"/>
   <text x="0" y="57">tools</text>
@@ -20,7 +20,7 @@
   <text class="t-soft" x="560" y="109">breakpoint 2</text>
   <rect class="tile" x="84" y="130" width="596" height="44" rx="6"/>
   <text class="t-soft" x="98" y="157">L1</text>
-  <text x="130" y="157">environment, AGENTS.md, memory … date, plan</text>
+  <text x="130" y="157">environment, AGENTS.md, memory … plan mode</text>
   <text class="t-soft" x="560" y="157">breakpoint 3</text>
   <rect class="tile" x="84" y="182" width="596" height="44" rx="6"/>
   <text x="0" y="209">messages</text>
@@ -33,7 +33,7 @@
 <dl class="pairs fig-narrow">
   <dt><code translate="no">tools</code></dt><dd>L0 toolset, MCP · breakpoint 1</dd>
   <dt><code translate="no">system</code></dt><dd>L0 base, output style, agent instructions · breakpoint 2</dd>
-  <dt><code translate="no">system</code></dt><dd>L1 environment, AGENTS.md, memory … date, plan · breakpoint 3</dd>
+  <dt><code translate="no">system</code></dt><dd>L1 environment, AGENTS.md, memory … plan mode · breakpoint 3</dd>
   <dt><code translate="no">messages</code></dt><dd>L1 history, grows at the end · breakpoint 4</dd>
   <dt><code translate="no">messages</code></dt><dd>L2 this call: not cached</dd>
 </dl>
@@ -67,7 +67,7 @@ class ContextComponent:
 <table class="stack">
 <thead><tr><th scope="col">Order</th><th scope="col">Component</th><th scope="col">Appears when</th></tr></thead>
 <tbody>
-<tr><th scope="row">10</th><td><code translate="no">base</code>: who the agent is, how it works, what it trusts (<code translate="no">context/guides/base.md</code>)</td><td>Always</td></tr>
+<tr><th scope="row">10</th><td><code translate="no">base</code>: who the agent is, how it works, when it stops, what it owns, how it reports, what it trusts (<code translate="no">context/guides/base.md</code>)</td><td>Always</td></tr>
 <tr><th scope="row">20</th><td><code translate="no">output_style</code></td><td>Non-default style</td></tr>
 <tr><th scope="row">30</th><td><code translate="no">inline_prompt</code>: the agent's own instructions; wins conflicts</td><td><code translate="no">system_prompt</code> set</td></tr>
 <tr><th scope="row">—</th><td>Tools and MCP schema, in the request's tool list</td><td>Always</td></tr>
@@ -79,11 +79,10 @@ class ContextComponent:
 <tbody>
 <tr><th scope="row">10</th><td><code translate="no">environment</code>: OS, shell, working directory, Git repository, remote environment, extra directories, channel formatting</td><td>Always</td></tr>
 <tr><th scope="row">20</th><td><code translate="no">agents_md</code>: global, then project root down to cwd; 32 KiB shared budget</td><td>Any file</td></tr>
-<tr><th scope="row">30</th><td><code translate="no">memory</code>: <code translate="no">MEMORY.md</code> map, then core</td><td>Readable, non-empty</td></tr>
+<tr><th scope="row">30</th><td><code translate="no">memory</code>: <code translate="no">MEMORY.md</code> map, then core. Like <code translate="no">environment</code>, <code translate="no">agents_md</code>, <code translate="no">open_work</code> and <code translate="no">capabilities</code>, a movable section: a conversation keeps the text its prompt was recorded with while nothing else in the prompt changes, and a later version rides the turn's message (see L2)</td><td>Readable, non-empty</td></tr>
 <tr><th scope="row">35</th><td><code translate="no">open_work</code>: what the agent still owes</td><td>Any open</td></tr>
 <tr><th scope="row">40</th><td><code translate="no">capabilities</code>: skill index, Program recipe, deferred tool names (up to 80)</td><td>Any present</td></tr>
-<tr><th scope="row">85</th><td><code translate="no">current_date</code>, day granularity. Last so a midnight rollover loses only what follows</td><td>Always</td></tr>
-<tr><th scope="row">90</th><td><code translate="no">plan_mode</code></td><td>Plan mode on</td></tr>
+<tr><th scope="row">90</th><td><code translate="no">plan_mode</code>: only for a turn with a prompt of its own; the conversation's own turn gets it beside its message (see L2)</td><td>Plan mode on</td></tr>
 <tr><th scope="row">—</th><td>History: the active branch</td><td>History present</td></tr>
 </tbody>
 </table>
@@ -103,13 +102,27 @@ class ContextComponent:
 </details>
 
 <h3 id="l2">L2</h3>
-<p><code translate="no">build_system_prompt</code> assembles L0 and L1 only. Programs add L2 with <code translate="no">ctx.context(name, build, layer="L2")</code>, registered as <code translate="no">&lt;owner&gt;:&lt;name&gt;</code>. <code translate="no">build_turn_sections(agent, turn, channel=, tools=)</code> builds them; builders read <code translate="no">turn_inputs()</code>; the turn loop (<code translate="no">resolve_agent_runtime</code>) appends the text to that call's system prompt after the goal instructions. A resumed checkpoint keeps its saved prompt.</p>
+<p><code translate="no">build_system_prompt</code> assembles L0 and L1 only. Programs add L2 with <code translate="no">ctx.context(name, build, layer="L2")</code>, registered as <code translate="no">&lt;owner&gt;:&lt;name&gt;</code>. <code translate="no">build_turn_sections(agent, turn, channel=, tools=)</code> builds them; builders read <code translate="no">turn_inputs()</code>; the conversation's own turn sends the text beside its message as the <code translate="no">pages</code> section; another turn (a verification, a check-in) appends it to its system prompt after the goal instructions.</p>
+<p>A resumed checkpoint keeps its saved prompt.</p>
+<p>Everything below rides in front of the turn's user message, in this order, stored on the user node as its <code translate="no">turn_context</code> list (<code translate="no">context.turn_context</code>). Later requests render the same bytes from it. The code that builds a request passes its <code translate="no">audience</code> to the render.</p>
 <table class="stack fixed">
 <thead class="sr"><tr><th scope="col">Content</th><th scope="col">Delivered by</th></tr></thead>
 <tbody>
-<tr><th scope="row">Per-turn memory prefetch</th><td><code translate="no">_inject_memory_prefetch</code>: prefix inside the current user message</td></tr>
+<tr><th scope="row">Date</th><td><code translate="no">Today is {weekday}, {month} {day}, {year}.</code> first in the same prefix, not in the system prompt: it changes at midnight with nothing else changing. The user node stores the date it was sent on (<code translate="no">current_date</code>), so a conversation that crosses midnight keeps its cached prefix; Codex likewise sends the date in the turn's environment context</td></tr>
+<tr><th scope="row">When the date goes</th><td>A turn sends it only when it differs from the last date in the rendered history (Claude Code, Codex, Kimi Code and OpenCode do the same), so the first turn and the first after midnight or a compaction carry it. A <code translate="no">runtime.exec</code> model call gets it too (<code translate="no">AgentLoopConfig.dated</code>); a workflow role and a host-supplied <code translate="no">call</code> do not</td></tr>
+<tr><th scope="row">Rewind note</th><td>After the date: how the conversation and the files relate after a rewind. A rewind leaves it pending on the session; it is taken onto the conversation's next message when that message is stored, so a turn that fails and is sent again still carries it</td></tr>
+<tr><th scope="row">Section updates</th><td>Next, one per changed section, each the whole current text replacing the prompt's section and any earlier update: <code translate="no">&lt;memory-map-update&gt;</code> for memory, <code translate="no">&lt;system-prompt-update section="…"&gt;</code> for the others, and the open Pages</td></tr>
+<tr><th scope="row">Recorded prompt kept</th><td>When the recorded prompt differs from the new one only in movable sections (<code translate="no">turn_context.kept_sections</code>), it is sent again byte for byte. A new shell comes this way, once, in the environment's update; the prompt keeps the first one</td></tr>
+<tr><th scope="row">Plan mode, Goal, todos</th><td>After the section updates, on the conversation's own turn, decided from what the rendered history shows: the plan-mode note on entering, every fifth turn after (every fifth note full) and once on leaving (<code translate="no">plan_mode.note_for</code>)</td></tr>
+<tr><th scope="row">Goal and todos</th><td>Decided the same way: the Goal's full note when no full note in view says the same, else a short one with the usage (<code translate="no">goal.chat.goal_note</code>); the Goal's todo list after 10 turns without a todo tool. None of them is in the system prompt, so starting a Goal or entering Plan rebuilds nothing</td></tr>
+<tr><th scope="row">When an update is sent</th><td>When a section differs from what the request shows: the last update of it in the rendered history, or the prompt's section when none is rendered (compacted, clean or bounded history)</td></tr>
+<tr><th scope="row">Gone or rebuilt</th><td>A section that is gone gets an update saying it no longer applies; memory turned off is one such update, and the memory leaves the prompt at the first rebuild after a compaction. Any other prompt change rebuilds the prompt with the current sections. A context engine that does not report the last updates it rendered is assumed to show any stored one</td></tr>
+<tr><th scope="row">Where updates render</th><td>Only in the conversation's own request, the one turn kind that keeps the branch's recorded prompt (<code translate="no">loop_runner.owns_conversation_contract</code>), the memory section's too after memory is turned off: history is never taken back. The user node records that (<code translate="no">memory_map_notes</code>), so a resumed turn renders exactly what it sent</td></tr>
+<tr><th scope="row">Where none render</th><td>A tool, <code translate="no">runtime.exec</code> or Agent method inside the turn, a Goal verification, a check-in, a workflow and a summary render none: their own prompt holds today's sections. The context panel counts updates when the branch's latest turn sent them</td></tr>
+<tr><th scope="row">Per-turn memory prefetch</th><td><code translate="no">_inject_memory_prefetch</code>: prefix inside the turn's user message, on a copy made for the request; it stays on that message when the loop adds notes after it, and later turns render it there from the stored node</td></tr>
+<tr><th scope="row">Run note</th><td>Joined after the memory prefetch, in the same prefix. The user node stores it (<code translate="no">run_note</code>), so later turns render it there; a turn resumed from a checkpoint renders it from the node and does not add it again</td></tr>
 <tr><th scope="row">User input and attachments</th><td>The user message</td></tr>
-<tr><th scope="row">The App's open browser Pages</th><td><code translate="no">application:browser:pages</code>, through <code translate="no">build_turn_sections</code>, when the browser application is loaded and the turn has Pages or the browser is available</td></tr>
+<tr><th scope="row">The App's open browser Pages</th><td><code translate="no">application:browser:pages</code>, through <code translate="no">build_turn_sections</code>, when the browser application is loaded and the turn has Pages or the browser is available; a section update beside the message when the list changes</td></tr>
 <tr><th scope="row">Situation, output format and contract</th><td>Designed; see below</td></tr>
 </tbody>
 </table>
@@ -119,18 +132,19 @@ class ContextComponent:
 <summary>Text of the built components</summary>
 <pre translate="no" tabindex="0"><code>You are {name} (agent_id={agent_id}), an agent running in OpenProgram on the user's computer.{mentions}
 # How you work …
+# Finishing work …
+# The project is yours …
+# How you report …
 # What to trust …
 
 &lt;environment&gt;
-OS: {os} · Shell: {shell}
+OS: {os} · Shell: {name} ({path})            # the shell commands run in (the sandbox's when it is on), not the login shell
 Working directory: {cwd}
 Git repository: {root}                       # when cwd is inside one
 Runs on SSH host … / in a Docker container … # remote environments
 Also writable: {dirs}
 {channel rule}                               # telegram / discord / slack / wechat / web
-&lt;/environment&gt;
-
-Today is {weekday}, {month} {day}, {year}.</code></pre>
+&lt;/environment&gt;</code></pre>
 <p>The channel is the turn's <code translate="no">source</code>, passed to <code translate="no">build_system_prompt(channel=...)</code>. A <code translate="no">web</code> turn in a chat bound to a channel conversation gets none, because replies go to that channel as text. Sources with no rule (<code translate="no">tui</code>, <code translate="no">acp</code>, <code translate="no">agent_spawn</code>) add no line. The web rule is the whole of <code translate="no">guides/visuals.md</code>; every name it lists must exist in <code translate="no">openprogram/interfaces/server/routes/visual-frame.html</code> and <code translate="no">apps/web/lib/chat/markdown/visual-frames.ts</code>.</p>
 </details>
 

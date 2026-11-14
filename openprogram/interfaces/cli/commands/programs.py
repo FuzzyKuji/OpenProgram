@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+from openprogram.host._platform.filesystem import replace_file
 
 
 def _get_runtime(provider=None, model=None):
@@ -424,7 +425,7 @@ def _install_git(ref: str, *, upgrade: bool = False, replace: bool = False, trus
             print(f"[x] {name}: git pull failed.")
             sys.exit(1)
     else:
-        os.replace(staging, dest)
+        replace_file(staging, dest)
         print(f"[ok] cloned into {dest}")
     kinds = program_kinds(dest)
     harness = _find_python_package(str(dest))
@@ -487,7 +488,7 @@ def _set_aside(path: str) -> str:
     from openprogram.state.program_directory import removed_root
     target = removed_root() / f"{os.path.basename(path)}-{time.strftime('%Y%m%d-%H%M%S')}"
     target.parent.mkdir(parents=True, exist_ok=True)
-    os.replace(path, target)
+    replace_file(path, target)
     return str(target)
 
 

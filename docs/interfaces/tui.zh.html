@@ -17,6 +17,8 @@
 <thead class="sr"><tr><th scope="col">按键</th><th scope="col">操作</th></tr></thead>
 <tbody>
 <tr><th scope="row"><code translate="no">Enter</code></th><td>发送</td></tr>
+<tr><th scope="row">生成中按 <code translate="no">Enter</code></th><td>消息排在输入框上方；本轮结束或被停止后，排队的消息逐轮发出</td></tr>
+<tr><th scope="row">有排队消息时在空提示符下按 <code translate="no">↑</code></th><td>选中一条：<code translate="no">Enter</code> 或 <code translate="no">e</code> 编辑，<code translate="no">x</code> 删除，<code translate="no">Esc</code> 返回</td></tr>
 <tr><th scope="row"><code translate="no">Alt+Enter</code></th><td>换行</td></tr>
 <tr><th scope="row">空提示符下按 <code translate="no">?</code></th><td>快捷键参考</td></tr>
 <tr><th scope="row"><code translate="no">Esc</code></th><td>清空输入；生成中则中止本轮</td></tr>
@@ -29,10 +31,13 @@
 <tr><th scope="row"><code translate="no">Ctrl+R</code></th><td>搜索已保存的上下文</td></tr>
 <tr><th scope="row"><code translate="no">Shift+Tab</code></th><td>循环权限模式：Bypass permissions、Auto、Manual、Plan</td></tr>
 <tr><th scope="row"><code translate="no">Ctrl+K</code></th><td>命令面板，含全部斜杠命令</td></tr>
+<tr><th scope="row"><code translate="no">Ctrl+O</code></th><td>完整显示工具输出，再按一次折叠</td></tr>
+<tr><th scope="row"><code translate="no">Ctrl+V</code>（Windows 上 <code translate="no">Alt+V</code>）</th><td>附加剪贴板里的图片。粘贴或拖入图片、PDF 的路径，或发送指向它们的 <code translate="no">@path</code>，也会附加文件；删掉 <code translate="no">[Image #1]</code> 占位符即取消</td></tr>
 <tr><th scope="row"><code translate="no">PageUp</code> <code translate="no">PageDown</code>、<code translate="no">Ctrl+U</code> <code translate="no">Ctrl+D</code></th><td>按页、按半页滚动</td></tr>
 <tr><th scope="row"><code translate="no">Home</code> <code translate="no">End</code></th><td>顶部、底部</td></tr>
 </tbody>
 </table>
+<p class="note">在 <code translate="no">~/.openprogram/keybindings.json</code> 里改键，例如 <code translate="no">{"app.toolsExpand": "ctrl+t", "app.commandPalette": "none"}</code>；动作名和当前生效的键在 <code translate="no">?</code> 里列出。文件里的错误在启动时于转录中提示，其余部分照常生效。</p>
 <h2>斜杠命令</h2>
 <table class="stack fixed">
 <thead class="sr"><tr><th scope="col">命令</th><th scope="col">操作</th></tr></thead>

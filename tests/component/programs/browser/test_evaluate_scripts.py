@@ -7,7 +7,7 @@ import subprocess
 
 import pytest
 
-from openprogram.programs.applications.browser.web_use import page_actions as pa
+from openprogram.programs.applications.browser import page_actions as pa
 
 # Each generated function is called as the page would call it, against a stand-in document.
 _HARNESS = r"""

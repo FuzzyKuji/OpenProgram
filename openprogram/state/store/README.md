@@ -50,6 +50,8 @@ store/
 │                           a commit stays in runtime/context/commit
 │    spill.py               write-path spill of over-cap node text into
 │                           `large_nodes/` (render only cites the file)
+│    weight.py              a text's additive weight (CJK 1, else 0.25),
+│                           which decides where spill cuts
 │    rewind_recovery.py     replays an interrupted rewind's journal when a
 │                           session is opened
 │

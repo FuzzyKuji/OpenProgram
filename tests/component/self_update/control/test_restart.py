@@ -274,7 +274,8 @@ def test_supervisor_refreshes_session_status_written_by_worker(tmp_path, monkeyp
 def test_a_locked_session_cannot_stall_the_check_past_its_deadline(tmp_path, monkeypatch):
     from openprogram.operations.self_update.control import supervisor
     from openprogram.runtime.jobs import store as job_store
-    from openprogram.state.store.session.session_lock import session_interprocess_lock
+    from openprogram.host._platform import locking
+    from openprogram.state.store.session.session_lock import session_lock_path
 
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(
@@ -282,7 +283,10 @@ def test_a_locked_session_cannot_stall_the_check_past_its_deadline(tmp_path, mon
         lambda: SimpleNamespace(list_sessions=lambda **_: [{"id": "held", "status": "idle"}]),
     )
     monkeypatch.setattr(job_store, "_jobs_path", lambda session_id: None)
-    with session_interprocess_lock("held"):
+    # A second open file description holds the flock, as another process would
+    # (this process's own lock is reentrant for its holder).
+    with session_lock_path("held").open("a+") as other:
+        locking.flock(other.fileno(), locking.LOCK_EX)
         started = supervisor.time.monotonic()
         assert supervisor.active_work() == ["conversation held (locked by another process)"]
         assert not supervisor._wait_for_quiescence(supervisor.time.time() + 0.01)

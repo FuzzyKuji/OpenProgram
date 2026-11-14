@@ -1,4 +1,5 @@
 import { jsonFetch } from "./fetch-client";
+import { branchTarget } from "@/lib/agents/branch-target";
 import type {
   Provider,
   Model,
@@ -14,6 +15,18 @@ import type {
   DiscoveredCredential,
   PoolView,
 } from "@/lib/types";
+
+/** ``/api/model``'s answer: the branch written (``branch_id``), the one
+ *  selected, that branch's stored settings and the model's own controls. */
+export interface ModelPickReply {
+  switched?: boolean;
+  provider?: string;
+  model?: string;
+  branch_id?: string | null;
+  active_branch_id?: string | null;
+  settings?: Record<string, unknown>;
+  chat?: Record<string, unknown>;
+}
 
 export interface GoalControls {
   can_resume: boolean;
@@ -174,10 +187,12 @@ export const api = {
   // required — without it the backend only updates the global default
   // and the active conversation keeps using its old runtime (the bug
   // where "switching to Opus" silently kept routing to Sonnet).
-  switchModel: (provider: string, model: string, session_id?: string) =>
-    jsonFetch<{ ok: true }>("/api/model", {
+  /** Pin a conversation's model on the branch the pane shows (``branchId``),
+   *  like every other branch setting; see ``branchTarget``. */
+  switchModel: (provider: string, model: string, session_id?: string, branchId?: string | null) =>
+    jsonFetch<ModelPickReply>("/api/model", {
       method: "POST",
-      body: JSON.stringify({ provider, model, session_id }),
+      body: JSON.stringify({ provider, model, session_id, ...branchTarget(branchId) }),
     }),
 
   getAgentSettings: () => jsonFetch<Record<string, unknown>>("/api/agent_settings"),

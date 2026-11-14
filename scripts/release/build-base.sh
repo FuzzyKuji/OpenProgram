@@ -126,10 +126,31 @@ test "$actual_uv" = "$uv_pin" || {
   printf 'uv version mismatch: expected %s, got %s\n' "$uv_pin" "$actual_uv" >&2
   exit 1
 }
-node_bin="$(command -v node || true)"
-test -n "$node_bin" || { printf 'missing build command: node\n' >&2; exit 1; }
+# The base carries node as one file, so it must run with nothing beside it. A
+# node linked against a shared libnode (Homebrew's) does not, and is passed over.
+runs_alone() {
+  local probe status=0
+  probe="$(mktemp -d)"
+  cp "$1" "$probe/node" && "$probe/node" --version >/dev/null 2>&1 || status=1
+  rm -rf "$probe"
+  return "$status"
+}
+node_bin=""
+found_node=""
+while IFS= read -r candidate; do
+  found_node="${found_node:-$candidate}"
+  if runs_alone "$candidate"; then node_bin="$candidate"; break; fi
+done < <(type -ap node || true)
+test -n "$found_node" || { printf 'missing build command: node\n' >&2; exit 1; }
+test -n "$node_bin" || {
+  printf 'no node on PATH runs on its own (first found: %s); install an official Node build\n' "$found_node" >&2
+  exit 1
+}
+# npm from the same installation as that node, run by it.
+node_dir="$(dirname "$node_bin")"
+npm_run() { PATH="$node_dir:$PATH" npm "$@"; }
 node_pin="$("$node_bin" --version)"
-npm_pin="$(npm --version)"
+npm_pin="$(npm_run --version)"
 
 mkdir -p "$dest/assets" "$dest/bin"
 
@@ -181,7 +202,7 @@ mkdir -p "$dest/lib/node_modules"
 if test -n "$(pin_of npm)" && test "$(pin_of npm)" = "$npm_pin"; then
   clone_tree "$clone_from/lib/node_modules/npm" "$dest/lib/node_modules/npm"
 else
-  cp -R "$(npm root -g)/npm" "$dest/lib/node_modules/npm"
+  cp -R "$(npm_run root -g)/npm" "$dest/lib/node_modules/npm"
 fi
 ln -s ../lib/node_modules/npm/bin/npm-cli.js "$dest/bin/npm"
 if test -n "$(pin_of uv)" && test "$(pin_of uv)" = "$uv_pin"; then

@@ -515,7 +515,7 @@ def test_a_page_script_needs_what_any_other_action_in_that_browser_needs(decide,
     assert exact_rule_for_call("computer_use_agent", call) is None
     for mode in ("default", "acceptEdits", "auto", "bypass"):
         assert decide(call, mode=mode) == decide(click, mode=mode)
-    monkeypatch.setattr(type(session_facts.facts()), "web_use_available", lambda self, context: True)
+    monkeypatch.setattr(type(session_facts.facts()), "browser_pages_available", lambda self, context: True)
     for mode in ("default", "acceptEdits", "auto"):
         assert decide(call, mode=mode) == ("allow", "SURFACE_GRANT")
     assert decide(call, mode="bypass") == ("allow", "MODE_UNRESTRICTED")
@@ -685,7 +685,9 @@ def test_the_first_call_to_a_target_carries_its_guide_once(fake, monkeypatch):
         return guides.attach(entry.NAME, args, AgentToolResult(content=[TextContent(text=result.text)]))
 
     def text(result):
-        return "".join(part.text for part in result.content)
+        from openprogram.models.providers.shared.tool_attachments import record
+        entry = record(result.details)
+        return (entry["text"] if entry else "") + "".join(part.text for part in result.content)
     token = guides.begin_loop()
     try:
         first = text(call())
@@ -883,8 +885,7 @@ def test_a_recording_reaches_models_that_hear_audio_and_only_them():
     from openprogram.models.providers.types import (AssistantMessage, Context, Model, ToolCall, ToolResultMessage,
                                              UserMessage)
 
-    result = _normalize_result(ToolReturn(text="Recorded 1 seconds of Chess.", audio=[b"RIFFwav"]), call_id="c1",
-                               max_chars=10_000, persist_full=False, head_ratio=0.5)
+    result = _normalize_result(ToolReturn(text="Recorded 1 seconds of Chess.", audio=[b"RIFFwav"]), call_id="c1")
     assert [c.type for c in result.content] == ["text", "audio"]
     assert base64.b64decode(result.content[1].data) == b"RIFFwav" and result.content[1].mime_type == "audio/wav"
 
@@ -913,8 +914,7 @@ def test_chat_completions_models_see_tool_result_screenshots_and_hear_recordings
     from openprogram.models.providers.types import (AssistantMessage, Context, ImageContent, Model, TextContent, ToolCall,
                                              ToolResultMessage, UserMessage)
 
-    clip = _normalize_result(ToolReturn(text="Recorded 1 seconds of Chess.", audio=[b"RIFFwav"]), call_id="c1",
-                             max_chars=10_000, persist_full=False, head_ratio=0.5).content
+    clip = _normalize_result(ToolReturn(text="Recorded 1 seconds of Chess.", audio=[b"RIFFwav"]), call_id="c1").content
     shot = [TextContent(text="Calculator."), ImageContent(data=base64.b64encode(b"png").decode(), mime_type="image/png")]
 
     def messages(inputs):

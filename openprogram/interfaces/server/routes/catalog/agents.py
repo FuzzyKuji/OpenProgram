@@ -35,6 +35,9 @@ _PATCH_FIELDS = {
     "session_idle_minutes",
     "session_daily_reset",
     "hold_outbound",
+    "delegation",
+    "isolation",
+    "permissions",
 }
 
 
@@ -173,6 +176,14 @@ def _validated_patch(raw: object) -> dict[str, Any]:
         if not isinstance(raw["hold_outbound"], bool):
             raise ValueError("hold_outbound must be true or false")
         out["hold_outbound"] = raw["hold_outbound"]
+    for key, allowed in (("delegation", ("", "on", "off")), ("isolation", ("", "worktree", "none"))):
+        if key in raw:
+            if raw[key] not in allowed:
+                raise ValueError(f"{key} must be one of " + ", ".join(repr(v) for v in allowed))
+            out[key] = raw[key]
+    if "permissions" in raw:
+        from openprogram.runtime.agent_registry.manager import validate_permissions
+        out["permissions"] = validate_permissions(raw["permissions"])
     if "avatar" in raw:
         from openprogram.runtime.agent_registry.manager import validate_avatar
         out["avatar"] = validate_avatar(raw["avatar"])

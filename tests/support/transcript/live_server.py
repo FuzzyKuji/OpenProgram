@@ -168,7 +168,10 @@ class LiveChat:
     # Delivery
 
     def _parked(self, value: str) -> None:
-        self._frame(json.loads(value))
+        # QueuedWebSocket releases parked frames through _enqueue, which
+        # applies the protocol filter again after the read has ended.
+        if not ws_delivery.frame_is_for_older_clients(self._read_socket, value):
+            self._frame(json.loads(value))
 
     def _live_frame(self, value: str) -> None:
         # How many of these a run sends depends on tick timing, and they carry no row.
@@ -496,14 +499,19 @@ def live_chat(root: Path) -> Iterator[LiveChat]:
     patch.setattr("openprogram.runtime.execution.default_control_service", lambda: control)
     patch.setattr(session_db, "default_db", lambda: sessions)
     patch.setattr(session_store_module.shared, "_default_store", sessions)
+    # Earlier fixtures may materialize the public package's lazy default_store
+    # export while its source module is patched. Undo restores that old alias,
+    # not __getattr__, so pin BOTH exports to the real singleton resolver here.
+    # Keep the resolver dynamic: _cold temporarily replaces the shared pointer.
+    import openprogram.state.store as public_store
+    patch.setattr(session_store_module, "default_store", session_store_module.shared.default_store)
+    patch.setattr(public_store, "default_store", session_store_module.shared.default_store)
     patch.setattr(server, "_sessions", {})
     patch.setattr(server, "_broadcast", chat.broadcast)
     patch.setattr(server, "_get_provider_info", lambda _sid=None: {})
     patch.setattr(server, "refresh_context_stats", lambda *_a, **_k: None)
     patch.setattr(chat_actions.turn, "_db_agent_id", lambda _sid: "main")
     patch.setattr(session_actions, "broadcast_sessions_list", lambda: None)
-    patch.setattr("openprogram.runtime.conversation.workspace_alignment.get_workspace_alignment",
-                  lambda _sid: {"status": "aligned"})
     patch.setattr(dispatcher, "_load_agent_profile",
                   lambda _id: {"id": "main", "model": f"{_PROVIDER_NAME}/{_MODEL_NAME}"})
     patch.setattr(dispatcher, "_resolve_model", lambda _profile, _override: resolved)

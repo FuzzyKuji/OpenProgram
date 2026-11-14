@@ -1,3 +1,5 @@
+import { adoptCheckedOutBranch, pendingBranchSettings } from "@/lib/agents/branch-settings";
+import { branchSettingsPatch } from "@/lib/session-store/branch-settings";
 import { translateText } from "@/lib/i18n";
 import { wsRequest } from "@/lib/net/ws/ws-request";
 import { sendRuntimeCommand } from "./session-load";
@@ -310,6 +312,7 @@ const answeredCheckouts = new Set<string>();
 /** Move the conversation to `headMsgId`. Resolves to the server's answer;
  *  a refusal is the caller's to show. */
 export async function checkoutBranch(sessionId: string, headMsgId: string): Promise<{ ok: boolean; code?: string }> {
+  await pendingBranchSettings(sessionId);
   const key = `${sessionId}\n${headMsgId}`;
   answeredCheckouts.add(key);
   try {
@@ -326,17 +329,18 @@ export async function checkoutBranch(sessionId: string, headMsgId: string): Prom
 export function onBranchCheckedOut(payload: {
   ok?: boolean;
   code?: string;
+  active_branch_id?: string;
   session_id?: string;
   head_msg_id?: string;
   workspace_alignment?: import("@/lib/session-store/types").ConvSummary["workspace_alignment"];
 }): void {
   if (payload?.ok === false && !answeredCheckouts.has(`${payload.session_id}\n${payload.head_msg_id}`)) {
-    showToast(payload.code === "run_active"
-      ? translateText("This conversation is still running. Switch branches after it finishes or is stopped.",
-        "对话还在运行，结束或停止后才能切换分支。")
-      : translateText("Could not switch branches.", "切换分支失败。"), { tone: "error" });
+    showToast(translateText("Could not switch branches.", "切换分支失败。"), { tone: "error" });
   }
   if (!payload || !payload.ok || !payload.session_id) return;
+  // Switching never waits for a turn; frames of the branch left stop
+  // drawing from here on.
+  adoptCheckedOutBranch(payload.session_id, payload);
   const sessionStore = useSessionStore.getState();
   const existing = sessionStore.conversations[payload.session_id] ?? {
     id: payload.session_id,
@@ -470,6 +474,18 @@ export function newSession(draftId?: string): void {
 
 export function loadSessionData(data: LegacyConv): void {
   const id = data.id as string;
+  if (Array.isArray(data.running_branches)) {
+    const running = data.running_branches;
+    void import("@/lib/chat/run/other-branch-runs").then(({ useOtherBranchRuns }) => {
+      useOtherBranchRuns.getState().seed(id, running);
+    });
+  }
+  const loadedSettings = data.settings as Record<string, unknown> | undefined;
+  if (loadedSettings) {
+    const store = useSessionStore.getState();
+    const branchId = typeof data.active_branch_id === "string" ? data.active_branch_id : null;
+    store.setComposerSettings(branchSettingsPatch(store.composerSettingsBySession[id] ?? {}, branchId, loadedSettings), id);
+  }
   const turns = (data.turns as WireTurn[] | undefined) ?? [];
   const window = data.window as TurnWindow | undefined;
   const served = rowsOfTurns(turns);

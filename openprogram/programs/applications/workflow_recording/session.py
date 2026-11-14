@@ -15,6 +15,7 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
+from openprogram.host._platform.filesystem import replace_file
 
 MAX_SECONDS = 600
 WARN_SECONDS = 30
@@ -135,7 +136,7 @@ class Recording:
         }
         temp = self.directory / "session.json.tmp"
         temp.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
-        os.replace(temp, self.directory / "session.json")
+        replace_file(temp, self.directory / "session.json")
 
     def status(self) -> dict:
         with self._lock:
@@ -278,10 +279,18 @@ _lock = threading.Lock()
 _recordings: dict[str, Recording] = {}
 
 
-def _default_capture(recording: Recording):
+def support(system: str | None = None) -> dict:
+    """Whether a demonstration can be recorded on this computer, and why not."""
     import platform
-    if platform.system() != "Darwin":
-        raise RecordingError("Recording is available on macOS only.")
+    if (system or platform.system()) != "Darwin":
+        return {"available": False, "reason": "Recording is available on macOS only."}
+    return {"available": True, "reason": ""}
+
+
+def _default_capture(recording: Recording):
+    state = support()
+    if not state["available"]:
+        raise RecordingError(state["reason"])
     from .macos import Capture
     return Capture(recording)
 

@@ -4,6 +4,8 @@
 
 <p>原生 x64 和 ARM64 作业用四个 worker 运行平台契约和完整单元测试。被阻塞的诊断进程和普通失败的测试都必须输出详情并以失败退出。</p>
 
+<p>这两条腿设置 <code translate="no">PYTHONUTF8=1</code>，也就是发布的 launcher 启动 Python 的模式。第三条 x64 腿设置 <code translate="no">PYTHONUTF8=0</code>，对应产品仍按系统代码页启动的进程。</p>
+
 <table class="stack fixed">
 <thead class="sr"><tr><th scope="col">关注点</th><th scope="col">规则</th></tr></thead>
 <tbody>
@@ -32,4 +34,4 @@
 
 <h2 id="status">实现状态</h2>
 
-<p>最终的 x64 和 ARM64 原生回归确认尚未完成。</p>
+<p>最终的 x64 和 ARM64 原生回归确认尚未完成。<code translate="no">PYTHONUTF8=0</code> 这条腿，以及安装冒烟工作流里的 App 步骤（<code translate="no">scripts/release/smoke-windows-desktop.ps1</code>）、在 Arm 运行器上装 x64 文件和经 worker 的那次工具调用（<code translate="no">scripts/release/smoke-tool-call.py</code>），都还没有运行过。</p>

@@ -26,6 +26,20 @@ from .shared import (
 )
 from .run_tables import TableHandle
 
+
+def _cancel_fingerprint(
+    execution_id: str, reason_code: str, actor: Mapping[str, Any],
+) -> str:
+    """A cancel's request identity. It names no version: a stop does not
+    depend on one."""
+    return _fingerprint({
+        "execution_id": execution_id,
+        "kind": CommandKind.CANCEL.value,
+        "payload": {"reason_code": reason_code},
+        "actor": dict(actor),
+    })
+
+
 class CommandsOperations:
     def accept_command(
         self,
@@ -102,59 +116,188 @@ class CommandsOperations:
         after_transition: Callable[[TableHandle, ExecutionRecord], None] | None = None,
     ) -> tuple[ControlCommand, ExecutionRecord, bool]:
         with self._transaction() as connection:
-            command, duplicate = self._accept_command(
+            existing_row = connection.get("commands", command_id)
+            if existing_row is not None:
+                command, _ = self._accept_command(
+                    connection,
+                    command_id=command_id,
+                    execution_id=execution_id,
+                    expected_version=expected_version,
+                    kind=kind,
+                    payload=payload,
+                    actor=actor,
+                )
+                execution = self._require_execution(connection, execution_id)
+                return command, execution, True
+            command, execution = self._accept_with_transition(
                 connection,
                 command_id=command_id,
                 execution_id=execution_id,
                 expected_version=expected_version,
                 kind=kind,
+                target=target,
                 payload=payload,
                 actor=actor,
-            )
-            if duplicate:
-                execution = self._require_execution(connection, execution_id)
-                return command, execution, True
-            execution = self._transition_execution(
-                connection,
-                execution_id,
-                expected_version=expected_version,
-                target=target,
                 reason_code=reason_code,
+                supersede_kinds=supersede_kinds,
+                supersede_code=supersede_code,
+                apply_command=apply_command,
+                after_transition=after_transition,
             )
-            if after_transition is not None:
-                after_transition(connection, execution)
-            if supersede_kinds:
-                rows = connection.rows(
-                    "commands",
-                    execution_id=execution_id,
-                    status=(CommandStatus.ACCEPTED.value, CommandStatus.APPLYING.value),
-                    kind=tuple(superseded.value for superseded in supersede_kinds),
-                    where=lambda row: row["command_id"] != command_id,
+            return command, execution, False
+
+
+    def _accept_with_transition(
+        self,
+        connection: TableHandle,
+        *,
+        command_id: str,
+        execution_id: str,
+        expected_version: int,
+        kind: CommandKind,
+        target: ExecutionStatus,
+        payload: Mapping[str, Any],
+        actor: Mapping[str, Any],
+        reason_code: str | None,
+        supersede_kinds: Collection[CommandKind],
+        supersede_code: str,
+        apply_command: bool = False,
+        after_transition: Callable[[TableHandle, ExecutionRecord], None] | None = None,
+        fingerprint: str | None = None,
+    ) -> tuple[ControlCommand, ExecutionRecord]:
+        """Write a new command and the execution transition it causes."""
+        command, _ = self._accept_command(
+            connection,
+            command_id=command_id,
+            execution_id=execution_id,
+            expected_version=expected_version,
+            kind=kind,
+            payload=payload,
+            actor=actor,
+            fingerprint=fingerprint,
+        )
+        execution = self._transition_execution(
+            connection,
+            execution_id,
+            expected_version=expected_version,
+            target=target,
+            reason_code=reason_code,
+        )
+        if after_transition is not None:
+            after_transition(connection, execution)
+        if supersede_kinds:
+            rows = connection.rows(
+                "commands",
+                execution_id=execution_id,
+                status=(CommandStatus.ACCEPTED.value, CommandStatus.APPLYING.value),
+                kind=tuple(superseded.value for superseded in supersede_kinds),
+                where=lambda row: row["command_id"] != command_id,
+            )
+            for row in rows:
+                self._transition_command(
+                    connection,
+                    str(row["command_id"]),
+                    expected_status=CommandStatus(row["status"]),
+                    target=CommandStatus.REJECTED,
+                    result_version=execution.status_version,
+                    rejection_code=supersede_code,
                 )
-                for row in rows:
-                    self._transition_command(
-                        connection,
-                        str(row["command_id"]),
-                        expected_status=CommandStatus(row["status"]),
-                        target=CommandStatus.REJECTED,
-                        result_version=execution.status_version,
-                        rejection_code=supersede_code,
-                    )
+        command = self._transition_command(
+            connection,
+            command_id,
+            expected_status=CommandStatus.ACCEPTED,
+            target=CommandStatus.APPLYING,
+        )
+        if apply_command:
             command = self._transition_command(
                 connection,
                 command_id,
-                expected_status=CommandStatus.ACCEPTED,
-                target=CommandStatus.APPLYING,
+                expected_status=CommandStatus.APPLYING,
+                target=CommandStatus.APPLIED,
+                result_version=execution.status_version,
             )
-            if apply_command:
-                command = self._transition_command(
-                    connection,
-                    command_id,
-                    expected_status=CommandStatus.APPLYING,
-                    target=CommandStatus.APPLIED,
-                    result_version=execution.status_version,
+        return command, execution
+
+
+    def accept_cancel(
+        self,
+        *,
+        command_id: str,
+        execution_id: str,
+        actor: Mapping[str, Any],
+        reason_code: str,
+        supersede_kinds: Collection[CommandKind] = (),
+        after_transition: Callable[[TableHandle, ExecutionRecord], None] | None = None,
+        at_version: int | None = None,
+    ) -> tuple[ControlCommand | None, ExecutionRecord, str]:
+        """Take a stop of ``execution_id`` at whatever version it holds now.
+
+        A stop names its execution, not a version: the caller's intent is
+        that the run ends, whichever state it moved to since it last looked.
+        One transaction reads the execution and answers by its state:
+
+        ``"accepted"``  a new command, the execution moved to ``cancelling``;
+        ``"replayed"``  this command id was taken before (same request);
+        ``"cancelling"`` an earlier stop is in force: its command comes back;
+        ``"terminal"``  the execution has ended; there is no command.
+
+        ``at_version`` is only for a caller that prepared something for one
+        exact snapshot (a Job's dispatch fence); it refuses a moved version.
+        """
+        with self._transaction() as connection:
+            existing_row = connection.get("commands", command_id)
+            if existing_row is not None:
+                # The same id stopping the same execution is the same stop,
+                # whoever repeats it and whatever reason it gives now (a
+                # parent's stop and the run's own limit reach one child).
+                if (
+                    existing_row["execution_id"] != execution_id
+                    or existing_row["kind"] != CommandKind.CANCEL.value
+                ):
+                    raise CommandConflict(
+                        "idempotency_collision",
+                        f"command_id was already used for a different request: {command_id}",
+                    )
+                return (
+                    self._command(existing_row),
+                    self._require_execution(connection, execution_id),
+                    "replayed",
                 )
-            return command, execution, False
+            execution = self._require_execution(connection, execution_id)
+            if execution.status in TERMINAL_EXECUTION_STATUSES:
+                return None, execution, "terminal"
+            if execution.status is ExecutionStatus.CANCELLING:
+                row = connection.first(
+                    "commands",
+                    order=("submitted_at", "command_id"),
+                    execution_id=execution_id,
+                    kind=CommandKind.CANCEL.value,
+                    status=CommandStatus.APPLYING.value,
+                )
+                if row is not None:
+                    return self._command(row), execution, "cancelling"
+            if at_version is not None and execution.status_version != at_version:
+                raise ExecutionConflict(
+                    "stale_version",
+                    f"expected execution version {at_version}, "
+                    f"found {execution.status_version}",
+                )
+            command, execution = self._accept_with_transition(
+                connection,
+                command_id=command_id,
+                execution_id=execution_id,
+                expected_version=execution.status_version,
+                kind=CommandKind.CANCEL,
+                target=ExecutionStatus.CANCELLING,
+                payload={"reason_code": reason_code},
+                actor=actor,
+                reason_code=reason_code,
+                supersede_kinds=supersede_kinds,
+                supersede_code="superseded_by_cancel",
+                after_transition=after_transition,
+                fingerprint=_cancel_fingerprint(execution_id, reason_code, actor),
+            )
+            return command, execution, "accepted"
 
 
     def get_command(self, command_id: str) -> ControlCommand | None:
@@ -259,16 +402,18 @@ class CommandsOperations:
         payload: Mapping[str, Any],
         actor: Mapping[str, Any],
         allow_queued_initial_step: bool = False,
+        fingerprint: str | None = None,
     ) -> tuple[ControlCommand, bool]:
-        fingerprint = _fingerprint(
-            {
-                "execution_id": execution_id,
-                "expected_version": expected_version,
-                "kind": kind.value,
-                "payload": dict(payload),
-                "actor": dict(actor),
-            }
-        )
+        if fingerprint is None:
+            fingerprint = _fingerprint(
+                {
+                    "execution_id": execution_id,
+                    "expected_version": expected_version,
+                    "kind": kind.value,
+                    "payload": dict(payload),
+                    "actor": dict(actor),
+                }
+            )
         existing_row = connection.get("commands", command_id)
         if existing_row is not None:
             if existing_row["fingerprint"] != fingerprint:

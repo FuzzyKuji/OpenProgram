@@ -1,7 +1,7 @@
 <title>安装、打包、发布与升级</title>
 <meta name="description" content="谁用什么方式安装 OpenProgram，每个发行版包含什么，以及如何校验、升级和卸载。">
 <h1>安装、打包、发布与升级</h1>
-<p><strong>正式版本</strong>：v1.1.0 是这棵代码树构建的版本；v1.0.0 是最新已发布版本。每个平台和架构一份完整产品运行时。macOS App 只多 Electron 外壳，CLI 只多启动器；Windows 和 Linux App 是<a href="#thin-shell">薄壳</a>加 seed。检查、下载和平台交接见<a href="automatic-updates.zh.html">自动更新</a>。</p>
+<p><strong>正式版本</strong>：v1.2.0 是这棵代码树构建的版本；v1.1.0 是最新已发布版本。每个平台和架构一份完整产品运行时。macOS App 只多 Electron 外壳，CLI 只多启动器；Windows 和 Linux App 是<a href="#thin-shell">薄壳</a>加 seed。检查、下载和平台交接见<a href="automatic-updates.zh.html">自动更新</a>。</p>
 
 <h2>谁拿到什么</h2>
 <table class="stack">
@@ -57,6 +57,7 @@
 </tbody>
 </table>
 <p class="note">arm64 和 x64 分开构建，没有 universal2。失败的平台任务不产出文件，并列在 "Not in this release" 下；只有 wheel 或全部 macOS 和 Linux 运行时缺失时才停止发布。薄壳 App 需要受信任的更新签名密钥，否则永远无法更新。</p>
+<p class="note">产物里没有安装包或归档的平台任务按失败处理，什么都不发布。计划内的包、某个平台的更新文件或安装包的校验文件缺失时，publish 任务在发行版公开之后变红，并逐个列出。开关或缺少密钥而略去的不算。</p>
 <table class="stack fixed">
 <thead><tr><th scope="col">仓库变量</th><th scope="col">任务</th></tr></thead>
 <tbody>
@@ -280,7 +281,7 @@
 <details>
 <summary>Windows、CLI、发布</summary>
 <ul>
-<li>Windows：与 CLI 相同的 ZIP；从解包的 App 校验清单、Python、worker 健康和 Web chat；ConPTY 预设；浏览器路径。更新器只选确切的 EXE。</li>
+<li>Windows：与 CLI 相同的 ZIP；从解包的 App 校验清单、Python、worker 健康和 Web chat；ConPTY 预设；浏览器路径。更新器只选确切的 EXE。打包前运行 <code translate="no">scripts/release/windows-contracts.txt</code> 列出的测试；打包后 <code translate="no">smoke-windows-desktop.ps1</code> 安装、启动到 worker 健康、做一次工具调用，再卸载并保留数据。安装好的 CLI 也做一次工具调用（<code translate="no">smoke-tool-call.py</code>）。</li>
 <li>CLI：两种引导脚本的最新版和固定版；不访问 PyPI 或克隆；哈希一致；升级失败后旧版本仍能启动。</li>
 <li>Release：所有位置同一版本；每个发布资产都通过了各自的任务；没有发布者签名的构建在文件名中带 <code translate="no">-unsigned</code>。</li>
 <li>Linux 桌面：在干净的 Ubuntu 22.04 和 24.04 上、移除 Git 后，用 Xvfb 运行 <code translate="no">scripts/release/smoke-linux-desktop.sh</code>：deb 安装、桌面项、<code translate="no">node-pty</code>、首次运行 seed、解包后重启、worker 健康、<code translate="no">/chat</code>、启动器，以及 <code translate="no">APPIMAGE_EXTRACT_AND_RUN=1</code> 的 AppImage。</li>
@@ -311,8 +312,8 @@
 <tbody>
 <tr><th scope="row">单端口 worker、健康与恢复、运行时内的 Web、能力清单、共用运行时归档、固定 App 安装、图标、CLI 安装器、标签驱动的 Release</th><td>已实现</td></tr>
 <tr><th scope="row">macOS 已签名 DMG 和 ZIP</th><td>已实现；Apple 关卡属于<a href="developer-id.zh.html">外部</a></td></tr>
-<tr><th scope="row">Windows 桌面</th><td>已实现，v1.1.0 首次发布；未在真实 Windows 上运行过。<a href="windows-support.zh.html#implementation-status">Windows 支持</a></td></tr>
-<tr><th scope="row">薄壳和 seed</th><td>已实现，v1.1.0 起用于 Windows 和 Linux App。打包后的外壳通过 macOS 冒烟；Linux deb 和 AppImage 在 arm64 的 Xvfb 下通过。待完成：x86_64 Linux 安装包、真实 Windows 运行，以及 macOS App 转为薄壳前的隐私授权门禁（<a href="developer-id.zh.html">Developer ID</a>）。supervisor 中仍有 <code translate="no">legacy_app</code> 和对 App 的依赖</td></tr>
+<tr><th scope="row">Windows 桌面</th><td>已实现，v1.2.0 首次发布；未在真实 Windows 上运行过。<a href="windows-support.zh.html#implementation-status">Windows 支持</a></td></tr>
+<tr><th scope="row">薄壳和 seed</th><td>已实现，Linux App 从 v1.1.0 起使用，Windows App 从 v1.2.0 起使用。打包后的外壳通过 macOS 冒烟；Linux deb 和 AppImage 在 arm64 的 Xvfb 下通过。待完成：x86_64 Linux 安装包、真实 Windows 运行，以及 macOS App 转为薄壳前的隐私授权门禁（<a href="developer-id.zh.html">Developer ID</a>）。supervisor 中仍有 <code translate="no">legacy_app</code> 和对 App 的依赖</td></tr>
 <tr><th scope="row">Linux 桌面</th><td>已实现，v1.1.0 首次发布。Linux 上的更新激活和回退还需要再跑一次端到端验证</td></tr>
 <tr><th scope="row">Release 工作流</th><td>独立任务和未签名形态已实现并作为脚本测试；工作流本身还没有在 GitHub 上运行过</td></tr>
 <tr><th scope="row">本地刷新收尾</th><td>回归用例通过；已安装 App 的验收未完成</td></tr>

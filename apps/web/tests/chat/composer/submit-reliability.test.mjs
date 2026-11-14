@@ -95,7 +95,7 @@ globalThis.localStorage = { getItem: () => null, setItem() {} };
 globalThis.WebSocket = { OPEN: 1 };
 const { useChatSubmit, stopSession } = await import("../../../components/chat/composer/submit/use-chat-submit.ts");
 const { sendChatMessage } = await import("../../../components/chat/composer/submit/send-chat-message.ts");
-const { useSendQueue, queueFor, reconcileAfterSessionLoad, recheckRunState, releaseStopHold, stopDeferred, stopPending } = await import("../../../lib/chat/send/send-queue.ts");
+const { useSendQueue, queueFor, reconcileAfterSessionLoad, recheckRunState, releaseStopHold, stopPending } = await import("../../../lib/chat/send/send-queue.ts");
 const { pasteStore, placeholderToken } = await import("../../../components/chat/composer/paste/paste-store.ts");
 const pending = await import("../../../lib/chat/send/pending-user-text.ts");
 
@@ -329,6 +329,34 @@ test("pre-ACK stop still records the deferred stop without sending an unidentifi
   stopSession("A", () => assert.fail("no identified execution to cancel yet"));
   assert.equal(host.runtime._optimisticStops.A.messageId, "exec-A");
   assert.equal(host.sessions.runningTasks.A, undefined);
+});
+
+test("pre-ACK stop names the send at once when its request id is known", () => {
+  running("A", { provisional: true });
+  pending.setPendingUserText("A", "hello", Date.now(), { requestId: "req-A" });
+  const sent = [];
+  stopSession("A", payload => { sent.push(payload); return true; });
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].action, "execution.cancel");
+  assert.equal(sent[0].session_id, "A");
+  assert.equal(sent[0].client_request_id, "req-A");
+  assert.equal("execution_id" in sent[0], false);
+  // The ack sends no second cancel: it finds the stop already in force.
+  assert.equal(host.runtime._optimisticStops.A.commandId, sent[0].command_id);
+});
+
+test("a Stop on a function run or retry before its answer names the run by its request id", () => {
+  // A REST function run (or a Retry) is admitted with the id the page made;
+  // the stop names it before the response names the execution (Codex
+  // returns the turn id at once; the request id covers the gap).
+  host.sessions.runningTasks.A = { session_id: "A", msg_id: "__optimistic_fn__:f:1", func_name: "f", client_request_id: "fn-req-A" };
+  const sent = [];
+  stopSession("A", payload => { sent.push(payload); return true; });
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].client_request_id, "fn-req-A");
+  assert.equal("execution_id" in sent[0], false);
+  assert.equal(host.runtime._optimisticStops.A.commandId, sent[0].command_id);
+  releaseStopHold("A", false);
 });
 
 for (const focused of ["B", "local_new"]) {
@@ -758,45 +786,20 @@ test("after Stop the queue waits until the server has released the turn", async 
   assert.deepEqual(host.frames.map(frame => frame.text), ["after stop"]);
 });
 
-test("a Stop on a turn known by id but not by version waits for the version, then cancels exactly", async () => {
-  // A reconnect's run state handed over the ids alone: the client must not
-  // pretend the reply stopped while the server keeps running the turn.
+test("a Stop on a turn known by id but not by version cancels at once", async () => {
+  // A reconnect's run state handed over the ids alone. A stop names its
+  // execution, so it needs no version and goes out without asking.
   host.sessions.runningTasks.A = { session_id: "A", msg_id: "user-A", execution_id: "exec-A" };
   host.sessions.rowsById["exec-A"] = { id: "exec-A", role: "assistant", status: "streaming", content: "partial" };
   host.sessions.messageOrder.A = ["exec-A"];
-  const task = host.sessions.runningTasks.A;
-  stopSession("A", () => assert.fail("no version to cancel with yet"));
-  await nextTurn(); await nextTurn();
-  assert.deepEqual(host.frames, [{ action: "get_run_state", session_id: "A" }]);
-  assert.equal(host.sessions.runningTasks.A, task, "the composer still shows the turn running");
-  assert.equal(host.sessions.rowsById["exec-A"].status, "streaming");
-  assert.equal(stopDeferred("A"), true);
-  // The server names the turn with its version: the slot learns it and the
-  // held Stop goes out as an exact cancel.
-  const previous = { ...host.sessions, runningTasks: { ...host.sessions.runningTasks } };
-  reconcileAfterSessionLoad("A", true, { msg_id: "user-A", execution_id: "exec-A", status_version: 9 });
-  assert.equal(host.sessions.runningTasks.A.status_version, 9);
-  for (const listener of [...host.storeListeners]) listener(host.sessions, previous);
-  for (let i = 0; i < 6; i++) await nextTurn();
-  const cancel = host.frames.find(frame => frame.action === "execution.cancel");
-  assert.deepEqual([cancel?.execution_id, cancel?.expected_version], ["exec-A", 9]);
-  assert.equal(stopDeferred("A"), false);
+  const frames = [];
+  stopSession("A", (frame) => { frames.push(frame); return true; });
+  assert.equal(frames.length, 1);
+  assert.deepEqual([frames[0].action, frames[0].execution_id], ["execution.cancel", "exec-A"]);
+  assert.equal(host.frames.some(frame => frame.action === "get_run_state"), false);
   assert.equal(host.sessions.runningTasks.A, undefined);
-  assert.equal(host.sessions.rowsById["exec-A"].status, "cancelled");
-  assert.equal(host.runtime._optimisticCancels[cancel.command_id].sessionId, "A");
+  assert.equal(host.runtime._optimisticCancels[frames[0].command_id].sessionId, "A");
   releaseStopHold("A", false);
-});
-
-test("a deferred Stop is dropped when the turn ends on its own", async () => {
-  host.sessions.runningTasks.A = { session_id: "A", msg_id: "user-A", execution_id: "exec-A" };
-  stopSession("A", () => assert.fail("no version to cancel with yet"));
-  assert.equal(stopDeferred("A"), true);
-  const previous = { ...host.sessions, runningTasks: { ...host.sessions.runningTasks } };
-  reconcileAfterSessionLoad("A", false, null);
-  for (const listener of [...host.storeListeners]) listener(host.sessions, previous);
-  for (let i = 0; i < 6; i++) await nextTurn();
-  assert.equal(stopDeferred("A"), false);
-  assert.equal(host.frames.some(frame => frame.action === "execution.cancel"), false);
 });
 
 test("a steer sent before the turn had an execution id goes out once the id arrives", async () => {

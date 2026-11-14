@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 from openprogram.state.store.session.nodes import Call, Graph
 from openprogram.runtime.context.nodes import render_context
-from openprogram.runtime.context.render import _aged_code_ids, render_dag_messages
+from openprogram.runtime.context.render import render_dag_messages
 from openprogram.runtime.context.tokens import estimate_history_tokens
 
 
@@ -39,36 +39,49 @@ class CompactionView:
     graph: Graph
     head_id: str | None
     history: list[dict]
-    manifest: dict
     messages: list
     rendered_ids: list[str]
 
-    def candidate_messages(self, summary_text: str, cut: int) -> list:
-        from openprogram.runtime.context.persistence import covered_chain_ids, SUMMARY_NODE_NAME
+    def candidate_messages(self, summary_text: str, cut: int, restored_state: str = '') -> list:
+        from openprogram.runtime.context.persistence import covered_chain_ids, summary_content, SUMMARY_NODE_NAME
         graph = copy.deepcopy(self.graph)
         graph.add(Call(
             id='compaction_candidate', role='llm', name=SUMMARY_NODE_NAME,
-            output=f'[Previous conversation summary]\n{summary_text}',
+            output=summary_content(summary_text, 'user'),
             predecessor=self.history[0].get('predecessor') or None,
-            metadata={'covers_ids': covered_chain_ids(self.history[:cut])},
+            metadata={'covers_ids': covered_chain_ids(self.history[:cut]), 'render_role': 'user',
+                      **({'restored_state': restored_state} if restored_state else {})},
         ))
         ids = render_context(graph, head_id=self.head_id, frame_entry_seq=-1)
-        return render_dag_messages(graph, ids, manifest=self.manifest)
+        return render_dag_messages(graph, ids)
 
     def unchanged(self, db, session_id: str) -> bool:
+        """Whether the chain this view was read from still reads the same.
+
+        The chain is the one ending at ``head_id``; where the session's head
+        has moved since does not matter. Only what the model reads on that
+        chain counts: a write to another branch must not throw away a
+        summary that has already been paid for.
+        """
         from openprogram.state.store.session.session_node_writer import SessionNodeWriter
-        if (db.get_session(session_id) or {}).get('head_id') != self.head_id:
-            return False
         current = SessionNodeWriter(db, session_id).load()
-        # Only what the model reads matters: a write to another branch must
-        # not throw away a summary that has already been paid for.
+        if self.head_id not in current.nodes:
+            return False
         if render_context(current, head_id=self.head_id, frame_entry_seq=-1) != self.rendered_ids:
             return False
         return all(current.nodes[i].to_dict() == self.graph.nodes[i].to_dict()
                    for i in self.rendered_ids)
 
 
-def load_compaction_view(db, session_id: str, head_id: str | None = None) -> CompactionView:
+def load_compaction_view(db, session_id: str, head_id: str | None = None,
+                         *, audience: str = 'own_prompt') -> CompactionView:
+    """What the chain ending at ``head_id`` reads, frozen for one compaction.
+
+    ``None`` reads the session's head once, here; the view then stays on
+    that chain whatever the head does next. ``audience`` is who the render
+    is for (``context.turn_context``); the context panel passes the
+    conversation's, so it counts the notes its requests send.
+    """
     from openprogram.runtime.context.persistence import rendered_history
     from openprogram.state.store.session.session_node_writer import SessionNodeWriter
 
@@ -76,9 +89,7 @@ def load_compaction_view(db, session_id: str, head_id: str | None = None) -> Com
     graph = SessionNodeWriter(db, session_id).load()
     history = rendered_history(db, session_id, head_id)
     ids = render_context(graph, head_id=head_id, frame_entry_seq=-1)
-    _, boundary = _aged_code_ids(graph, ids)
-    manifest = {'aged_before_seq': boundary}
-    messages = render_dag_messages(graph, ids, manifest=manifest)
+    messages = render_dag_messages(graph, ids, audience=audience)
     groups: dict[str, list[str]] = {m['id']: [] for m in history}
     for nid in ids:
         owner = nid
@@ -91,7 +102,7 @@ def load_compaction_view(db, session_id: str, head_id: str | None = None) -> Com
             groups[owner].append(nid)
     enriched = []
     for row in history:
-        rendered = render_dag_messages(graph, groups[row['id']], manifest=manifest)
+        rendered = render_dag_messages(graph, groups[row['id']], audience=audience)
         enriched.append({**row, 'content': _text(rendered),
                          '_context_tokens': estimate_history_tokens(rendered)})
-    return CompactionView(graph, head_id, enriched, manifest, messages, ids)
+    return CompactionView(graph, head_id, enriched, messages, ids)

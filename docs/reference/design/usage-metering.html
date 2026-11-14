@@ -36,6 +36,7 @@
 <tr><th scope="row">Here, not in <code translate="no">api_registry</code></th><td>Each provider implements its own <code translate="no">stream_simple</code> behind a Protocol. Collecting there means changing the Protocol or scattering wrappers. <code translate="no">stream.py</code> already holds the model with pricing and the final usage.</td></tr>
 <tr><th scope="row">At the terminal event, before the yield, guarded by <code translate="no">recorded</code></th><td><code translate="no">agent_loop</code> returns on the done event, suspending the generator at its <code translate="no">yield</code>; code after the loop never runs</td></tr>
 <tr><th scope="row">Streaming is not blocked</th><td>Fires once, on done or error</td></tr>
+<tr><th scope="row">A reply that failed is recorded too</th><td>An attempt that reached the provider and ended without a final message may be billed. <code translate="no">record_failed_request</code> records the tokens its last partial reported, or one event with <code translate="no">tokens_known</code> false and cost <code translate="no">unknown</code>. The sign of reaching it is streamed content, reported tokens, or a reply silent for the idle bound; the adapter's <code translate="no">start</code> event is not. A refusal or a connection that failed before any content is not recorded.</td></tr>
 <tr><th scope="row">Best-effort</th><td>A metering failure logs and never interrupts the response. Callers that settle a budget or Goal receipt use strict event construction.</td></tr>
 <tr><th scope="row">No new pricing</th><td><code translate="no">calculate_cost</code> in <code translate="no">providers/catalog/models.py</code></td></tr>
 </tbody>
@@ -50,9 +51,10 @@
 <tr><th scope="row">Attribution</th><td><code translate="no">session_id</code>, <code translate="no">parent_session_id</code>, <code translate="no">agent_id</code>, <code translate="no">call_kind</code>, <code translate="no">call_label</code>, <code translate="no">origin_pid</code></td></tr>
 <tr><th scope="row">Budget</th><td><code translate="no">job_id</code>, <code translate="no">budget_scope_id</code>, <code translate="no">reservation_id</code>, <code translate="no">request_id</code>, <code translate="no">goal_id</code>, <code translate="no">goal_revision</code>, <code translate="no">goal_session_id</code>, <code translate="no">execution_id</code></td></tr>
 <tr><th scope="row">Model</th><td><code translate="no">provider</code>, <code translate="no">api</code>, <code translate="no">model_id</code></td></tr>
-<tr><th scope="row">Tokens</th><td><code translate="no">input_tokens</code>, <code translate="no">output_tokens</code>, <code translate="no">cache_read_tokens</code>, <code translate="no">cache_write_tokens</code>, <code translate="no">total_tokens</code>; <code translate="no">tokens_known</code> separates an absent report from zero</td></tr>
+<tr><th scope="row">Tokens</th><td><code translate="no">input_tokens</code>, <code translate="no">output_tokens</code>, <code translate="no">cache_read_tokens</code>, <code translate="no">cache_write_tokens</code>, <code translate="no">total_tokens</code> (never less than the four parts summed; aggregates sum the parts, so cached tokens always count); <code translate="no">tokens_known</code> separates an absent report from zero</td></tr>
 <tr><th scope="row">Cost, USD, flat for <code translate="no">SUM</code></th><td><code translate="no">cost_input</code>, <code translate="no">cost_output</code>, <code translate="no">cost_cache_read</code>, <code translate="no">cost_cache_write</code>, <code translate="no">cost_total</code>, <code translate="no">cost_source</code> (<code translate="no">model_catalog</code>, <code translate="no">configured</code>, <code translate="no">provider_reported</code>, <code translate="no">unknown</code>)</td></tr>
 <tr><th scope="row">Latency</th><td><code translate="no">first_token_ms</code> to the first content of any kind; <code translate="no">first_text_ms</code> to the first visible text. Measured in <code translate="no">streaming/first_token.py</code>, carried on <code translate="no">Usage</code>, <code translate="no">None</code> if absent. After magpie's TTFT (yetone/magpie, MIT).</td></tr>
+<tr><th scope="row">Prompt cache</th><td><code translate="no">prefix_hash</code>, <code translate="no">break_at</code>, <code translate="no">break_cause</code>, <code translate="no">expected</code>: where the request's cached prefix broke and why (<a href="context/cache-prefix.html">Prompt cache prefix</a>)</td></tr>
 <tr><th scope="row">Provenance</th><td><code translate="no">token_source</code> (<code translate="no">provider_usage</code>, <code translate="no">anthropic_count_api</code>, <code translate="no">estimate</code>), so the panel can mark estimates; <code translate="no">schema_version</code></td></tr>
 </tbody>
 </table>
@@ -85,6 +87,7 @@
 <tr><th scope="row"><code translate="no">usage_requests</code></th><td>Goal request receipts: <code translate="no">prepared</code>, <code translate="no">started</code>, <code translate="no">settled</code>, <code translate="no">released</code></td></tr>
 <tr><th scope="row"><code translate="no">route_events</code></th><td>Failover switches. Not usage; no aggregate reads it</td></tr>
 <tr><th scope="row"><code translate="no">probe_events</code></th><td>Requests sent on OpenProgram's own behalf: <a href="providers/auth/credential-validation-unification.html">the probe log</a>. Not usage</td></tr>
+<tr><th scope="row"><code translate="no">prefix_baselines</code></th><td>The last answered request on each prompt-cache lane, which the next one is compared with. Not usage</td></tr>
 </tbody>
 </table>
 <p class="note">A step changing both an event and a reservation commits the event first, so a stop in between leaves exposure held and an event to recognise it by, never spend without a record.</p>
@@ -95,7 +98,7 @@
 <li>The subprocess writes the shared database directly, stamped with <code translate="no">origin_pid</code>. The ledger is the source of truth; the parent does not count again and the result pickle carries no usage.</li>
 <li><code translate="no">process_runner.py</code> uses spawn: the parent has loaded PyTorch, libomp and Cocoa, which SIGSEGV after fork. Spawn does not copy contextvars, so <code translate="no">run_agentic_in_subprocess</code> passes <code translate="no">snapshot()</code> as <code translate="no">usage_ctx_snapshot</code> and the child applies it after <code translate="no">os.setpgrp()</code>.</li>
 <li><code translate="no">_connect()</code> reopens on a changed <code translate="no">os.getpid()</code>, because a handle is unusable across processes.</li>
-<li>On SIGKILL, appended events stay and are true. A call with no done event is not recorded: nothing is fabricated.</li>
+<li>On SIGKILL, appended events stay and are true. A call the kill cut off is not recorded: nothing is fabricated.</li>
 </ul>
 </details>
 

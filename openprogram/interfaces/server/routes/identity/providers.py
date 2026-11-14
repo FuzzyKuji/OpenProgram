@@ -423,6 +423,54 @@ def register(app):
             "probes": default_ledger.probe_events(since=since, provider=name, limit=100),
         })
 
+    # Quota, health and 30-day spend of every connected provider
+    # (models/usage/provider_status.py); the same payload as
+    # ``openprogram providers status --json``.
+    from openprogram.models.usage.quota import default_store as _quota_store
+
+    def _push_quota(report: dict) -> None:
+        from openprogram.runtime.events import emit_ws_frame
+        emit_ws_frame({"type": "provider_quota", "data": report})
+
+    _quota_store.set_listener(_push_quota)
+
+    @app.get("/api/providers/status")
+    async def api_providers_status():
+        """Stored values now; quota endpoints older than ten minutes are read
+        in the background and arrive as ``provider_quota`` frames."""
+        from openprogram.models.usage import provider_status
+        from openprogram.models.usage.quota_fetchers import refresh as read_quota
+        try:
+            payload = await asyncio.to_thread(provider_status.build_status)
+        except Exception as exc:
+            _log.exception("provider status failed")
+            return JSONResponse(status_code=500, content={"error": f"{type(exc).__name__}: {exc}"[:500]})
+        ids = [row["id"] for row in payload["providers"]]
+        asyncio.get_running_loop().run_in_executor(None, lambda: read_quota(ids, reason="open"))
+        return JSONResponse(content=payload)
+
+    @app.post("/api/providers/status/refresh")
+    def api_providers_status_refresh(body: Any = Body(default=None)):
+        """Read every connected provider's quota endpoint now (Refresh), then
+        answer with the status. Body: optional ``{"providers": [ids]}``."""
+        if body is None:
+            body = {}
+        error = check_request_body(body, allowed={"providers"})
+        if error is not None:
+            return JSONResponse(content={"error": error}, status_code=400)
+        wanted = body.get("providers")
+        if wanted is not None and (
+            not isinstance(wanted, list) or not all(isinstance(p, str) for p in wanted)
+        ):
+            return JSONResponse(content={"error": "providers must be a list of ids"}, status_code=400)
+        from openprogram.models.usage import provider_status
+        from openprogram.models.usage.quota_fetchers import refresh as read_quota
+        rows = provider_status.connected_providers()
+        if wanted is not None:
+            rows = [row for row in rows if row["id"] in set(wanted)]
+        read_quota([row["id"] for row in rows], reason="manual")
+        return JSONResponse(content=provider_status.build_status(providers=rows))
+
     @app.post("/api/providers/{name}/validate")
     def api_validate_provider(name: str, body: Any = Body(default=None)):
         # Unified credential validator — model-independent unless {model} given.

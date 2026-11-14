@@ -27,6 +27,7 @@
 <li>没有项目的 session 放在 <code translate="no">default/chats/</code>。在其他根目录打开的 store（应用运行、嵌入宿主）用同样的结构。</li>
 <li><a href="operations.zh.html#moving-a-conversation">移动</a>会重命名目录并记录到 <code translate="no">.chats-locations.json</code>，它在迁移或重定位期间是持久的权威来源。</li>
 <li>工作文件夹永远不是对话目录。<code translate="no">&lt;project&gt;/.openprogram/sessions/&lt;id&gt;/</code> 只作为旧数据迁移来源读取。</li>
+<li><code translate="no">projects.json</code> 整份以重命名发布。修改在“读-改-写”期间持有注册表锁；查询不加锁，同一份已发布的文件只解析一次。</li>
 </ul>
 
 <h2 id="session-log">Session 日志</h2>
@@ -54,7 +55,7 @@
 <table class="stack fixed">
 <thead class="sr"><tr><th scope="col">项</th><th scope="col">作用</th></tr></thead>
 <tbody>
-<tr><th scope="row"><code translate="no">~/.openprogram/active/&lt;session&gt;</code></th><td>标记有未完成运行，启动时折叠。其他 session 首次用到时折叠</td></tr>
+<tr><th scope="row"><code translate="no">~/.openprogram/active/&lt;session&gt;</code></th><td>标记有未完成运行，启动时折叠。其他 session 首次用到时折叠。删除对话时移除它的标记，启动时丢弃指向已删除对话的标记</td></tr>
 <tr><th scope="row"><code translate="no">run_index.jsonl</code></th><td>执行 → session</td></tr>
 <tr><th scope="row"><code translate="no">revisions.jsonl</code></th><td>Workflow 版本和审批，以及全局预算</td></tr>
 <tr><th scope="row">空闲 session</th><td>最后变更一小时后离开内存，需要时从日志恢复</td></tr>
@@ -73,7 +74,7 @@
 <tr><th scope="row"><code translate="no">usage.db</code></th><td>只存记账（事件、请求、路由、探测），按时间、模型和范围分组</td></tr>
 <tr><th scope="row"><code translate="no">memory/index.sqlite</code></th><td>全文搜索；可从记忆文件重建</td></tr>
 <tr><th scope="row"><code translate="no">processes.db</code></th><td>分离的 supervisor 比 Worker 活得久，写同一条记录</td></tr>
-<tr><th scope="row"><code translate="no">session-resources.db</code></th><td>工具进程上报资源；Page 写入跨进程隔离</td></tr>
+<tr><th scope="row"><code translate="no">session-resources.db</code></th><td>工具进程上报资源；Page 状态跨进程共享</td></tr>
 <tr><th scope="row"><code translate="no">programs/.runtime/</code></th><td>应用子进程和宿主共享状态</td></tr>
 <tr><th scope="row"><code translate="no">project-file-history/history.sqlite3</code></th><td>版本和它的分组一起提交</td></tr>
 </tbody>
@@ -136,10 +137,10 @@
 <p class="note">被杀死的 Worker 不会清除 <code translate="no">running</code>，聊天会卡在 <code translate="no">data-run-active="true"</code>。加载注册表时 <code translate="no">running</code> 重置为 <code translate="no">idle</code>；<code translate="no">reconcile_interrupted_runs()</code> 再把仍为 <code translate="no">running</code> 的行改成 <code translate="no">interrupted</code>、<code translate="no">cancelling</code> 改成 <code translate="no">cancelled</code>，它独立于节点清扫，因为在写状态和插入占位之间被杀的 Worker 会留下运行中的行，却没有运行中的节点。</p>
 
 <h2 id="moving-head">移动 HEAD</h2>
-<p><code translate="no">_set_active_head</code>（<code translate="no">interfaces/server/server_runtime/session_persistence.py</code>）是唯一途径。<code translate="no">_save_session</code> 会把每个 session 镜像的 <code translate="no">head_id</code> 和 <code translate="no">messages</code> 写回 SessionStore，镜像落后时下次保存就撤销移动。</p>
+<p><code translate="no">_set_active_head</code>（<code translate="no">interfaces/server/server_runtime/session_persistence.py</code>）协调显式切换。SessionStore 拥有 HEAD；<code translate="no">_save_session</code> 不会把镜像的消息位置或消息列表写回。</p>
 <ol>
-<li>写 SessionStore。</li>
-<li>把新分支重新读入镜像。</li>
+<li>原子比较来源消息位置、分支身份及设置，保存来源配置并选择目标分支。预期设置按磁盘上的存储形式读取，所以还没有 <code translate="no">agent_id</code> 的记录（最先由模型固定写入的记录）也能比较相等。</li>
+<li>在镜像锁内重新读取当前分支的配置、消息位置和消息列表。同一消息位置的不同分支引用仍保留独立设置。</li>
 <li>丢弃消息缓存。</li>
 </ol>
 <ul>

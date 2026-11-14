@@ -27,6 +27,59 @@ def written_by_another_session(path: str, session: str, origin: dict, since: int
     return False
 
 
+def writes_by_other_prompts(
+    journal, user_ids: list[str], turn_ids: list[str], withdrawn: set[str],
+) -> dict[str, int]:
+    """Each path's newest write by a turn of a prompt outside a rewind's range.
+
+    Two branches of a conversation run turns at once and a scheduled run has
+    its own branch, so turns outside the range may have written the same
+    files. Only turns a checkpoint names count, and not those a rewind
+    withdrew. A write a committed rewind already took back is not in the file
+    any more and does not count either. Values are workspace mutation
+    sequences.
+    """
+    inside = set(user_ids)
+    skipped = set(turn_ids) | withdrawn
+    restored = journal.restored_writes()
+    newest: dict[str, int] = {}
+    for row in PromptCheckpoints(journal.session_dir).all():
+        prompt = str(row.get("user_msg_id"))
+        if prompt in inside or prompt in withdrawn:
+            continue
+        for turn in row.get("turn_ids") or []:
+            if turn in skipped:
+                continue
+            for record in journal.list_file_history(turn):
+                path = record.get("path")
+                sequence = int(record.get("mutation_sequence") or 0)
+                if not path or sequence <= restored.get((turn, path), 0):
+                    continue
+                if sequence > newest.get(path, 0):
+                    newest[path] = sequence
+    return newest
+
+
+def first_writes(records: list[dict]) -> dict[str, int]:
+    """Where a rewind's own turns first wrote each path, as a workspace sequence.
+
+    A path with a record that does not say where its first write started is
+    left out: nothing can then be placed before it.
+    """
+    first: dict[str, int] = {}
+    unknown: set[str] = set()
+    for record in records:
+        path = record.get("path")
+        if not path:
+            continue
+        sequence = int(record.get("first_sequence") or 0)
+        if not sequence:
+            unknown.add(path)
+        else:
+            first[path] = min(first.get(path, sequence), sequence)
+    return {path: sequence for path, sequence in first.items() if path not in unknown}
+
+
 def _line_counts(current: dict, target: dict, path: str) -> tuple[int, int] | None:
     import difflib
 

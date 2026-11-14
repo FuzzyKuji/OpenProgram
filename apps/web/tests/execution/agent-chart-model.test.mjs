@@ -1,7 +1,7 @@
 // What an Agent's time chart draws, without a page around it.
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildChart, columnStop, forEachNode, heightAt, levelAt, opensInPlace, pageStop, paintColor, readableInput, sizeChart, LEVELS } from "../../components/right-sidebar/running/agent-chart-model.ts";
+import { buildChart, chartWindow, columnsFor, focusOn, forEachNode, opensInPlace, paintColor, panelWidthFor, readableInput, sizeChart, stepFocus, travelMs, COLUMN_WIDTH, LEVELS, PANEL_INSET, PANEL_SNAP_WIDTHS } from "../../components/right-sidebar/running/agent-chart-model.ts";
 
 const NOW = 1_794_000_000;
 const text = english => english;
@@ -147,28 +147,65 @@ test("a group's calls are capped at four rows' height and scroll in their cell",
   forEachNode(group, kid => assert.ok(kid.heights[3] > 0));
 });
 
-test("height follows the sideways scroll between two levels", () => {
-  const [node] = topics(chart([run("a", NOW - 100, { ...topic("t1", 0), steps: [step(NOW - 90, "bash", "x")] }), run("b", NOW - 900, topic("t1", 0))]));
-  assert.equal(levelAt(0, 272), 0);
-  assert.equal(levelAt(256, 272), 1);
-  assert.equal(levelAt(5000, 272), 3);
-  assert.equal(levelAt(32, 272), 0.5, "part-way only while a column arrives");
-  assert.equal(levelAt(64, 272), 1, "a column that has arrived reads in full");
-  assert.equal(levelAt(0, 480), 1, "a panel resting between two widths");
-  assert.equal(levelAt(424, 600), 3, "a wide panel reaches the last level, where a long group scrolls");
-  assert.equal(heightAt(node, 0.5), (node.heights[0] + node.heights[1]) / 2);
-  assert.equal(heightAt(node, 3), node.heights[3]);
+test("the sidebar rests where one, two or three columns fit whole, the first its default", () => {
+  assert.deepEqual(PANEL_SNAP_WIDTHS, [288, 544, 800]);
+  PANEL_SNAP_WIDTHS.forEach((width, index) => assert.equal(columnsFor(width - PANEL_INSET), index + 1));
+  assert.equal(panelWidthFor(1) - PANEL_INSET, COLUMN_WIDTH);
 });
 
-test("a sideways scroll settles on a column once it stops", () => {
-  assert.equal(columnStop(40, 0, 768), 0, "not far enough falls back");
-  assert.equal(columnStop(70, 0, 768), 256, "far enough carries on");
-  assert.equal(columnStop(216, 256, 768), 256, "a little back returns");
-  assert.equal(columnStop(180, 256, 768), 0, "far enough back goes back");
-  assert.equal(columnStop(540, 0, 768), 512, "a long flick stops at the column it passed");
-  assert.equal(columnStop(330, 0, 424), 424, "a wide panel's far end is a stop");
-  assert.equal(columnStop(424, 0, 424), 424);
-  assert.equal(columnStop(266, 0, 270), 270, "a short last step still reaches the end");
+test("the column count follows the width alone, and a column is never shown in part", () => {
+  assert.equal(columnsFor(200), 1, "narrower than a column is still one");
+  assert.equal(columnsFor(256), 1);
+  assert.equal(columnsFor(510), 1, "just short of two stretches the one");
+  assert.equal(columnsFor(512), 2);
+  assert.equal(columnsFor(700), 2);
+  assert.equal(columnsFor(768), 3);
+  assert.equal(columnsFor(5000), 3, "three at most");
+});
+
+test("the view ends on the deepest column the reader went to, or starts at the first", () => {
+  assert.deepEqual(chartWindow(0, 1), { first: 0, last: 0 });
+  assert.deepEqual(chartWindow(2, 1), { first: 2, last: 2 });
+  assert.deepEqual(chartWindow(0, 2), { first: 0, last: 1 });
+  assert.deepEqual(chartWindow(3, 2), { first: 2, last: 3 });
+  assert.deepEqual(chartWindow(0, 3), { first: 0, last: 2 });
+  assert.deepEqual(chartWindow(3, 3), { first: 1, last: 3 });
+  assert.equal(chartWindow(1, 1).last, chartWindow(1, 2).last, "widening keeps the column the reader is on in view");
+});
+
+test("opening a block moves the view only when its next column is out of view", () => {
+  assert.equal(focusOn(0, 1, 1), 1, "one column: a topic leads to its messages");
+  assert.equal(focusOn(0, 2, 1), 1, "two columns: its messages already show, nothing moves");
+  assert.deepEqual(chartWindow(focusOn(0, 2, 1), 2), chartWindow(0, 2));
+  assert.equal(focusOn(1, 2, 2), 2, "a message's steps bring the view one column on");
+  assert.deepEqual(chartWindow(2, 2), { first: 1, last: 2 });
+  assert.equal(focusOn(3, 1, 1), 1, "a column to the left comes back into view");
+});
+
+test("one step sideways is one column, and none past either end", () => {
+  assert.equal(stepFocus(0, 1, 1), 1);
+  assert.equal(stepFocus(1, 1, -1), 0);
+  assert.equal(stepFocus(0, 1, -1), null, "the first column: Back leaves the chart");
+  assert.equal(stepFocus(3, 1, 1), null);
+  assert.equal(stepFocus(0, 2, -1), null);
+  assert.equal(stepFocus(0, 2, 1), 2);
+  assert.equal(stepFocus(3, 2, -1), 2);
+  assert.equal(stepFocus(0, 3, 1), 3);
+  assert.equal(stepFocus(3, 3, -1), 2);
+  assert.equal(stepFocus(3, 3, 1), null);
+});
+
+test("a move between columns takes a fixed short time, less for what is left of one", () => {
+  assert.equal(travelMs(256, 256), 240);
+  assert.equal(travelMs(-544, 272), 240, "never longer");
+  assert.equal(travelMs(128, 256), 120);
+  assert.equal(travelMs(10, 256), 120, "never shorter than the fast tier");
+});
+
+test("each level lays the chart out whole, so the deepest column in view sets the heights", () => {
+  const [node] = topics(chart([run("a", NOW - 100, { ...topic("t1", 0), steps: [step(NOW - 90, "bash", "x")] }), run("b", NOW - 900, topic("t1", 0))]));
+  for (let level = 0; level < LEVELS; level += 1) assert.ok(node.heights[level] > 0);
+  assert.ok(node.heights[1] >= node.heights[0], "a topic spans its messages once they show");
 });
 
 test("a block with a next column goes there, and any other block with something to say opens in place", () => {
@@ -214,16 +251,6 @@ test("a group makes room for a call opened inside it", () => {
   group.kids[0].extra = 200;
   sizeChart(roots);
   assert.equal(group.heights[3], capped + 200);
-});
-
-test("one sideways swipe turns one column, however hard it was thrown", () => {
-  assert.equal(pageStop(0, 900, 768), 256);
-  assert.equal(pageStop(256, 1, 768), 512);
-  assert.equal(pageStop(512, -4000, 768), 256);
-  assert.equal(pageStop(0, -1, 768), 0);
-  assert.equal(pageStop(768, 1, 768), 768);
-  assert.equal(pageStop(256, 1, 424), 424, "a wide panel's last step is short");
-  assert.equal(pageStop(424, -1, 424), 256);
 });
 
 test("a call's input reads as what it was given, not as JSON", () => {

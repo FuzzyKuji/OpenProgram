@@ -44,7 +44,7 @@
 <table class="stack">
 <thead><tr><th scope="col">系统</th><th scope="col">运行方式</th><th scope="col">深度限制及检查位置</th></tr></thead>
 <tbody>
-<tr><th scope="row">本项目：<code translate="no">agent</code></th><td>进程内线程池，默认 4 个 worker</td><td><code translate="no">agent.max_spawn_depth</code>，默认关闭；超限时返回“自己做”。每轮 <code translate="no">agent.max_spawn_fanout</code>，默认关闭。</td></tr>
+<tr><th scope="row">本项目：<code translate="no">agent</code></th><td>进程内线程池，默认 8 个 worker；每个对话同时运行 6 个，其余排队</td><td><code translate="no">agent.max_spawn_depth</code>，默认 1；超限时返回“自己做”。每轮 <code translate="no">agent.max_spawn_fanout</code>，默认关闭。</td></tr>
 <tr><th scope="row">Claude Code：<code translate="no">Agent</code>，原 <code translate="no">Task</code></th><td>会话内子 agent，可用 <code translate="no">isolation: worktree</code>；队友进程内或在 tmux、iTerm2 分屏</td><td>默认深度 3，由 <code translate="no">CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH</code> 配置；默认并发 20，由 <code translate="no">CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS</code> 配置。</td></tr>
 <tr><th scope="row">codex-cli：<code translate="no">spawn_agent</code></th><td>同一线程管理器上的 Tokio 任务</td><td>V1 深度 1。V2 计算子深度但从不检查；默认禁用；只有并发上限。</td></tr>
 <tr><th scope="row">openclaw：<code translate="no">sessions_spawn</code></th><td><code translate="no">subagent</code> 进程内；<code translate="no">acp</code> 外部宿主进程，沙箱中禁用</td><td>深度 1，最多 5，统计会话 key 中的 <code translate="no">:subagent:</code> 段</td></tr>
@@ -145,7 +145,7 @@
 <table class="stack">
 <thead><tr><th scope="col">系统</th><th scope="col">模型可得 id</th><th scope="col">状态</th><th scope="col">结果返回</th><th scope="col">模型取消</th><th scope="col">级联</th></tr></thead>
 <tbody>
-<tr><th scope="row">本项目</th><td><code translate="no">j_</code> 前缀</td><td><code translate="no">list_jobs</code></td><td>派发方对话中的完成通知</td><td>无工具；UI 或 API 的 <code translate="no">execution.cancel</code></td><td>是，沿 <code translate="no">parent_job_id</code> 广度优先，有 visited 集</td></tr>
+<tr><th scope="row">本项目</th><td><code translate="no">j_</code> 前缀</td><td><code translate="no">list_agents</code>、<code translate="no">read_conversation</code></td><td>派发方对话中的完成通知，结果形状统一</td><td><code translate="no">close_agent</code>；UI 或 API 的 <code translate="no">execution.cancel</code></td><td>是，沿 <code translate="no">parent_job_id</code> 广度优先，有 visited 集</td></tr>
 <tr><th scope="row">Claude Code</th><td><code translate="no">agentId</code></td><td><code translate="no">ListAgents</code>；<code translate="no">/tasks</code></td><td>完成时返回调用方；后台任务读其输出文件</td><td><code translate="no">TaskStop</code></td><td>未公开</td></tr>
 <tr><th scope="row">codex-cli</th><td>ThreadId 和路径</td><td><code translate="no">list_agents</code>、<code translate="no">get_status</code>、推送订阅</td><td>监视器合成父级消息；<code translate="no">wait_agent</code> 默认 30 秒，最长 1 小时</td><td><code translate="no">interrupt_agent</code>；V1 有 <code translate="no">close_agent</code></td><td><code translate="no">close_agent</code> 级联，<code translate="no">interrupt_agent</code> 只停一个；V2 只有后者</td></tr>
 <tr><th scope="row">openclaw</th><td>runId</td><td><code translate="no">subagents</code>，仅列表</td><td>推送：<code translate="no">sessions_yield</code> 结束本轮，结果作为下一条到达</td><td>否；<code translate="no">/subagents kill</code>、HTTP 端点</td><td>是，递归；每个子 agent 清队列并写中止标记</td></tr>
@@ -296,8 +296,8 @@
 <thead><tr><th scope="col">领域</th><th scope="col">工具</th><th scope="col">承载</th></tr></thead>
 <tbody>
 <tr><th scope="row">计划</th><td><code translate="no">todo_create</code>、<code translate="no">todo_update</code>、<code translate="no">todo_list</code></td><td>清单；编辑不运行任何东西</td></tr>
-<tr><th scope="row">执行</th><td><code translate="no">list_jobs</code>、<code translate="no">job_output</code></td><td>一个 id、一个状态、保证返回、级联取消</td></tr>
-<tr><th scope="row">实体</th><td><code translate="no">agent</code>、<code translate="no">list_agents</code>、<code translate="no">archive_agent</code></td><td>agent 是会话图中的一条分支</td></tr>
+<tr><th scope="row">执行</th><td><code translate="no">read_conversation</code>、<code translate="no">close_agent</code></td><td>一个 id、一个状态、保证返回、级联取消</td></tr>
+<tr><th scope="row">实体</th><td><code translate="no">agent</code>、<code translate="no">list_agents</code>、<code translate="no">send_message</code></td><td>agent 是会话图中的一条分支</td></tr>
 <tr><th scope="row">通信</th><td><code translate="no">send_message</code>、<code translate="no">read_conversation</code></td><td>不建任务记录的消息；任意分支的记录</td></tr>
 </tbody>
 </table>
@@ -308,13 +308,13 @@
 <tr><th scope="row">计划用 <code translate="no">todo_*</code></th><td>与 Claude Code 不同</td><td>它的 <code translate="no">TaskList</code> 是计划板；我们把运行中的工作和计划分开</td></tr>
 <tr><th scope="row">寻址分支而非进程</th><td>类似 codex-cli 路径、openclaw key</td><td>(会话, head) 可唯一标识，无需 agent 表</td></tr>
 <tr><th scope="row">任意 agent 可给任意 agent 发消息</th><td>比 openclaw 宽松；类似 codex-cli V2、Claude Code</td><td>消息不建任务、不会级联，最坏结果是没回应</td></tr>
-<tr><th scope="row">委派与消息分开：<code translate="no">agent(to=)</code> 建 Job，<code translate="no">send_message</code> 不作承诺</th><td>对比系统都没这样分</td><td>返回、取消和级联属于 Job，需要所有权</td></tr>
+<tr><th scope="row">一个消息工具：<code translate="no">send_message</code> 总是建 Job</th><td>Codex <code translate="no">send_input</code>、Claude Code <code translate="no">SendMessage</code></td><td>返回、取消和级联属于 Job；一个工具免去在三种寻址方式间选择</td></tr>
 <tr><th scope="row">每链消息预算；设置时取 8，含返回</th><td>只有 openclaw 也计数</td><td>仅靠深度挡不住已有 agent 互相委派。8 介于 openclaw 的 5 和 20 之间，因为我们还计入派生和派发。返回时重绑计数，一次往返花 1；代数恢复为派发方的值，协调者可派下一批。</td></tr>
 <tr><th scope="row">设置时深度取 1，不取 3</th><td>openclaw、codex-cli V1、hermes、opencode</td><td>深度 3 适合有人看着的嵌套。我们的无人值守路径是 <code translate="no">run_in_background=True</code>。</td></tr>
 <tr><th scope="row">每轮扇出；设置时取 8</th><td>只有 openclaw 有真正的扇出上限</td><td>派生不改父级计数，两个链计数器都看不到兄弟。openclaw 的 5 个活跃子 agent（1–20）是可借鉴的单位；hermes 的 3 和 pi-mono 的 8 是批量参数，而 <code translate="no">agent</code> 每次只建一个。8 是两倍线程池：填满、再排一批，第九个拒绝并指向已有八个。</td></tr>
 <tr><th scope="row">不做转向限速和子 agent 硬超时</th><td>openclaw 2 秒；hermes 600 秒</td><td>openclaw 的限速保护会中止子轮次的 steer；我们排队，不打断。hermes 的超时是调用侧等待后放弃线程。<code translate="no">job_output(timeout=)</code> 就是这种等待，<code translate="no">execution.cancel</code> 还会终止运行时，并在 30 秒后强制进入终态。</td></tr>
 <tr><th scope="row">按额度移除工具，二值</th><td>其他系统无条件或按深度分层移除</td><td>分层使 prompt 缓存失效</td></tr>
-<tr><th scope="row">额外工具 <code translate="no">list_jobs</code>、<code translate="no">archive_agent</code>、<code translate="no">read_conversation</code></th><td>Claude Code 无对应</td><td>查看后台工作、避免列表堆积、不读原始会话文件也能读历史</td></tr>
+<tr><th scope="row">额外工具 <code translate="no">close_agent</code>、<code translate="no">read_conversation</code></th><td>Codex <code translate="no">close_agent</code>；Claude Code <code translate="no">TaskStop</code></td><td>一次调用停止并收起助手，不读原始会话文件也能读历史</td></tr>
 </tbody>
 </table>
 <p class="note">每个数字的依据写在其常量旁。限额默认关闭，由 Job 池限制并发，深度由所有者决定。未完成项见<a href="agent-collaboration.zh.html#implementation-status">实现状态</a>。</p>

@@ -29,6 +29,8 @@ import { SectionHeader } from "@/components/sidebar/sessions/section-header";
 import { Button } from "@/components/ui/button";
 import { SidebarNotice } from "../sidebar-notice";
 import { useConversationBranches } from "../use-conversation-branches";
+import { useSessionWorktrees } from "@/lib/worktrees/session-worktrees";
+import { branchWorktree, changedFiles, isOpen } from "@/lib/worktrees/worktree-model";
 import { useConversationWork, type OpenWorkItem, type Routine } from "@/lib/chat/conversation-work";
 import { AgentAvatarById, useConversationAgentShape } from "@/components/agents/agent-avatar";
 import { goalStatusLabel, outcomeLabel, reportKindTag } from "@/components/agents/always-on-labels";
@@ -37,6 +39,7 @@ import { openPendingItem, pendingInOrder, usePendingInbox, type PendingItem } fr
 import { clock, ProgressBar, progressLook } from "./program-progress";
 import styles from "./running-panel.module.css";
 import { ActivityPage } from "./activity-page";
+import { usePageSlide } from "./use-page-slide";
 import type { ActivityPageTarget, ActivityPanelContext } from "./activity-page-types";
 import { Glyph, AgentGlyph, Status, Row, type Tone } from "./running-rows";
 import { LIVE, duration, when, callKind, executionTone, executionState, programTone, programTitle, commandLine, programStatus, programBarTone, routineSchedule, routineRunLabel } from "./running-format";
@@ -69,6 +72,9 @@ export function RunningPanel({ active, sessionId, resetSignal }: { active: boole
   const pendingInbox = usePendingInbox();
   const [copied, setCopied] = useState<string | null>(null);
   const conversationTitle = useSessionStore(s => (sessionId ? s.conversations[sessionId]?.title : undefined) || "");
+  // A conversation whose turns left no execution record still has its main
+  // agent: resting, its row reads the conversation's last activity.
+  const conversationUpdatedAt = useSessionStore(s => (sessionId ? s.conversations[sessionId]?.updated_at : undefined) ?? null);
   // The main agent's rows wear the conversation Agent's character.
   const mainShape = useConversationAgentShape(sessionId);
   // Questions and approvals are answered in the chat's input box, which
@@ -76,30 +82,38 @@ export function RunningPanel({ active, sessionId, resetSignal }: { active: boole
   const allDecisions = useSessionStore(s => s.pendingDecisions);
   const listView = useActivityView();
   const conversationBranches = useConversationBranches(sessionId);
+  // A branch running in its own git worktree wears a Worktree tag.
+  const worktrees = useSessionWorktrees(sessionId);
+  const selectedBranchId = useSessionStore(s => (sessionId ? s.composerSettingsBySession[sessionId]?.active_branch_id ?? null : null));
   const [programsShown, setProgramsShown] = useState(PAGE);
   const [pending, setPending] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-  useEffect(() => { setOpened(null); setProgramsShown(PAGE); }, [sessionId]);
-  // Level 1 unmounts while a page is up; its scroll and opener come back with it.
+  // Level 1 leaves the document while a page rests over it; its scroll and
+  // opener come back with it. A page slides in over it and off again.
   const levelOneScroll = useRef<HTMLDivElement>(null);
-  const levelOneReturn = useRef<{ scrollTop: number; opener: number; restore: "scroll" | "focus" | null }>({ scrollTop: 0, opener: -1, restore: null });
+  const levelOneReturn = useRef({ scrollTop: 0, opener: -1, focus: false });
+  const slide = usePageSlide(() => setOpened(null));
+  const { cut: cutSlide, leave: leaveSlide } = slide;
+  const overviewShown = !page || slide.beneath;
+  useEffect(() => { cutSlide(); setOpened(null); setProgramsShown(PAGE); }, [sessionId, cutSlide]);
+  useLayoutEffect(() => {
+    const element = levelOneScroll.current;
+    if (overviewShown && element) element.scrollTop = levelOneReturn.current.scrollTop;
+  }, [overviewShown]);
   useLayoutEffect(() => {
     const element = levelOneScroll.current;
     const saved = levelOneReturn.current;
-    if (page || !element || !saved.restore) return;
-    element.scrollTop = saved.scrollTop;
-    if (saved.restore === "focus") {
-      const buttons = element.querySelectorAll<HTMLElement>("button");
-      (buttons[saved.opener] ?? buttons[0])?.focus({ preventScroll: true });
-    }
-    saved.restore = null;
+    if (page || !element || !saved.focus) return;
+    saved.focus = false;
+    const buttons = element.querySelectorAll<HTMLElement>("button");
+    (buttons[saved.opener] ?? buttons[0])?.focus({ preventScroll: true });
   }, [page]);
   // Clicking Activity in the rail while already on it returns to level 1.
   useEffect(() => {
     if (!resetSignal) return;
-    levelOneReturn.current.restore = "scroll";
-    setOpened(null);
-  }, [resetSignal]);
+    levelOneReturn.current.focus = false;
+    leaveSlide();
+  }, [resetSignal, leaveSlide]);
   useEffect(() => { setActionError(null); }, [page]);
   const readFailed = processes.stale || (
     state.connection.errorSessionId === sessionId && Boolean(state.connection.message)
@@ -127,7 +141,8 @@ export function RunningPanel({ active, sessionId, resetSignal }: { active: boole
   const open = (next: View) => {
     const target = pageFor(next);
     const element = levelOneScroll.current;
-    if (element) levelOneReturn.current = { scrollTop: element.scrollTop, opener: [...element.querySelectorAll("button")].indexOf(document.activeElement as HTMLButtonElement), restore: null };
+    if (element) levelOneReturn.current = { scrollTop: element.scrollTop, opener: [...element.querySelectorAll("button")].indexOf(document.activeElement as HTMLButtonElement), focus: false };
+    slide.enter();
     setOpened({ sessionId, target });
   };
   const execution = (id: string) => executions.find(item => item.execution_id === id) ?? null;
@@ -187,11 +202,11 @@ export function RunningPanel({ active, sessionId, resetSignal }: { active: boole
       top = next;
     }
   };
-  type Scope = { key: string; head: string | null; name: string; active: boolean; color: string | null; updatedAt: number | null; members: Set<string> | null };
+  type Scope = { key: string; branchId?: string; head: string | null; name: string; active: boolean; color: string | null; updatedAt: number | null; members: Set<string> | null };
   const scopes: Scope[] = conversationBranches.length > 1
-    ? conversationBranches.map(branch => ({ key: branch.head, head: branch.head, active: branch.active, color: branch.color, updatedAt: branch.updatedAt,
+    ? conversationBranches.map(branch => ({ key: branch.branchId || branch.head, branchId: branch.branchId, head: branch.head, active: branch.active, color: branch.color, updatedAt: branch.updatedAt,
       name: branch.name || text("Unnamed branch", "未命名分支"), members: memberships.get(branch.head) ?? new Set<string>() }))
-    : [{ key: "main", head: null, name: mainName, active: true, color: null, updatedAt: null, members: null }];
+    : [{ key: "main", head: null, name: mainName, active: true, color: null, updatedAt: conversationUpdatedAt, members: null }];
   const inScope = (scope: Scope, item: ExecutionSnapshot) => !scope.members || scope.members.has(rootOf(item).execution_id);
   const fullTree = branches.tree<AgentCall>(owner => failedSpawns(owner).map(leaf => ({ at: leaf.at, leaf })));
   /** What one main agent holds: its runs, what it is doing, what waits on the reader, its sub-agents. */
@@ -243,8 +258,8 @@ export function RunningPanel({ active, sessionId, resetSignal }: { active: boole
   }
 
   /** Check out a branch, the same as clicking it in the Branches panel. */
-  function switchTo(head: string) {
-    sendRuntimeCommand({ action: "checkout_branch", session_id: sessionId, head_msg_id: head });
+  function switchTo(head: string, branchId?: string) {
+    sendRuntimeCommand({ action: "checkout_branch", session_id: sessionId, head_msg_id: head, branch_id: branchId });
     sendRuntimeCommand({ action: "load_session", session_id: sessionId });
   }
 
@@ -257,11 +272,16 @@ export function RunningPanel({ active, sessionId, resetSignal }: { active: boole
     const waiting = facts.issues.length + facts.tree.filter(row => lookOf(row).tone === "warn").length;
     const look = facts.issues.length ? scopeStatus({ ...facts, issues: [] }, scope) : scopeStatus(facts, scope);
     const subs = facts.tree.length ? text(`${facts.tree.length} sub-agent${facts.tree.length === 1 ? "" : "s"}`, `${facts.tree.length} 个子代理`) : "";
-    const current = scope.head && scope.active ? <span className={styles.current}>{text("Current", "当前")}</span> : null;
+    const currentTag = scope.head && scope.active ? <span className={styles.current}>{text("Current", "当前")}</span> : null;
+    const tree = branchWorktree(worktrees.rows, scope.branchId ?? (scope.active ? selectedBranchId : null));
+    const isolated = tree && isOpen(tree) ? tree : null;
+    const current = currentTag || isolated ? <>{currentTag}{isolated && <span className={styles.current}>{text("Worktree", "Worktree")}</span>}</> : null;
+    const isolatedFiles = isolated ? changedFiles(isolated) : 0;
+    const worktreeNote = isolated ? text(`${isolatedFiles} ${isolatedFiles === 1 ? "file" : "files"} in worktree`, `worktree 中 ${isolatedFiles} 个文件`) : "";
     // Always-on belongs to the checked-out branch: check-ins start from it.
     const always = alwaysOn && scope.active ? alwaysStatus() : null;
     return <Row key={scope.key} glyph={<AgentGlyph shape={mainShape} color={scope.color} />} title={scope.name} badge={current} count={waiting}
-      status={[look.label, subs].filter(Boolean).join(" · ")} tone={look.tone === "warn" ? "muted" : look.tone}
+      status={[look.label, subs, worktreeNote].filter(Boolean).join(" · ")} tone={look.tone === "warn" ? "muted" : look.tone}
       extra={always && <Status tone={always.tone} dot={false}>{`${text("Always-on", "常驻")} · ${always.label}`}</Status>}
       onOpen={() => open({ kind: "main", id: scope.key })} />;
   }
@@ -360,6 +380,7 @@ export function RunningPanel({ active, sessionId, resetSignal }: { active: boole
   const looks = new Map(fullTree.map(row => [rowKey(row), row.kind === "agent" ? agentLook(row.item) : { tone: (row.leaf.failed ? "err" : "muted") as Tone, at: row.leaf.at }]));
   const lookOf = (row: BranchRow<AgentCall>) => looks.get(rowKey(row)) ?? { tone: "muted" as Tone, at: 0 };
   // ---- second-level pages -------------------------------------------------------
+  let pageLayer: ReactNode = null;
   if (page) {
     const scopeHeadText: ActivityPanelContext["scopeHeadText"] = scope => {
       const { label, tone } = scopeStatus(scopeFacts(scope), scope);
@@ -392,7 +413,7 @@ export function RunningPanel({ active, sessionId, resetSignal }: { active: boole
         const decision = decisionFor(item.execution_id);
         if (decision) answerInChat(decision.id); else useSessionStore.getState().focusComposer();
       },
-      switchTo: scope => { if (scope.head) switchTo(scope.head); },
+      switchTo: scope => { if (scope.head) switchTo(scope.head, scope.branchId); },
       openAgentConversation: jobId => {
         const job = execution(jobId);
         void (async () => {
@@ -403,16 +424,18 @@ export function RunningPanel({ active, sessionId, resetSignal }: { active: boole
         })();
       },
       alwaysStatus, act, pendingKey: pending, actionError, copy: (key, value) => void copy(key, value), copiedKey: copied,
-      close: () => { levelOneReturn.current.restore = "focus"; setOpened(null); },
+      close: () => { levelOneReturn.current.focus = true; slide.leave(); },
+      pull: slide.pull,
     };
-    return <ActivityPage key={JSON.stringify(page)} target={page} context={context} />;
+    pageLayer = <div ref={slide.layer} className={styles.page}><ActivityPage key={JSON.stringify(page)} target={page} context={context} /></div>;
   }
 
   // ---- overview ----------------------------------------------------------------
   // Messages live in the chat. Agents is the main agent alone: the
   // sub-agents it starts are summed up under it and listed on its page.
-  // Programs and commands lists what they run in a shell.
-  const showMain = scopes.length > 1 || fullTree.length > 0 || executions.some(item => !branches.parentOf(item)) || calls.some(entry => entry.status === "running");
+  // Every conversation has its main agent, so its row is always there; its
+  // page reads the runs from the transcript, with or without execution
+  // records. Programs and commands lists what they run in a shell.
   // Shell work: running and interrupted calls that are not sub-agents, and
   // background programs, live first, then the rest, newest first.
   const shellCalls = calls.filter(entry => presentTool(entry.name, undefined, text).tone !== "agent" && !agentOf(entry)
@@ -432,12 +455,12 @@ export function RunningPanel({ active, sessionId, resetSignal }: { active: boole
       {!collapsed && rows}
     </div>;
   };
-  // Agents, Programs and commands and Scheduled tasks are always listed;
-  // the other groups appear only when they have something in them.
+  // Agents is always listed; every other group, header included, appears
+  // only when it has something in it.
   const agentsReady = Boolean(state.fetchedAt);
   const programsReady = agentsReady && processes.loaded;
   const scheduledReady = ongoing != null;
-  return <section className={styles.panel} aria-label={text("Conversation activity", "会话运行记录")}>
+  return <>{overviewShown ? <section ref={slide.under} className={styles.panel} aria-label={text("Conversation activity", "会话运行记录")} inert={Boolean(page)}>
     {readFailed && readNotice?.sessionId === sessionId && (hasRead || readNotice.persistent) && <p role="status" className={`${styles.notice} ${readNotice.persistent && !hasRead ? styles.error : ""}`}>{hasRead
       ? text("Updating status… Showing saved records.", "正在更新状态，当前显示上次记录。")
       : text("Activity is still unavailable. Retrying automatically.", "运行记录暂时无法读取，正在自动重试。")}</p>}
@@ -445,15 +468,15 @@ export function RunningPanel({ active, sessionId, resetSignal }: { active: boole
       {pendingInbox.items.length > 0 && section("pending",
         text(`Waiting for you · ${pendingInbox.items.length}`, `等你处理 · ${pendingInbox.items.length}`),
         pendingInOrder(pendingInbox.items).map(pendingRow))}
-      {section("agents", text("Agents", "Agents"), showMain || alwaysOn ? scopes.map(scopeRow) : null, agentsReady)}
-      {section("programs", text("Programs and commands", "程序和命令"), <>
+      {section("agents", text("Agents", "Agents"), scopes.map(scopeRow), agentsReady)}
+      {work.length > 0 && section("programs", text("Programs and commands", "程序和命令"), <>
         {work.slice(0, programsShown).map(entry => entry.node)}
         {work.length > programsShown && <Button type="button" variant="link" size="xs" onClick={() => setProgramsShown(value => value + 50)}>
           {text(`Show ${Math.min(50, work.length - programsShown)} earlier`, `显示更早的 ${Math.min(50, work.length - programsShown)} 个`)}
         </Button>}
       </>, programsReady)}
       {openItems.length > 0 && section("open-work", text("Open work", "未完成事项"), openItems.map(openWorkRow))}
-      {section("scheduled", text("Scheduled tasks", "定时任务"), routines.map(routineRow), scheduledReady)}
+      {routines.length > 0 && section("scheduled", text("Scheduled tasks", "定时任务"), routines.map(routineRow), scheduledReady)}
     </div>
-  </section>;
+  </section> : null}{pageLayer}</>;
 }

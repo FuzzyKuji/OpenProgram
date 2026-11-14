@@ -628,7 +628,8 @@ def test_invocation_plain_when_off(cfg):
     _assert_unsandboxed_environment(env)
     assert sandboxed is False
     if sys.platform != "win32":
-        assert (args, shell) == ("echo hi", True)
+        from openprogram.host._platform.command_shell import host_shell
+        assert (args, shell) == ([host_shell().path, "-c", "echo hi"], False)
 
 
 def test_invocation_auto_runs_plain_when_backend_is_unavailable(
@@ -676,9 +677,11 @@ def test_invocation_warns_and_runs_when_configured_to(cfg, monkeypatch):
 
 def test_run_reports_the_refusal_instead_of_raising(cfg, monkeypatch):
     from openprogram.host.backend.local import LocalBackend
-    on(cfg)
+    # Windows defaults to warn (its sandbox needs WSL2), so ask for the
+    # refusal this test is about instead of relying on the POSIX default.
+    on(cfg, unavailable_policy="refuse")
     monkeypatch.setattr(sandbox, "unavailable_reason", lambda: "no tool here")
-    r = LocalBackend().run("echo hi", timeout=5, cwd="/tmp")
+    r = LocalBackend().run("echo hi", timeout=5, cwd=str(Path.cwd()))
     assert r.exit_code == 1
     assert "no tool here" in r.stderr
     assert r.sandbox_error == "unavailable"

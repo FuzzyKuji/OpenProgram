@@ -11,7 +11,6 @@ from openprogram.extensions.mcp.server.contracts import (
     get_mcp_tools,
     validate_tool_call,
 )
-from openprogram.programs.applications.browser.contract import web_use_parameters
 
 
 EXPECTED_SCHEMAS = {
@@ -59,7 +58,6 @@ EXPECTED_SCHEMAS = {
         "required": ["name"],
         "additionalProperties": False,
     },
-    "web_use": web_use_parameters(),
 }
 
 
@@ -72,7 +70,6 @@ def test_contract_exposes_exact_ordered_wrapper_tools_and_schemas() -> None:
         "prompt_cancel",
         "tools_list",
         "tool_call",
-        "web_use",
     ]
     assert {
         tool.name: tool.model_dump()["inputSchema"] for tool in tools
@@ -104,23 +101,6 @@ def test_contract_exposes_exact_ordered_wrapper_tools_and_schemas() -> None:
             "tool_call",
             {"name": "read", "arguments": {"path": "a.txt"}},
             {"name": "read", "arguments": {"path": "a.txt"}},
-        ),
-        (
-            "web_use",
-            {
-                "command": "list_pages",
-                "backend": "",
-                "page": "",
-                "page_context_token": "",
-                "web_session_id": "",
-            },
-            {
-                "command": "list_pages",
-                "backend": "",
-                "page": "",
-                "page_context_token": "",
-                "web_session_id": "",
-            },
         ),
     ],
 )
@@ -157,15 +137,6 @@ def test_validate_tool_call_returns_normalized_copy(name, arguments, expected) -
         ("tool_call", {"name": "read", "arguments": []}),
         ("tool_call", {"name": "read", "unexpected": {}}),
         ("tool_call", ["not", "an", "object"]),
-        ("web_use", {"command": "close", "web_session_id": ""}),
-        (
-            "web_use",
-            {
-                "command": "verify",
-                "web_session_id": "cs_1",
-                "arguments": {"expected_frame_id": "frame_1"},
-            },
-        ),
     ],
 )
 def test_invalid_wrapper_arguments_raise_sanitized_invalid_params(

@@ -323,13 +323,36 @@ def finalize_turn(
     # A background turn (an always-on check-in on a side branch) may run
     # on another model and context; the conversation keeps its own.
     background = bool(getattr(req, "background", False))
-    if not background:
-        db.update_session(
-            req.session_id,
-            head_id=head_id,
-            last_prompt_tokens=int(usage.get("context_tokens") or 0),
-            model=req.model_override or session.get("model"),
-        )
+    # A turn on a branch that is not selected leaves the conversation's
+    # head, token count, model, title and topics alone too
+    # (``owns_conversation_effects``, frozen at admission). Every turn but a
+    # background one records its occupancy on its own branch.
+    from openprogram.runtime.conversation.turn_runtime.turn_writer import beside_conversation
+    beside = beside_conversation(req)
+    prompt_tokens = int(usage.get("context_tokens") or 0)
+    if not beside:
+        # The conversation's own fields are its selected branch's: written
+        # only while that is still this turn's branch. A turn the person
+        # switched away from keeps its tokens on its own record (below).
+        from openprogram.state.store.session.branch_config import BranchConfigConflict
+        from openprogram.runtime.conversation.turn_runtime.turn_writer import TurnWriter
+        try:
+            db.update_session(
+                req.session_id,
+                head_id=head_id,
+                last_prompt_tokens=prompt_tokens,
+                model=req.model_override or session.get("model"),
+                **TurnWriter(db, req).on_own_branch(),
+            )
+        except BranchConfigConflict:
+            pass
+    record_branch = getattr(db, "update_branch_fields", None)
+    if not background and getattr(req, "branch_id", None) and record_branch is not None:
+        try:
+            record_branch(req.session_id, req.branch_id, last_prompt_tokens=prompt_tokens)
+        except Exception:
+            _log.warning("branch token count not recorded for session %s",
+                         req.session_id, exc_info=True)
 
     # 6.1. Backfill the latest context commit's placeholder item with the
     # final assistant output. The turn-start context commit saw the assistant
@@ -434,6 +457,7 @@ def finalize_turn(
                 system_prompt="",
                 budget=_BA(context_window=ctx_win),
             )
+            # The tracker files the figures under the turn's own branch.
             _engine.after_turn(
                 req.session_id,
                 usage=usage,
@@ -449,7 +473,7 @@ def finalize_turn(
 
     # 6.5. Auto-title: background LLM generation at turn thresholds.
     _assistant_text = assistant_msg.get("content") or ""
-    if not background:
+    if not beside:
         _maybe_auto_title(db, req.session_id, session, req.user_text, _assistant_text)
         try:
             from openprogram.runtime.conversation.topics import sort_after_turn
@@ -480,7 +504,7 @@ def finalize_turn(
                    req.session_id, exc_info=True)
 
     # 6.5c. The user talked: an always-on conversation looks back soon.
-    if not background and _person_talked(req):
+    if not beside and _person_talked(req):
         try:
             from openprogram.runtime.conversation.always_on import runtime as always_on_runtime
             always_on_runtime.note_user_turn(req.session_id)

@@ -211,10 +211,16 @@ def transform_messages(
                 usage=msg.usage,
                 stop_reason=msg.stop_reason,
                 error_message=getattr(msg, "error_message", None),
+                carried_tools=getattr(msg, "carried_tools", None),
                 timestamp=msg.timestamp,
             ))
             continue
 
         transformed.append(msg)
 
-    return transformed
+    # Each group of tool results is followed by the instructions its calls
+    # brought along (``tool_attachments``), the same in the turn and after.
+    from .tool_attachments import with_attachment_messages
+    from .media_budget import bound_images, without_unsupported_images
+    # Then the media the request cannot carry (``media_budget``).
+    return bound_images(without_unsupported_images(with_attachment_messages(transformed), model))

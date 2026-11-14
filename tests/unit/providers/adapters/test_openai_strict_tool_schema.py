@@ -26,7 +26,7 @@ def test_codex_tool_schema_drops_unsupported_all_of_without_mutating_tool() -> N
     original = copy.deepcopy(parameters)
 
     converted = convert_responses_tools(
-        [Tool(name="web_use", description="Browser action", parameters=parameters)],
+        [Tool(name="page_tool", description="Browser action", parameters=parameters)],
         "openai-codex",
         "gpt-5.6-luna",
     )

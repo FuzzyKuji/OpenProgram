@@ -12,7 +12,7 @@
 <tr><th scope="row">登录服务</th><td><code translate="no">openprogram worker install</code></td><td><code translate="no">openprogram --profile dev worker install</code></td></tr>
 </tbody>
 </table>
-<p class="note">实例之间不共享数据。在 macOS 和 Linux 上每个 profile 有自己的登录服务，<code translate="no">worker start</code>、<code translate="no">stop</code>、<code translate="no">restart</code>、<code translate="no">status</code>、<code translate="no">uninstall</code> 只作用于当前 profile，停止或升级 <code translate="no">dev</code> 不影响默认 worker。Windows 只有一个计划任务 <code translate="no">OpenProgram Worker</code>，所有 profile 共用。</p>
+<p class="note">实例之间不共享数据。每个 profile 有自己的登录服务，<code translate="no">worker start</code>、<code translate="no">stop</code>、<code translate="no">restart</code>、<code translate="no">status</code>、<code translate="no">uninstall</code> 只作用于当前 profile，停止或升级 <code translate="no">dev</code> 不影响默认 worker。</p>
 
 <details>
 <summary>选择 profile 或端口的其他方式</summary>

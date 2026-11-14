@@ -139,7 +139,7 @@ def test_a_fresh_install_gets_assistant_as_default_with_the_other_builtins(tmp_p
     # at startup, so an install only ever opened in the App has every one.
     monkeypatch.setattr(manager, "_state_root", lambda: tmp_path)
     from openprogram.runtime.agent_registry.builtin_agents import BUILTIN_IDS, create_builtin_agents, ensure_default_agent
-    assert BUILTIN_IDS[0] == "main" and len(BUILTIN_IDS) == 15
+    assert BUILTIN_IDS[0] == "main" and len(BUILTIN_IDS) == 16
     assert manager.list_all() == []
     create_builtin_agents()
     assert {row.id for row in manager.list_all()} == set(BUILTIN_IDS)
@@ -226,7 +226,9 @@ def test_a_copy_on_an_older_shipped_tool_list_is_recognised_and_updated(tmp_path
     from openprogram.runtime.agent_registry import builtin_agents as module
     module.create_builtin_agents()
     tools = manager.get("writer").tools
-    older = dict(tools, allowed=[name for name in tools["allowed"] if name not in module._ALWAYS_ON_TOOLS])
+    # Those copies also predate send_message taking over the handoff tool.
+    older = dict(tools, allowed=["handoff" if name == "send_message" else name
+                                 for name in tools["allowed"] if name not in module._ALWAYS_ON_TOOLS])
     prompt = manager.get("writer").system_prompt
     older_prompt = prompt.replace(module._HANDOFF_NOTE, (
         "When a step belongs to another Agent, hand it to that Agent's "
@@ -355,7 +357,8 @@ def test_builtin_text_does_not_promise_what_wakes_do_not_do():
     from openprogram.runtime.agent_registry import builtin_agents as module
     prompts = [entry.get("system_prompt", "") for entry in module.BUILTINS]
     assert not any("no news" in prompt for prompt in prompts)
-    assert all("not the Agent's name" in prompt and "not for later wakes" in prompt
+    # send_message reaches an Agent by its name, so the note names it.
+    assert all("send_message" in prompt and "not for later wakes" in prompt
                for prompt in prompts if prompt)
     chief = module.builtin("chief-of-staff")
     assert "once a day" not in chief["description"] and "每天" not in chief["description_zh"]

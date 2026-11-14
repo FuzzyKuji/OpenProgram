@@ -9,19 +9,22 @@ const store = require("./store");
 const { restoreBuiltIn, seed } = require("./seed");
 
 const STOP_WAIT_MS = 20_000;
+// How long a Windows worker gets to shut down in order before it is ended.
+// It looks for the request four times a second and its shutdown fits in five.
+const ORDERLY_STOP_MS = 8_000;
 const REASONS = new Set(["failed", "menu", "shift"]);
 const THEME_PREFS = "theme-prefs.json";
 
-function workerPid(state) {
+function workerPid(state, isAlive = store.processAlive) {
   try {
     const pid = Number.parseInt(fs.readFileSync(path.join(state, "worker.pid"), "utf8").split(/\s+/)[0], 10);
-    return Number.isInteger(pid) && pid > 0 && store.processAlive(pid) ? pid : null;
+    return Number.isInteger(pid) && pid > 0 && isAlive(pid) ? pid : null;
   } catch {
     return null;
   }
 }
 
-function waitFor(condition, timeoutMs) {
+function waitFor(condition, timeoutMs, intervalMs = 100) {
   return new Promise((resolve) => {
     const started = Date.now();
     const timer = setInterval(() => {
@@ -29,26 +32,69 @@ function waitFor(condition, timeoutMs) {
         clearInterval(timer);
         resolve(condition());
       }
-    }, 100);
+    }, intervalMs);
   });
 }
 
-async function stopWorker(root, platform = process.platform) {
+/**
+ * Ask a Windows worker to stop in order. No signal can ask there, so the
+ * request is a file naming the PID, which the worker's main loop reads
+ * (`request_stop` in operations/worker/lifecycle.py writes the same file).
+ */
+function requestWindowsStop(state, pid) {
+  const target = path.join(state, "worker.stop");
+  const staged = `${target}.${process.pid}.tmp`;
+  try {
+    fs.writeFileSync(staged, `${pid}\n`, "utf8");
+    fs.renameSync(staged, target);
+    return true;
+  } catch {
+    fs.rmSync(staged, { force: true });
+    return false;
+  }
+}
+
+function endWindowsTree(pid) {
+  try {
+    execFileSync("taskkill.exe", ["/PID", String(pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
+  } catch {
+    // Already gone; the wait that follows decides.
+  }
+}
+
+/**
+ * Stop the worker before `current` moves. POSIX sends SIGTERM. Windows asks
+ * through `worker.stop` first, so checkpoints are written and the web server
+ * closes, and ends the process tree only if it is still there after
+ * `orderlyMs`. Throws when the worker outlives `waitMs`.
+ */
+async function stopWorker(root, platform = process.platform, {
+  isAlive = store.processAlive, endTree = endWindowsTree,
+  orderlyMs = ORDERLY_STOP_MS, waitMs = STOP_WAIT_MS, pollMs = 100,
+} = {}) {
   const state = path.dirname(root);
-  const pid = workerPid(state);
+  const pid = workerPid(state, isAlive);
   if (pid === null) return;
+  const gone = () => !isAlive(pid);
   if (platform === "win32") {
+    const started = Date.now();
+    const asked = requestWindowsStop(state, pid);
     try {
-      execFileSync("taskkill.exe", ["/PID", String(pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
-    } catch {
-      // Already gone; the wait below decides.
+      if (!asked || !await waitFor(gone, orderlyMs, pollMs)) {
+        endTree(pid);
+        store.appendRecoveryLog(root, asked
+          ? `the worker (PID ${pid}) did not stop within ${orderlyMs} ms of being asked and was ended`
+          : `the worker (PID ${pid}) could not be asked to stop and was ended`);
+      }
+      if (await waitFor(gone, Math.max(0, waitMs - (Date.now() - started)), pollMs)) return;
+    } finally {
+      fs.rmSync(path.join(state, "worker.stop"), { force: true });
     }
   } else {
     process.kill(pid, "SIGTERM");
+    if (await waitFor(gone, waitMs, pollMs)) return;
   }
-  if (!await waitFor(() => !store.processAlive(pid), STOP_WAIT_MS)) {
-    throw new Error("The background process did not stop, so nothing was changed.");
-  }
+  throw new Error("The background process did not stop, so nothing was changed.");
 }
 
 /** Forget the failures that would send the chosen version straight back. */

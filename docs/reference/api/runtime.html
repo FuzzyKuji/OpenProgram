@@ -45,7 +45,7 @@ finally:
 <tr><th scope="row"><code translate="no">max_retries</code></th><td>Resolved retry budget</td></tr>
 <tr><th scope="row"><code translate="no">system</code></th><td>Assignable system prompt; <code translate="no">method_options[...]["system"]</code> sets it for one call</td></tr>
 <tr><th scope="row"><code translate="no">thinking_level</code></th><td><code translate="no">"off"</code> (default), <code translate="no">"low"</code>, <code translate="no">"medium"</code>, <code translate="no">"high"</code>, <code translate="no">"xhigh"</code>; passed to the provider</td></tr>
-<tr><th scope="row"><code translate="no">session_id</code></th><td>Stable <code translate="no">"op-&lt;hex&gt;"</code> across <code translate="no">exec()</code> calls; the prompt-cache key</td></tr>
+<tr><th scope="row"><code translate="no">session_id</code></th><td>This Runtime's own <code translate="no">"op-&lt;hex&gt;"</code>. Not sent as the prompt-cache key: calls with the same model, system prompt and tools share an id derived from them, across Runtimes. Assign it to name the key yourself</td></tr>
 <tr><th scope="row"><code translate="no">on_stream</code></th><td><code translate="no">fn(event_dict)</code> for text, thinking, tool_use, tool_result events</td></tr>
 <tr><th scope="row"><code translate="no">last_usage</code></th><td><code translate="no">{input_tokens, output_tokens, total_tokens, cache_read, cache_create, ...}</code> of the last call</td></tr>
 </tbody>

@@ -99,7 +99,9 @@ _PAUSE_SUPERSEDES = (
 
 @dataclass(frozen=True)
 class ControlDispatch:
-    command: ControlCommand
+    # ``None`` only for a stop of an execution that had already ended
+    # (``issue_code == "already_terminal"``): no command was written.
+    command: ControlCommand | None
     execution: ExecutionRecord
     delivered: bool
     ack: DriverAck | None = None
@@ -108,17 +110,16 @@ class ControlDispatch:
 
 @dataclass(frozen=True)
 class ObservedCancelSubmission:
-    """Outcome of one protocol cancel intent submitted from an observation.
+    """Outcome of one protocol cancel intent.
 
-    Protocol transports keep their original command identity and observed
-    version.  A stale observation may obtain one newer snapshot before its
-    first durable write; it must not manufacture a second intent locally.
+    Protocol transports keep their original command identity. The store
+    takes the stop at the execution's current version, so an observation
+    the execution has since moved past needs no second attempt.
     """
 
     command: ControlCommand | None
     execution: ExecutionRecord | None
     accepted: bool
-    retried_stale_observation: bool = False
 
 
 async def submit_observed_cancel(
@@ -130,11 +131,11 @@ async def submit_observed_cancel(
     actor: Mapping[str, Any],
     reason_code: str,
 ) -> ObservedCancelSubmission:
-    """Submit one exact cancel using a transport's saved observation.
+    """Submit one exact cancel from a protocol transport (MCP, ACP).
 
-    The initial request never reads a fresher version.  Only an unaccepted
-    ``stale_version`` conflict permits one retry, using the newly observed
-    snapshot but retaining the same command id, actor, and reason.
+    ``accepted`` says this command is the stop in force. A stop of an
+    execution another stop already holds, or that has ended, is not this
+    protocol's to act on locally, so it is not accepted.
     """
 
     existing = service.executions.get_command(command_id)
@@ -146,83 +147,52 @@ async def submit_observed_cancel(
             actor=actor,
             reason_code=reason_code,
         )
+    # The same stop as the page's: what the turn waits on stops with it.
+    from openprogram.runtime.execution.run_control.cancellation import (
+        stop_with_descendants,
+    )
 
-    observed_version = expected_version
-    retried = False
-    while True:
-        try:
-            dispatch = await service.request_cancel(
+    try:
+        dispatch = await stop_with_descendants(
+            execution_id,
+            lambda: service.request_cancel(
                 command_id=command_id,
                 execution_id=execution_id,
-                expected_version=observed_version,
+                expected_version=expected_version,
                 actor=actor,
                 reason_code=reason_code,
-            )
-        except ExecutionConflict as exc:
-            latest = service.executions.get_execution(execution_id)
-            if exc.code != "stale_version" or retried or latest is None:
-                return ObservedCancelSubmission(
-                    command=service.executions.get_command(command_id),
-                    execution=latest,
-                    accepted=False,
-                    retried_stale_observation=retried,
-                )
-            if latest.status in TERMINAL_EXECUTION_STATUSES:
-                return ObservedCancelSubmission(
-                    command=service.executions.get_command(command_id),
-                    execution=latest,
-                    accepted=False,
-                    retried_stale_observation=True,
-                )
-            observed_version = latest.status_version
-            retried = True
-            continue
-        except CommandConflict:
-            existing = service.executions.get_command(command_id)
-            if existing is None:
-                raise
-            return _existing_observed_cancel(
-                service,
-                command=existing,
-                execution_id=execution_id,
-                actor=actor,
-                reason_code=reason_code,
-                retried_stale_observation=retried,
-            )
-        except ProjectionRecoveryRequired:
-            latest = service.executions.get_execution(execution_id)
-            return ObservedCancelSubmission(
-                command=service.executions.get_command(command_id),
-                execution=latest,
-                accepted=False,
-                retried_stale_observation=retried,
-            )
-        except InvalidCommand:
-            # A late terminal cancel has no new command row. Return the
-            # current canonical snapshot and leave the protocol's local task
-            # untouched rather than translating terminal rejection into a
-            # second cancellation.
-            return ObservedCancelSubmission(
-                command=service.executions.get_command(command_id),
-                execution=service.executions.get_execution(execution_id),
-                accepted=False,
-                retried_stale_observation=retried,
-            )
-
-        latest = service.executions.get_execution(execution_id) or dispatch.execution
-        command = service.executions.get_command(command_id) or dispatch.command
-        accepted = command.status in {
+            ),
+            waited_on_only=True,
+        )
+    except CommandConflict:
+        existing = service.executions.get_command(command_id)
+        if existing is None:
+            raise
+        return _existing_observed_cancel(
+            service,
+            command=existing,
+            execution_id=execution_id,
+            actor=actor,
+            reason_code=reason_code,
+        )
+    except (ExecutionConflict, ProjectionRecoveryRequired, InvalidCommand):
+        return ObservedCancelSubmission(
+            command=service.executions.get_command(command_id),
+            execution=service.executions.get_execution(execution_id),
+            accepted=False,
+        )
+    command = service.executions.get_command(command_id)
+    latest = service.executions.get_execution(execution_id) or dispatch.execution
+    # The stop in force under another command id, or none (the execution
+    # had ended), is not a local cancellation.
+    return ObservedCancelSubmission(
+        command=command,
+        execution=latest,
+        accepted=command is not None and command.status in {
             CommandStatus.APPLYING,
             CommandStatus.APPLIED,
-        }
-        # REJECTED is intentionally not treated as a local cancellation even
-        # if another owner has already changed the execution snapshot.
-        return ObservedCancelSubmission(
-            command=command,
-            execution=latest,
-            accepted=accepted,
-            retried_stale_observation=retried,
-        )
+        },
+    )
 
 
 def _existing_observed_cancel(
@@ -232,7 +202,6 @@ def _existing_observed_cancel(
     execution_id: str,
     actor: Mapping[str, Any],
     reason_code: str,
-    retried_stale_observation: bool = False,
 ) -> ObservedCancelSubmission:
     """Return a prior protocol intent without weakening command collisions."""
 
@@ -254,7 +223,6 @@ def _existing_observed_cancel(
             CommandStatus.APPLYING,
             CommandStatus.APPLIED,
         },
-        retried_stale_observation=retried_stale_observation,
     )
 
 

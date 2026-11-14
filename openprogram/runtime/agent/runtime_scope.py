@@ -103,6 +103,33 @@ class _LazyRuntime(QuestionsOperations):
             self._runtime.close()
 
 
+def _profile_model(runtime):
+    """Whether a scope's runtime is already a model built from a profile.
+
+    A host-supplied ``call=`` is not, and neither is the placeholder that
+    has not resolved a provider: the run may never ask for one.
+    """
+    if isinstance(runtime, _LazyRuntime):
+        return runtime._runtime is not None
+    return getattr(runtime, "_call_fn", None) is None
+
+
+def profile_model_in_use():
+    """A request is about to go to a model built from the profile.
+
+    A standalone run that began owned by the process is the profile
+    owner's from here on: it now runs on that profile's credentials, so
+    what the profile keeps for its owner is open to it. The request object
+    is shared by everything the run started, so all of it sees the owner.
+    """
+    from .turn_request import current_turn_request
+    request = current_turn_request.get()
+    if request is not None and getattr(request, "_process_owned", False):
+        from openprogram.runtime.permissions.authority import owner_principal_id
+        request.principal_id = owner_principal_id()
+        request._process_owned = False
+
+
 @contextmanager
 def execution_scope(runtime=None):
     """Reuse ambient resources; release only resources owned by this entry."""
@@ -128,9 +155,14 @@ def execution_scope(runtime=None):
             token = _store.set(writer)
             stack.callback(_store.reset, token)
         if current_turn_request.get() is None:
-            from openprogram.runtime.permissions.authority import local_owner_authority
+            from openprogram.runtime.permissions.authority import standalone_owner_authority
+            profile_model = _profile_model(current)
             request = TurnRequest(session_id=getattr(writer, "session_id", "standalone"), user_text='',
-                                  agent_id='standalone', source='python', **local_owner_authority())
+                                  agent_id='standalone', source='python',
+                                  **standalone_owner_authority(profile_model=profile_model))
+            # Told apart from a request some turn built: only this one may
+            # still become the profile owner's (profile_model_in_use).
+            request._process_owned = not profile_model
             token = current_turn_request.set(request)
             stack.callback(current_turn_request.reset, token)
         yield current

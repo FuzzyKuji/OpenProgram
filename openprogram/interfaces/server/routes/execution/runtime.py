@@ -67,6 +67,74 @@ def _runtime_build_error_response(exc: Exception, provider: str | None = None):
     )
 
 
+def picks_other_branch(session_id: str | None, body: dict) -> bool:
+    """A pick names a branch that is not the selected one."""
+    from openprogram.interfaces.server.branch_settings import branch_target, current_branch
+    named = branch_target(body)["branch_id"]
+    return bool(session_id and named and named != current_branch(session_id))
+
+
+def model_conflict(session_id: str | None, exc) -> dict:
+    """A refused pick: why (``branch_changed`` / ``branch_gone``) and the
+    branch the conversation shows now, so the pane can retry there."""
+    from openprogram.interfaces.server.branch_settings import current_branch
+    return {"error": "branch_config_conflict", "code": getattr(exc, "code", "branch_changed"),
+            "message": str(exc), "active_branch_id": current_branch(session_id)}
+
+
+def picked_reply(row: dict) -> dict:
+    """What a pane needs after a pick on its branch: the written branch, its
+    stored settings, and the model's own controls (effort levels, Fast), since
+    the pane shows them without waiting for a read of its branch."""
+    from openprogram.interfaces.server import server as _s
+    from openprogram.models.listing.listing import supports_fast
+    from openprogram.models.providers.settings.fast import fast_capability
+    from openprogram.state.store.session.branch_config import snapshot
+    prov, model = row.get("provider_override"), row.get("model_override")
+    return {
+        "switched": True, "provider": prov, "model": model,
+        "branch_id": row.get("branch_id"), "active_branch_id": row.get("active_branch_id"),
+        "settings": snapshot(row),
+        "chat": {"provider": prov, "model": model,
+                 "thinking": _s._get_thinking_config_for_model(prov, model),
+                 "fast": supports_fast(prov, model), "fast_capability": fast_capability(prov, model)},
+    }
+
+
+def branch_view(session_id: str | None, conv: dict | None, branch_id: str | None) -> dict | None:
+    """The conversation as a branch that is not selected sees it: its stored
+    settings over the session. ``None`` for the selected branch, no branch
+    named, or a branch that is gone."""
+    if not (session_id and conv and isinstance(branch_id, str) and branch_id):
+        return None
+    from openprogram.runtime.context.session_db import default_db
+    from openprogram.state.store.session.branch_config import BranchConfigConflict, config_for_branch
+    row = default_db().get_session(session_id) or {}
+    if branch_id == row.get("active_branch_id"):
+        return None
+    try:
+        return {**conv, **config_for_branch(row, branch_id), "id": session_id}
+    except BranchConfigConflict:
+        return None
+
+
+def stored_branch_settings(session_id: str | None, shown: dict | None) -> dict | None:
+    """The stored settings of the branch a settings read answers for.
+
+    ``shown`` is :func:`branch_view`'s answer; without it the selected branch
+    is read. ``None`` until the conversation exists: a draft's settings are
+    the client's own.
+    """
+    if not session_id:
+        return None
+    from openprogram.runtime.context.session_db import default_db
+    from openprogram.state.store.session.branch_config import snapshot
+    db = default_db()
+    if not db.is_created(session_id):
+        return None
+    return snapshot(shown if shown is not None else (db.get_session(session_id) or {}))
+
+
 def register(app):
     @app.get("/api/providers")
     async def get_providers():
@@ -123,7 +191,11 @@ def register(app):
         """Switch model (and optionally provider) for the active runtime.
 
         Body: {"model": str (bare id or "provider:id"), "provider": str?,
-               "session_id": str?}
+               "session_id": str?, "branch_id": str? | "expected_branch_id": str|null?}
+
+        ``branch_id`` names the branch the pane shows: a branch that is not
+        selected stores the model and leaves the live runtime, and announces
+        nothing. A refused pick is a 409 with ``code`` and ``active_branch_id``.
         """
         from openprogram.interfaces.server import server as _s
         _s._log(f"[/api/model] body={body!r}")
@@ -132,6 +204,15 @@ def register(app):
         model = body["model"].strip()
         explicit_provider = (body.get("provider") or "").strip() or None
         session_id = body.get("session_id")
+        from openprogram.interfaces.server.branch_settings import prepare_initial_guard, materialized_guard, commit_model, current_branch
+        from openprogram.state.store.session.branch_config import BranchConfigConflict
+
+        def _conflict(exc):
+            return JSONResponse(content=model_conflict(session_id, exc), status_code=409)
+        try:
+            initial_branch_id = prepare_initial_guard(session_id, body)
+        except BranchConfigConflict as exc:
+            return _conflict(exc)
 
         inferred_provider = None
         bare_model = model
@@ -164,7 +245,9 @@ def register(app):
                 old_rt = conv.get("runtime")
                 cur_prov = conv.get("provider_name", _s.runtime_management._default_provider)
                 prov = target_provider or cur_prov
-                need_new_rt = (target_provider and target_provider != cur_prov) or (old_rt is None)
+                # Another branch's model is stored, not run: build nothing.
+                elsewhere = picks_other_branch(session_id, body)
+                need_new_rt = not elsewhere and ((target_provider and target_provider != cur_prov) or (old_rt is None))
                 runtime_ready = old_rt is not None
                 if need_new_rt:
                     try:
@@ -172,36 +255,22 @@ def register(app):
                     except Exception as e:
                         _s._log(f"[/api/model] runtime build skipped for {prov}: {e}")
                         new_rt = None
-                    if new_rt is not None:
-                        if old_rt and hasattr(old_rt, "close"):
-                            try:
-                                old_rt.close()
-                            except Exception:
-                                # The old runtime is being replaced; a failed
-                                # close must not block the switch.
-                                _log.debug(
-                                    "closing replaced runtime for %s failed", prov, exc_info=True)
-                        conv["runtime"] = new_rt
                     runtime_ready = new_rt is not None
-                    conv["provider_name"] = prov
                 else:
-                    if old_rt is not None:
-                        old_rt.model = bare_model
-                conv["provider_override"] = prov
-                conv["model_override"] = bare_model
-                _s._log(
-                    f"[/api/model] post-write conv id={id(conv)} "
-                    f"provider_override={conv.get('provider_override')!r} "
-                    f"model_override={conv.get('model_override')!r} "
-                    f"sessions[sid] id={id(_s._sessions.get(session_id))}"
-                )
-                def _persist_override():
-                    from openprogram.runtime.conversation.session_model import write_session_chat_model
-                    from openprogram.models.providers.catalog.last_used import record_last_used_model
-                    write_session_chat_model(session_id, prov, bare_model)
-                    _s._save_session(session_id)
-                    record_last_used_model(prov, bare_model)
-                await asyncio.to_thread(_persist_override)
+                    new_rt = old_rt
+                try:
+                    guarded_body = materialized_guard(session_id, body, initial_branch_id)
+                    row = await asyncio.to_thread(commit_model, session_id, guarded_body, prov, bare_model, conv,
+                                            runtime=None if elsewhere else new_rt,
+                                            replace_runtime=bool(need_new_rt))
+                except BranchConfigConflict as exc:
+                    return _conflict(exc)
+                prov, bare_model = row.get("provider_override"), row.get("model_override")
+                reply = picked_reply(row)
+                if row.get("branch_id") != row.get("active_branch_id"):
+                    # Like an Agent switch on another branch: no broadcast, so
+                    # no pane or sidebar shows this model as the selected one's.
+                    return JSONResponse(content={**reply, "runtime_ready": False})
                 info = _s._get_provider_info(session_id)
                 emit_ws_frame({"type": "provider_changed", "data": info})
                 from openprogram.models.listing.listing import supports_fast as _supports_fast
@@ -217,12 +286,8 @@ def register(app):
                     },
                 })
                 _s.refresh_context_stats(session_id)
-                return JSONResponse(content={
-                    "switched": True,
-                    "provider": prov,
-                    "model": bare_model,
-                    "runtime_ready": runtime_ready,
-                })
+                return JSONResponse(content={**reply, "runtime_ready": runtime_ready,
+                                             "active_branch_id": current_branch(session_id)})
 
         if target_provider and target_provider != _s.runtime_management._default_provider:
             try:
@@ -264,8 +329,15 @@ def register(app):
         })
 
     @app.get("/api/agent_settings")
-    async def get_agent_settings(session_id: str = None):
-        """Return current chat/exec provider+model. Optionally per-session."""
+    async def get_agent_settings(session_id: str = None, branch_id: str = None):
+        """Return current chat/exec provider+model. Optionally per-session.
+
+        ``branch_id`` names the branch a pane shows: a branch that is not
+        selected answers with its own stored model and says so in
+        ``branch_id``, so that pane can read its model back after any
+        broadcast. A branch that is gone answers for the selected one.
+        ``settings`` holds the answered branch's stored settings once the
+        conversation exists."""
         from openprogram.interfaces.server import server as _s
         from openprogram.models.listing.listing import (
             supports_fast as _supports_fast,
@@ -284,7 +356,10 @@ def register(app):
                 rt = conv.get("runtime")
                 if rt:
                     chat_session_id = getattr(rt, "_session_id", None)
-        if conv:
+        shown = branch_view(session_id, conv, branch_id)
+        if shown is not None:
+            chat_provider, chat_model = _s.runtime_management._resolve_session_provider_model(shown, snapshot=True)
+        elif conv:
             chat_provider, chat_model = _s.runtime_management._resolve_session_provider_model(conv)
         elif _s._user_pinned_provider and _s._user_pinned_model:
             chat_provider, chat_model = _s._user_pinned_provider, _s._user_pinned_model
@@ -303,7 +378,16 @@ def register(app):
 
         from openprogram.models.providers.settings.fast import fast_capability
 
+        from openprogram.interfaces.server.branch_settings import current_branch
+        active_branch_id = current_branch(session_id)
+        # The answered branch's stored effort, web search and the rest: a
+        # pane rereads after ``agent_settings_changed``, so a write made
+        # elsewhere reaches it without a reload.
+        settings = await asyncio.to_thread(stored_branch_settings, session_id, shown)
         return JSONResponse(content={
+            "active_branch_id": active_branch_id,
+            "branch_id": branch_id if shown is not None else active_branch_id,
+            **({"settings": settings} if settings is not None else {}),
             "chat": {
                 "provider": chat_provider,
                 "model": chat_model,
@@ -329,6 +413,9 @@ def register(app):
     async def set_agent_settings(body: dict = None):
         """Update chat and/or exec agent provider/model."""
         from openprogram.interfaces.server import server as _s
+        if body and body.get("session_id") and "chat" in body:
+            chat = body["chat"]
+            return await switch_model({**body, "provider": chat.get("provider"), "model": chat.get("model") or ""})
         _s._init_providers()
         changed = False
 

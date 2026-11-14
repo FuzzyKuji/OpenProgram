@@ -1,6 +1,7 @@
 <title>macOS 投递</title>
 <meta name="description" content="macOS 后端如何在后台投递输入、处理文件对话框和桌面空间、等待忙碌的应用以及拒绝操作。">
 <h1>macOS 投递</h1>
+<p>已观察的控件消失且无法安全重新匹配时，工具自动读取完整的新状态，返回 <code translate="no">observation_required</code>，由 Agent 按新状态选择下一步。该控件对应的步骤及后续批量步骤均不发送；此前完成的步骤保留，不会重放。刷新本身失败时仍如实报告错误。</p>
 
 
 <h2 id="后台投递">后台投递</h2>
@@ -9,6 +10,7 @@
 <thead class="sr"><tr><th scope="col">项</th><th scope="col"></th></tr></thead>
 <tbody>
 <tr><th scope="row">元素动作</th><td>元素动作走 Accessibility：<code translate="no">AXPress</code> / <code translate="no">AXConfirm</code> / <code translate="no">AXPick</code>，然后 <code translate="no">AXSelected</code>，然后聚焦，最后才在元素中心做一次指针点击；右键用 <code translate="no">AXShowMenu</code>；<code translate="no">set_value</code> 用 <code translate="no">AXValue</code>；<code translate="no">select_text</code> 用 <code translate="no">AXSelectedTextRange</code>（UTF-16 偏移）；<code translate="no">scroll</code> 先用翻页动作，再用滚动条的值，再用滚轮事件。</td></tr>
+<tr><th scope="row">列表里的行</th><td>点击一行，或行内最多三层的单元格，就是在这一行上设置 <code translate="no">AXSelected</code>，效果与点击相同。按压返回错误、但行随后已选中，也算成功。在 Outlook 上实测：邮件单元格列出 <code translate="no">AXPress</code> 却以 -25205 回应，它所在的行在 0.2 秒内接受 <code translate="no">AXSelected</code>，阅读窗格随之切换。全程不发送鼠标按下，应用没有可借以激活自己的事件。</td></tr>
 <tr><th scope="row">指针可达</th><td>对元素做指针点击或悬停前，先检查它的中心是否落在被滚动区域和网页区域裁剪后的窗口之内（<code translate="no">_reachable_center</code>）；不在时执行 <code translate="no">AXScrollToVisible</code>，元素没有这个动作时（原生列表和表格）把外层每个滚动区域的滚动条设到让它居中的位置，等两次读取一致后再读一次位置。</td></tr>
 <tr><th scope="row">视野之外</th><td>仍然不在视野内或没有位置的元素以 <code translate="no">NotDispatched</code> 拒绝。</td></tr>
 </tbody>

@@ -67,13 +67,44 @@ def mark_session_unread(db, session_id: str) -> bool:
 _ROOT_ID = "ROOT"
 
 
+def beside_conversation(req: Any) -> bool:
+    """A turn that leaves the conversation's own state alone: one admitted
+    without the conversation's effects (``owns_conversation_effects``), a
+    background check-in or a person's turn on a branch that is not the
+    selected one. Neither sets the conversation's status, unread dot, head,
+    model, token count or title, or replies to its channel."""
+    from openprogram.runtime.agent.turn_request import owns_conversation_effects
+    return not owns_conversation_effects(req)
+
+
 class TurnWriter:
-    """Owns the head policy for one turn. Construct once per turn."""
+    """Owns the head policy for one turn. Construct once per turn.
+
+    A turn writes to the branch it was admitted on (``req.branch_id``),
+    whichever branch the person selects while it runs. Each chain write
+    names its predecessor, and the store moves the branch that ends there:
+    the session head with it while that branch is selected, only the
+    branch's record while it is not. The head is never moved onto the
+    turn's branch from another one, so a turn that ends after the person
+    switched away leaves the selection where the person put it.
+    """
 
     def __init__(self, db: Any, req: Any):
         self.db = db
         self.req = req
         self.advance = bool(getattr(req, "advance_head", True))
+
+    def _moves_head(self) -> bool:
+        """Whether the next chain write moves the head: always on an
+        advancing turn; on a turn beside the selection only once the person
+        has selected its branch, so its writes then show where they look."""
+        if self.advance:
+            return True
+        branch = getattr(self.req, "branch_id", None)
+        if not branch or not getattr(self.req, "side_branch", False):
+            return False
+        row = self.db.get_session(self.req.session_id) or {}
+        return row.get("active_branch_id") == branch
 
     # ── user node ────────────────────────────────────────────────
 
@@ -124,7 +155,7 @@ class TurnWriter:
                     prompt=req.user_text,
                     created_at=user_msg.get("timestamp"),
                     metadata=user_meta,
-                    register_head=self.advance,
+                    register_head=self._moves_head(),
                 )
             else:
                 node = Call(
@@ -145,11 +176,11 @@ class TurnWriter:
                     metadata=user_meta,
                 )
                 SessionNodeWriter(
-                    self.db, req.session_id, advance_head=self.advance,
+                    self.db, req.session_id, advance_head=self._moves_head(),
                 ).append(node)
         except Exception:
             self.db.append_message(req.session_id, user_msg)
-            if self.advance:
+            if self._moves_head():
                 self.db.set_head(req.session_id, user_msg_id)
 
     # ── assistant placeholder ────────────────────────────────────
@@ -165,7 +196,7 @@ class TurnWriter:
         from openprogram.runtime.permissions.authority import runtime_authority
         result = insert_placeholder(
             self.db, self.req.session_id, assistant_msg_id, user_msg_id,
-            self.req.source, advance_head=self.advance,
+            self.req.source, advance_head=self._moves_head(),
             authority=runtime_authority(
                 self.req, f"agent/{self.req.agent_id}"
             ),
@@ -180,22 +211,37 @@ class TurnWriter:
 
     def head_for_finalize(self, assistant_msg_id: str) -> Optional[str]:
         """The head value finalize's ``update_session`` may record —
-        the reply on an advancing turn, nothing on a spawned one."""
+        the reply on an advancing turn, nothing on a spawned one. It is
+        written only while the turn's branch is selected
+        (``on_own_branch``)."""
         return assistant_msg_id if self.advance else None
+
+    def on_own_branch(self) -> dict:
+        """The guard a write of the conversation's head and its selected
+        branch's fields carries: refused (``BranchConfigConflict``) once
+        the person has selected another branch than the turn's."""
+        branch = getattr(self.req, "branch_id", None)
+        return {"expected_branch_id": branch} if branch else {}
 
     def record_failure(self, head_for_next: Optional[str]) -> None:
         """Mark the session failed; move head to the failed turn ONLY
-        on an advancing turn — a spawned turn's error stays on its
-        side branch and never steals the user's window. A background
+        on an advancing turn whose branch is still selected — a spawned
+        turn's error stays on its side branch, and a turn the person
+        switched away from never pulls the selection back. A background
         turn's failure is recorded by whoever started it, not on the
         conversation."""
-        if getattr(self.req, "background", False):
+        if beside_conversation(self.req):
             return
+        from openprogram.state.store.session.branch_config import BranchConfigConflict
+        head = head_for_next if self.advance else None
         try:
-            mark_session_finished(
-                self.db, self.req.session_id, failed=True,
-                head_id=head_for_next if self.advance else None,
-            )
+            try:
+                mark_session_finished(
+                    self.db, self.req.session_id, failed=True,
+                    head_id=head, **(self.on_own_branch() if head else {}),
+                )
+            except BranchConfigConflict:
+                mark_session_finished(self.db, self.req.session_id, failed=True)
         except Exception:
             _log.warning(
                 "failed to record error status for session %s",

@@ -61,15 +61,16 @@
 <tr><th scope="row">Decision</th><td>Select one of the supplied options with <code translate="no">Agent.choose()</code></td><td>One model turn, no tools, no automatic re-pick</td></tr>
 <tr><th scope="row">Lightweight helper</th><td>Extract, classify, format, summarize, predict next messages</td><td>No tools</td></tr>
 <tr><th scope="row">Coordinator</th><td>Plan dependencies, delegate authorized tasks, check results</td><td>Read, search, Agent coordination</td></tr>
+<tr><th scope="row">Explorer</th><td>Search and read code, files and the web for another agent, and report what it found</td><td>Read, search, web; never writes</td></tr>
 </tbody>
 </table>
-<p class="note">The last three have no prompt of their own; the task comes from the call and its Context. Memory, Skills and MCP start disabled. Pick a low-cost model for the helper and a strong reasoning model for the coordinator: names guarantee neither. Predicted messages are suggestions, not authorization; a planning-only request does not authorize delegated execution.</p>
+<p class="note">Decision, Lightweight helper and Coordinator have no prompt of their own; the task comes from the call and its Context. Memory, Skills and MCP start disabled. Pick a low-cost model for the helper and a strong reasoning model for the coordinator: names guarantee neither. Predicted messages are suggestions, not authorization; a planning-only request does not authorize delegated execution.</p>
 <h3>For work while you are away, always-on on</h3>
 <p><strong>Butler</strong> is the general <a href="always-on-agents.html">always-on</a> Agent: every tool and read-write memory. Tell it what to watch or keep going; that conversation wakes when something is due, otherwise follows the <a href="always-on-agents.html#check-ins">check-in ladder</a>, and reports only what is worth your attention.</p>
 <table class="stack">
 <thead><tr><th scope="col">Job Agent</th><th scope="col">Job</th><th scope="col">Tools</th><th scope="col">Memory</th><th scope="col">Looks around when woken</th></tr></thead>
 <tbody>
-<tr><th scope="row">Chief of Staff</th><td>Keeps open work moving, routes tasks to other Agents, reports</td><td>Read, web, conversations, open work, handoff, reminders, Goals</td><td>Read and write</td><td>Yes</td></tr>
+<tr><th scope="row">Chief of Staff</th><td>Keeps open work moving, routes tasks to other Agents, reports</td><td>Read, web, conversations, open work, messages to other Agents, reminders, Goals</td><td>Read and write</td><td>Yes</td></tr>
 <tr><th scope="row">Spec Writer</th><td>Turns a request into a specification with acceptance criteria</td><td>Read, web, conversations, write files</td><td>Read only</td><td>No</td></tr>
 <tr><th scope="row">Bug Reproducer</th><td>Finds the smallest failing case and pins it as a failing test</td><td>Read, shell, code navigation, worktrees</td><td>Off</td><td>No</td></tr>
 <tr><th scope="row">PR Producer</th><td>Implements a specified change with tests in a worktree</td><td>Read, shell, edit, worktrees</td><td>Off</td><td>No</td></tr>
@@ -85,7 +86,7 @@
 <ul>
 <li>Producer and verifier are separate so the Agent that wrote a change never passes it.</li>
 <li>Agents that handle mail or posts stop at a draft; their prompts forbid sending.</li>
-<li>They cooperate through <a href="always-on-agents.html#hand-work-to-another-conversation">handoffs</a>: one conversation per Agent, each clearly titled; tell the planning conversation which does what.</li>
+<li>They cooperate by <a href="always-on-agents.html#hand-work-to-another-conversation">messaging each other</a> by Agent name or conversation title: one conversation per Agent, each clearly titled; tell the planning conversation which does what.</li>
 </ul>
 <details>
 <summary>From Python</summary>
@@ -143,12 +144,18 @@ selected = selector.choose("Classify this message.", {"A": "Question", "B": "Sta
 <table class="stack fixed">
 <thead class="sr"><tr><th scope="col">Setting</th><th scope="col">Caps</th></tr></thead>
 <tbody>
-<tr><th scope="row"><code translate="no">agent.max_spawn_depth</code></th><td>Generations of new Agents; <code translate="no">1</code>: a worker does its work itself</td></tr>
-<tr><th scope="row"><code translate="no">agent.max_messages</code></th><td>Messages in one chain</td></tr>
-<tr><th scope="row"><code translate="no">agent.max_spawn_fanout</code></th><td>Agents one turn may create</td></tr>
+<tr><th scope="row"><code translate="no">agent.max_spawn_depth</code></th><td><code translate="no">1</code>: your Agent may start helpers, a helper does its work itself</td></tr>
+<tr><th scope="row"><code translate="no">agent.max_running_agents</code></th><td><code translate="no">6</code> helpers running at once in a conversation; the rest wait</td></tr>
+<tr><th scope="row"><code translate="no">agent.max_tree_usd</code></th><td><code translate="no">2</code> dollars for everything one request delegates; then its helpers stop</td></tr>
+<tr><th scope="row"><code translate="no">agent.stall_minutes</code></th><td><code translate="no">10</code> quiet minutes before a helper is reported stalled</td></tr>
+<tr><th scope="row"><code translate="no">agent.max_agent_hours</code></th><td><code translate="no">2</code> hours before a helper is stopped</td></tr>
+<tr><th scope="row"><code translate="no">agent.max_hops</code></th><td><code translate="no">4</code> times a message may be passed on</td></tr>
+<tr><th scope="row"><code translate="no">agent.max_sends_per_hour</code></th><td><code translate="no">20</code> messages a conversation sends per hour</td></tr>
+<tr><th scope="row"><code translate="no">agent.max_messages</code></th><td>Messages in one chain; off by default</td></tr>
+<tr><th scope="row"><code translate="no">agent.max_spawn_fanout</code></th><td>Agents one turn may create; off by default</td></tr>
 </tbody>
 </table>
-<p class="note">All default to <code translate="no">0</code>, no limit; the task pool bounds concurrency. A call past a limit is refused with the setting's name.</p>
+<p class="note"><code translate="no">0</code> turns a limit off. A call past a limit is refused with the setting's name; a stopped or stalled helper is reported in the conversation that started it.</p>
 
 <h2 id="open-work">Open work</h2>
 <details>

@@ -24,6 +24,20 @@ logger = logging.getLogger(__name__)
 
 _TIMEOUT = 5.0
 
+# The shadow repository holds exact copies of project files and is read back
+# by this module alone, so it never follows the user's Git configuration:
+# Git for Windows ships ``core.autocrlf=true``, which would rewrite line
+# endings on the way in; ``core.quotepath`` turns a non-ASCII file name into
+# an octal escape in every listing; a global ``commit.gpgsign`` would ask for
+# a key on each turn; and a mirrored path can pass 260 characters.
+_GIT_CONFIG = (
+    "-c", "core.autocrlf=false",
+    "-c", "core.safecrlf=false",
+    "-c", "core.quotepath=false",
+    "-c", "core.longpaths=true",
+    "-c", "commit.gpgsign=false",
+)
+
 
 def _mirror(src: str, dst: Path) -> None:
     """Copy ``src`` into the shadow work tree at ``dst``.
@@ -277,10 +291,12 @@ class ShadowGitStore:
         if not self._ensure_init():
             return False
         try:
-            content = self._git("show", f"{sha}:{file_path}")
+            # Bytes, not text: the file may be binary or in another
+            # encoding, and its line endings are part of it.
+            content = self._git_bytes("show", f"{sha}:{file_path}")
             dest_path = Path(dest)
             dest_path.parent.mkdir(parents=True, exist_ok=True)
-            dest_path.write_text(content, encoding="utf-8")
+            dest_path.write_bytes(content)
             return True
         except Exception:
             logger.debug("shadow-git restore failed: %s@%s → %s",
@@ -315,8 +331,18 @@ class ShadowGitStore:
         except Exception:
             return []
 
+    def _git_bytes(self, *args: str) -> bytes:
+        cmd = ["git", *_GIT_CONFIG, "-C", str(self.repo_path), *args]
+        cp = subprocess.run(cmd, capture_output=True, timeout=_TIMEOUT)
+        if cp.returncode != 0:
+            raise RuntimeError(
+                f"shadow-git {' '.join(args)} → exit {cp.returncode}: "
+                f"{cp.stderr.decode('utf-8', 'replace').strip()}"
+            )
+        return cp.stdout
+
     def _git(self, *args: str, check: bool = True) -> str:
-        cmd = ["git", "-C", str(self.repo_path), *args]
+        cmd = ["git", *_GIT_CONFIG, "-C", str(self.repo_path), *args]
         try:
             cp = subprocess.run(
                 cmd, capture_output=True, text=True,

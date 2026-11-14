@@ -292,12 +292,12 @@ def test_admitted_turn_waits_for_the_goal_lock_and_gives_up_when_it_stays_held(t
                 pass
         monkeypatch.setattr(chat, "ADMITTED_TURN_LOCK_WAIT_S", 0.05)
         with pytest.raises(chat.goals.GoalConflictError):
-            with chat._locked_when_free("s"):
+            with chat.locked_when_free("s"):
                 pass
         monkeypatch.setattr(chat, "ADMITTED_TURN_LOCK_WAIT_S", 30.0)
         threading.Timer(0.1, release.set).start()
         started = time.monotonic()
-        with chat._locked_when_free("s"):
+        with chat.locked_when_free("s"):
             assert time.monotonic() - started < 30
     finally:
         release.set()

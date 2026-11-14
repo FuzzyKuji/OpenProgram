@@ -59,8 +59,11 @@ ACTION_ARGS: dict[str, dict[str, tuple[str, ...]]] = {
         "screenshot": (),
         "console": ("pattern", "only_errors", "limit"),
         "network": ("pattern", "only_errors", "limit"),
-        "evaluate": ("script",),
+        "evaluate": ("script", "ref", "role", "name"),
         "close": (),
+        "panes": (),
+        "start_video_recording": ("pane", "max_duration"),
+        "stop_video_recording": ("discard",),
     },
     "vm": {
         "screenshot": (),
@@ -86,7 +89,9 @@ ACTION_ALIASES: dict[str, dict[str, str]] = {
     "browser": {"select_option": "select", "fill": "type", "goto": "navigate", "press_key": "press",
                 "go_back": "back", "go_forward": "forward", "snapshot": "read", "observe": "read",
                 "list_pages": "tabs", "list_tabs": "tabs", "new_tab": "open", "take_screenshot": "screenshot",
-                "type_text": "type", "console_messages": "console", "network_requests": "network"},
+                "type_text": "type", "console_messages": "console", "network_requests": "network",
+                "start_recording": "start_video_recording", "stop_recording": "stop_video_recording",
+                "list_panes": "panes"},
     "vm": {"type": "type_text", "press": "press_key", "hotkey": "press_key", "move_to": "move"},
 }
 

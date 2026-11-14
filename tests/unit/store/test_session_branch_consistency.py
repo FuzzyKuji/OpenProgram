@@ -12,7 +12,7 @@ that branch mutations are refused while a run is in flight.
 Covered:
   1. rewind syncs the mirror (else _save_session undoes the rewind)
   2. attach/delete refresh the cached branch + mirror
-  3. checkout / delete / attach / merge / rewind reject during a run
+  3. delete / attach / merge / rewind reject during a run; checkout does not
   4. no dispatcher event is silently dropped by the chat event chain
   5. reconcile_interrupted_runs clears a stuck session-row status
 """
@@ -63,7 +63,11 @@ def srv(monkeypatch):
     """The real server module with its global state isolated per test."""
     from openprogram.interfaces.server import server as _s
     monkeypatch.setattr(_s, "_sessions", {})
-    monkeypatch.setattr(_s, "_running_tasks", {})
+    from openprogram.interfaces.server.server_runtime.run_slots import BranchSlots, SelectedSlots
+    table: dict = {}
+    monkeypatch.setattr(_s, "_run_slots", table)
+    monkeypatch.setattr(_s, "_running_tasks", SelectedSlots(table))
+    monkeypatch.setattr(_s, "_branch_running_tasks", BranchSlots(table))
     monkeypatch.setattr(_s, "_msg_cache", type(_s._msg_cache)())
     monkeypatch.setattr(_s, "refresh_context_stats", lambda *a, **k: None)
     monkeypatch.setattr(_s, "_broadcast", lambda *a, **k: None)
@@ -71,6 +75,7 @@ def srv(monkeypatch):
     # execution store, which other tests on this worker share; a test that
     # needs an active run says so.
     monkeypatch.setattr(_s, "_is_run_active", lambda _sid: False)
+    monkeypatch.setattr(_s, "_is_selected_run_active", lambda _sid: False)
     return _s
 
 
@@ -89,6 +94,19 @@ def _two_turns(store: SessionStore, sid: str = "s1") -> list[str]:
         ids.append(mid)
     store.set_head(sid, ids[-1])
     return ids
+
+
+def _last_turn_edited_a_file(store: SessionStore, ids: list[str], sid: str = "s1") -> None:
+    """The last reply changed a file, so an earlier point of the conversation has other files."""
+    from pathlib import Path
+    from openprogram.state.store.snapshot.checkpoint import CheckpointStore
+
+    path = Path(store._session_dir(sid)).parent / f"{sid}-workspace.py"
+    path.write_text("before\n", encoding="utf-8")
+    journal = CheckpointStore(store._session_dir(sid))
+    journal.backup_before_edit(ids[-1], str(path))
+    path.write_text("after\n", encoding="utf-8")
+    journal.commit_after_edit(ids[-1], str(path), operation="edit")
 
 
 # ---- 1. rewind must sync the in-memory mirror -------------------------
@@ -196,22 +214,16 @@ def test_set_active_head_refreshes_messages_mirror(store, srv):
     assert got == ids[:2], "messages must follow the new head"
 
 
-def test_conversation_checkout_marks_workspace_mismatch(store, srv, monkeypatch):
+def test_conversation_checkout_shares_files_without_alignment(store, srv, monkeypatch):
     from openprogram.interfaces.server.ws_actions import branch as branch_actions
-
+    from openprogram.runtime.conversation.rewind_marks import take_rewind_note
     ids = _two_turns(store)
-    monkeypatch.setattr(srv, "_is_run_active", lambda _sid: False)
+    _last_turn_edited_a_file(store, ids)
     ws = FakeWS()
-    _run(branch_actions.handle_checkout_branch(ws, {
-        "session_id": "s1", "head_msg_id": ids[1],
-    }))
-
-    result = ws.of_type("branch_checked_out")[0]
-    alignment = store.get_session("s1")["workspace_alignment"]
-    assert result["ok"] is True
-    assert alignment["status"] == "mismatch"
-    assert alignment["source_head_id"] == ids[-1]
-    assert alignment["target_head_id"] == ids[1]
+    _run(branch_actions.handle_checkout_branch(ws, {"session_id": "s1", "head_msg_id": ids[1]}))
+    assert ws.of_type("branch_checked_out")[0]["ok"] is True
+    assert store.get_session("s1")["workspace_alignment"]["status"] == "aligned"
+    assert "files were not restored" in take_rewind_note("s1")
 
 
 def test_checkout_head_race_keeps_head_and_alignment_unchanged(
@@ -235,84 +247,14 @@ def test_checkout_head_race_keeps_head_and_alignment_unchanged(
     assert "workspace_alignment" not in store.get_session("s1")
 
 
-def test_mismatched_workspace_blocks_chat_until_explicit_adoption(
-    store, srv, monkeypatch,
-):
-    from openprogram.runtime.conversation.workspace_alignment import mark_conversation_checkout
-    from openprogram.interfaces.server.ws_actions import chat as chat_actions
-
-    ids = _two_turns(store)
-    store.set_head("s1", ids[1])
-    mark_conversation_checkout("s1", ids[-1], ids[1], store=store)
-    monkeypatch.setattr(
-        srv, "_get_or_create_session",
-        lambda sid, **_kwargs: {"id": sid},
-    )
-    ws = FakeWS()
-    _run(chat_actions.handle_chat(ws, {"session_id": "s1", "text": "edit file"}))
-
-    result = ws.of_type("chat_response")[0]
-    assert result["code"] == "workspace_alignment_required"
-    assert store.get_session("s1")["head_id"] == ids[1]
-
-    resolved = FakeWS()
+def test_legacy_keep_current_files_still_works_after_more_messages(store, srv):
     from openprogram.interfaces.server.ws_actions import branch as branch_actions
-    _run(branch_actions.handle_resolve_workspace_alignment(resolved, {
-        "session_id": "s1", "decision": "keep_current_files",
-    }))
-    assert resolved.of_type("workspace_alignment_resolved")[0]["ok"] is True
-    assert store.get_session("s1")["workspace_alignment"]["status"] == "aligned"
-
-
-def test_keep_current_files_uses_head_cas(store, srv, monkeypatch):
-    from openprogram.runtime.conversation.workspace_alignment import mark_conversation_checkout
-    from openprogram.interfaces.server.ws_actions import branch as branch_actions
-
     ids = _two_turns(store)
-    store.set_head("s1", ids[1])
-    mark_conversation_checkout("s1", ids[-1], ids[1], store=store)
-    monkeypatch.setattr(srv, "_is_run_active", lambda _sid: False)
-    monkeypatch.setattr(store, "compare_and_set_head", lambda *_args, **_kwargs: False)
+    store.update_session("s1", workspace_alignment={"status": "mismatch", "target_head_id": ids[1]})
     ws = FakeWS()
-
-    _run(branch_actions.handle_resolve_workspace_alignment(ws, {
-        "session_id": "s1", "decision": "keep_current_files",
-    }))
-
-    result = ws.of_type("workspace_alignment_resolved")[0]
-    assert result["ok"] is False
-    assert result["workspace_alignment"]["status"] == "mismatch"
-
-
-def test_stale_keep_decision_does_not_adopt_a_new_checkout(
-    store, srv, monkeypatch,
-):
-    from openprogram.runtime.conversation.workspace_alignment import mark_conversation_checkout
-    from openprogram.interfaces.server.ws_actions import branch as branch_actions
-
-    ids = _two_turns(store)
-    # Current prompt was rendered for source ids[-1] -> target ids[1].
-    stale_source, stale_target = ids[-1], ids[1]
-    store.set_head("s1", stale_target)
-    mark_conversation_checkout("s1", stale_source, stale_target, store=store)
-    # Before it arrives, conversation moves again to ids[0].
-    store.set_head("s1", ids[0])
-    mark_conversation_checkout("s1", stale_target, ids[0], store=store)
-    monkeypatch.setattr(srv, "_is_run_active", lambda _sid: False)
-    ws = FakeWS()
-
-    _run(branch_actions.handle_resolve_workspace_alignment(ws, {
-        "session_id": "s1",
-        "decision": "keep_current_files",
-        "source_head_id": stale_source,
-        "target_head_id": stale_target,
-    }))
-
-    result = ws.of_type("workspace_alignment_resolved")[0]
-    assert result["ok"] is False
-    assert result["error"] == "stale_workspace_alignment"
-    assert result["workspace_alignment"]["target_head_id"] == ids[0]
-    assert store.get_session("s1")["workspace_alignment"]["status"] == "mismatch"
+    _run(branch_actions.handle_resolve_workspace_alignment(ws, {"session_id": "s1", "decision": "keep_current_files"}))
+    assert ws.of_type("workspace_alignment_resolved")[0]["ok"] is True
+    assert store.get_session("s1")["head_id"] == ids[-1]
 
 
 # ---- 2. attach / delete must refresh cache + mirror --------------------
@@ -381,6 +323,9 @@ def test_delete_branch_drops_deleted_rows_from_mirror(store, srv):
     from openprogram.interfaces.server.ws_actions import branch as branch_actions
 
     ids = _two_turns(store)
+    # An edit of the second question forks at the first reply, so the
+    # second turn is a branch of its own.
+    _edit_second_question(store)
     srv._sessions["s1"] = {
         "id": "s1", "head_id": ids[-1], "messages": [{"id": i} for i in ids],
     }
@@ -389,15 +334,20 @@ def test_delete_branch_drops_deleted_rows_from_mirror(store, srv):
         ws, {"session_id": "s1", "head_msg_id": ids[2]}))
     res = ws.of_type("branch_deleted")[0]
     assert res["ok"], res.get("error")
+    assert res["new_head"] == "m2b"
     mirror_ids = {m.get("id") for m in srv._sessions["s1"]["messages"]}
     assert ids[2] not in mirror_ids and ids[3] not in mirror_ids
+
+
+def _edit_second_question(store: SessionStore, sid: str = "s1") -> None:
+    store.append_message(sid, {"id": "m2b", "role": "user", "content": "edited",
+                               "predecessor": "m1", "agent_id": "main"})
 
 
 # ---- 3. run-active protection on every branch mutation -----------------
 
 @pytest.mark.parametrize("action,cmd,frame,errkey", [
-    ("checkout_branch", {"head_msg_id": "m1"}, "branch_checked_out", "error"),
-    ("delete_branch", {"head_msg_id": "m1"}, "branch_deleted", "error"),
+    ("delete_branch", {"head_msg_id": "m3"}, "branch_deleted", "error"),
     ("attach_branch", {"target_head_msg_id": "m1"},
      "attach_branch_result", "error"),
 ])
@@ -407,12 +357,15 @@ def test_branch_actions_refuse_while_run_active(
     from openprogram.interfaces.server.ws_actions import branch as branch_actions
 
     _two_turns(store)
+    _edit_second_question(store)
     monkeypatch.setattr(srv, "_is_run_active", lambda sid: True)
+    monkeypatch.setattr(srv, "_is_selected_run_active", lambda sid: True)
     ws = FakeWS()
     _run(branch_actions.ACTIONS[action](ws, {"session_id": "s1", **cmd}))
     data = ws.of_type(frame)[0]
     assert data.get(errkey), f"{action} must report an error while running"
-    assert "run is currently active" in data[errkey]
+    # The refusal names what runs: a reply on the selected branch.
+    assert data.get("code") == "run_active"
 
 
 def test_merge_refuses_while_run_active(store, srv, monkeypatch):
@@ -443,16 +396,18 @@ def test_merge_refuses_when_a_peer_is_running(store, srv, monkeypatch):
     assert data["failed"] and data.get("code") == "run_active"
 
 
-def test_checkout_refuses_while_run_active_with_a_code(store, srv, monkeypatch):
+def test_checkout_goes_ahead_while_a_run_is_active(store, srv, monkeypatch):
+    """Switching is a view change; a running turn never refuses it."""
     from openprogram.interfaces.server.ws_actions import branch as branch_actions
 
     ids = _two_turns(store)
     monkeypatch.setattr(srv, "_is_run_active", lambda sid: True)
+    monkeypatch.setattr(srv, "_is_selected_run_active", lambda sid: True)
     ws = FakeWS()
     _run(branch_actions.handle_checkout_branch(ws, {"session_id": "s1", "head_msg_id": ids[1]}))
     data = ws.of_type("branch_checked_out")[0]
-    assert not data["ok"] and data["code"] == "run_active"
-    assert store.get_session("s1")["head_id"] == ids[-1]
+    assert data["ok"] and data.get("active_branch_id")
+    assert store.get_session("s1")["head_id"] == ids[1]
 
 
 def test_rewind_refuses_while_run_active(store, srv, monkeypatch):
@@ -461,7 +416,8 @@ def test_rewind_refuses_while_run_active(store, srv, monkeypatch):
     ids = _two_turns(store)
     monkeypatch.setattr(srv, "_is_run_active", lambda sid: True)
     ws = FakeWS()
-    monkeypatch.setattr(srv, "_try_reserve_run", lambda *args, **kwargs: False)
+    monkeypatch.setattr(srv, "reserve_operation", lambda *args, **kwargs: {
+        "code": "run_active", "kind": "reply", "error": srv.RUN_ACTIVE_ERROR})
     _run(chat_actions.handle_rewind(
         ws, {"session_id": "s1", "target_msg_id": ids[2], "phase": "apply"}))
     data = ws.of_type("rewind_result")[0]
@@ -487,8 +443,6 @@ def test_branch_actions_still_work_when_no_run_active(store, srv, monkeypatch):
 
 @pytest.mark.parametrize("evt_type", [
     "compaction_started", "compaction_failed", "compaction_finished",
-    "reactive_compact_started", "reactive_compact_done",
-    "reactive_compact_failed",
     "some_future_event_nobody_whitelisted",
 ])
 def test_chat_event_chain_forwards_every_envelope(monkeypatch, evt_type):
@@ -499,7 +453,8 @@ def test_chat_event_chain_forwards_every_envelope(monkeypatch, evt_type):
     from openprogram.interfaces.server.ws_actions.chat.turn import _agent_event_sink
 
     forwarded: list[dict] = []
-    server = types.SimpleNamespace(_broadcast_envelope=forwarded.append)
+    server = types.SimpleNamespace(_broadcast_envelope=forwarded.append,
+                                   _slot_location=lambda *_args: None)
     sink = _agent_event_sink(server, "s1", "m1", {})
     envelope = {"type": "chat_response", "data": {"type": evt_type}}
     sink(envelope)
@@ -678,9 +633,13 @@ def test_delete_nodes_refuses_while_run_active(store, srv, monkeypatch):
     from openprogram.interfaces.server.ws_actions import dag_nodes
 
     ids = _two_turns(store)
+    # The delete touches the selected branch, where a turn runs: only the
+    # branches it touches are held, and the refusal names the busy one.
     monkeypatch.setattr(srv, "_is_run_active", lambda sid: True)
+    monkeypatch.setattr(srv, "_is_selected_run_active", lambda sid: True)
     ws = FakeWS()
     _run(dag_nodes.handle_delete_nodes(ws, {"session_id": "s1", "node_ids": [ids[1]]}))
     data = ws.of_type("nodes_deleted")[0]
-    assert not data["ok"] and "run is currently active" in data["error"]
+    assert not data["ok"] and "is running" in data["error"]
+    assert data["blocking"]["selected"] is True
     assert store.message_exists("s1", ids[1])

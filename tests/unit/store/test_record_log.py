@@ -88,3 +88,42 @@ def test_old_superseded_browser_pages_are_forgotten():
 
     for table in ("browser_resources", "browser_resource_control", "browser_resource_presentation"):
         assert sorted(row[0] for row in db.execute(f"SELECT resource_id FROM {table}")) == ["open", "recent"]
+
+
+def test_the_file_holds_exactly_the_bytes_counted(tmp_path):
+    """LF line ends on every system: a text-mode descriptor on Windows would
+    write CRLF and leave the counted offset short of the file."""
+    path = tmp_path / "records.jsonl"
+    log = RecordLog(path)
+    _put(log, "a", "中文")
+    _put(log, "b", 2)
+
+    raw = path.read_bytes()
+    assert b"\r" not in raw
+    assert raw.count(b"\n") == 2
+    assert log._offset == len(raw)
+
+
+def test_descriptors_are_opened_binary(tmp_path, monkeypatch):
+    """The flag Windows needs, seen through a stand-in for ``os.O_BINARY``;
+    not run on Windows."""
+    import os
+
+    binary = 1 << 30
+    seen: list[int] = []
+    real_open = os.open
+
+    def recording_open(path, flags, *args, **kwargs):
+        if str(path).startswith(str(tmp_path / "records.jsonl")):
+            seen.append(flags)
+        return real_open(path, flags & ~binary, *args, **kwargs)
+
+    monkeypatch.setattr(module, "O_BINARY", binary)
+    monkeypatch.setattr(os, "open", recording_open)
+    monkeypatch.setattr(module, "_DEAD_LINE_ALLOWANCE", 0)
+    log = RecordLog(tmp_path / "records.jsonl")
+    for value in range(4):  # the repeated key forces a rewrite as well
+        _put(log, "a", value)
+
+    assert len(seen) >= 5
+    assert all(flags & binary for flags in seen)

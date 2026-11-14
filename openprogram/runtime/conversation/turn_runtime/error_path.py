@@ -72,22 +72,23 @@ def handle_turn_error(
     # render a retryable rate-limit differently from a fatal auth/context
     # failure. See docs/design/providers/reliability/error-taxonomy-propagation.md.
     try:
-        from openprogram.state.memory.policy import MemoryPolicyError
-        from openprogram.models.providers.utils.errors import taxonomy_fields
-        if isinstance(e, MemoryPolicyError):
-            _e_reason, _e_retryable, _e_retry_after = "MEMORY_UNAVAILABLE", False, None
-        else:
-            _e_reason, _e_retryable, _e_retry_after = taxonomy_fields(e)
+        from openprogram.models.providers.utils.errors import error_kind, failure_cause, taxonomy_fields
+        # The reason is always an ``ErrorReason`` value; what failed beyond
+        # it (``memory_unavailable``, ``stream_idle``) is the kind; which
+        # limit or refusal it was (a spent quota and its reset) is the cause.
+        _e_reason, _e_retryable, _e_retry_after = taxonomy_fields(e)
+        _e_kind = error_kind(e)
+        _e_cause = failure_cause(e)
     except Exception:
         _log.debug("error taxonomy classification failed", exc_info=True)
-        _e_reason = _e_retryable = _e_retry_after = None
+        _e_reason = _e_retryable = _e_retry_after = _e_kind = _e_cause = None
     head_for_next: Optional[str] = None
     err_text: Optional[str] = None
     if placeholder_inserted:
         err_text = _fold_error_into_placeholder(
             req.session_id, assistant_msg_id, e,
             error_metadata={"error_reason": _e_reason, "error_retryable": _e_retryable,
-                            "error_retry_after_s": _e_retry_after},
+                            "error_retry_after_s": _e_retry_after, "error_cause": _e_cause},
         )
         if err_text is not None:
             head_for_next = assistant_msg_id
@@ -122,12 +123,14 @@ def handle_turn_error(
         {"code": structured_error.code, "issues": structured_error.issues}
         if structured_error is not None else {}
     )
+    from openprogram.runtime.conversation.run_control import run_slot
+    run_slot.finishing(req.session_id, user_msg_id)
     on_event({"type": "chat_response",
               "data": {"type": "error", "session_id": req.session_id,
                        "msg_id": user_msg_id,
                        "content": err_text, "error_detail": err_text, "reason": _e_reason,
                        "retryable": _e_retryable,
-                       "retry_after_s": _e_retry_after,
+                       "retry_after_s": _e_retry_after, "kind": _e_kind, "cause": _e_cause,
                        **structured_fields}})
     return TurnResult(
         final_text="",
@@ -139,6 +142,8 @@ def handle_turn_error(
         error_reason=_e_reason,
         error_retryable=_e_retryable,
         error_retry_after_s=_e_retry_after,
+        error_kind=_e_kind,
+        error_cause=_e_cause,
         duration_ms=int((time.time() - started_at) * 1000),
         structured_error_code=(structured_error.code if structured_error else None),
         structured_output_attempts=structured_attempts,

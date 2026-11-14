@@ -298,6 +298,18 @@ def execute(patch: str, **_: Any) -> str:
         from . import _remote
         return _remote.apply_patch(_remote_fs, sections)
 
+    # Relative paths resolve against the bound worktree, as for write and
+    # edit; with none bound they stay relative and are refused below.
+    from openprogram.state.worktree.path_resolve import resolve_path
+    outside: list[str] = []
+    resolved_sections = []
+    for _op, _path, _body in sections:
+        _abs, _warn = resolve_path(_path) if _path else (_path, None)
+        if _warn:
+            outside.append(_warn)
+        resolved_sections.append((_op, _abs, _body))
+    sections = resolved_sections
+
     # Validate the complete patch before changing its first file; a later
     # denied path must not leave an earlier section partially applied.
     from openprogram.host.sandbox import validate_write_path
@@ -387,7 +399,7 @@ def execute(patch: str, **_: Any) -> str:
             results.append(_apply_update(path, body))
         else:
             results.append(_apply_delete(path))
-    return "\n".join(results)
+    return "\n".join(outside + results)
 
 
 # Register as an AgentTool. ``execute`` stays a plain callable so any

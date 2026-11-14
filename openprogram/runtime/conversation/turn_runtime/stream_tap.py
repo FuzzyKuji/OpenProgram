@@ -13,6 +13,8 @@ import time
 from typing import TYPE_CHECKING, Callable
 from dataclasses import dataclass
 
+from openprogram.runtime.conversation.event_parsing import STORED_DETAILS_KEY, STORED_MEDIA_KEY, STORED_RESULT_KEY
+
 if TYPE_CHECKING:
     from openprogram.runtime.conversation.turn_runtime.types import EventCallback
     from openprogram.runtime.agent.turn_request import TurnRequest
@@ -74,11 +76,11 @@ class StreamTap:
 def final_blocks(tap: StreamTap, ordered: list[dict], cancel_event) -> list[dict]:
     """The blocks a reply's terminal write keeps.
 
-    A Stop keeps the partial text the tap received. Otherwise the loop's
-    ordered blocks win, and the tap's trace stands in when it has none.
+    The loop's ordered blocks win: on a Stop they hold every response that
+    ended, signed as it was, and the cut one's text marked ``partial``
+    (``loop_runner._keep_stopped_response``). The tap's trace stands in
+    when they hold nothing.
     """
-    if cancel_event is not None and cancel_event.is_set():
-        return tap.blocks
     return ordered or tap.blocks
 
 
@@ -127,6 +129,27 @@ def make_stream_tap(
 
     from openprogram.state.memory.policy import stamp as _memory_stamp
 
+    def _tail() -> tuple[int, int]:
+        """Where the blocks end now: their count and the open text block's length."""
+        last = blocks[-1] if blocks else None
+        open_text = last is not None and last.get("type") in ("text", "thinking")
+        return len(blocks), len(last["text"]) if open_text else 0
+
+    # Where the provider response now streaming began. A response that is
+    # sent again (a ``retry`` frame with ``restart``) is cut back to here.
+    response_start = _tail()
+
+    def _drop_restarted_response() -> bool:
+        count, length = response_start
+        changed = len(blocks) > count
+        del blocks[count:]
+        if count and blocks[count - 1].get("type") in ("text", "thinking"):
+            text = blocks[count - 1]["text"]
+            if len(text) > length:
+                blocks[count - 1]["text"] = text[:length]
+                changed = True
+        return changed
+
     def flush(*, quiet: bool = False) -> None:
         nonlocal dirty
         if not dirty or not placeholder_inserted:
@@ -166,10 +189,15 @@ def make_stream_tap(
         # A frame sent before a read is reflected in that read, so the row
         # is written first. A failed write still emits; the offset shows it.
         _persist(env)
+        if isinstance(payload, dict) and isinstance(payload.get("event"), dict):
+            # The whole result is for the tool node; clients get the preview.
+            payload["event"].pop(STORED_RESULT_KEY, None)
+            payload["event"].pop(STORED_DETAILS_KEY, None)
+            payload["event"].pop(STORED_MEDIA_KEY, None)
         on_event(env)
 
     def _persist(env: dict) -> None:
-        nonlocal dirty
+        nonlocal dirty, response_start
         if not placeholder_inserted:
             return
         try:
@@ -182,6 +210,7 @@ def make_stream_tap(
                 if not any(b.get("type") == "steering" and b.get("message_id") == payload.get("msg_id") for b in blocks):
                     blocks.append({"type":"steering", "message_id":payload["msg_id"],
                                    "text":payload.get("content", ""), "timestamp":payload.get("timestamp")})
+                    response_start = _tail()
                     dirty = True
                     flush()
                 return
@@ -189,6 +218,17 @@ def make_stream_tap(
                 return
             evt = payload.get("event") or {}
             etype = evt.get("type")
+            if etype == "retry":
+                if evt.get("restart"):
+                    # The request goes out again: the failed response's text
+                    # and reasoning leave the row before the new ones arrive.
+                    if _drop_restarted_response():
+                        dirty = True
+                        flush()
+                elif evt.get("reason") not in ("transport", "network_wait"):
+                    # A continuation: the response ended, the next one adds to it.
+                    response_start = _tail()
+                return
             if etype in {"thinking", "text", "tool_use", "tool_result"}:
                 if etype in {"thinking", "text"}:
                     delta = evt.get("text") or ""
@@ -223,6 +263,8 @@ def make_stream_tap(
                             block.update(result=evt.get("result"),
                                          is_error=bool(evt.get("is_error")),
                                          outcome=evt.get("outcome"))
+                            if evt.get("full_output"):
+                                block["full_output"] = evt["full_output"]
                             if evt.get("provider_executed"):
                                 # The query of a provider search is often
                                 # known only when it ends.
@@ -241,6 +283,9 @@ def make_stream_tap(
                                 "is_error": bool(evt.get("is_error")),
                                 "outcome": evt.get("outcome"),
                             })
+                if etype in {"tool_use", "tool_result"} and not evt.get("provider_executed"):
+                    # Local tools run after a response ended; the next one starts here.
+                    response_start = _tail()
                 dirty = True
                 flush(quiet=etype in {"thinking", "text"})
             if etype == "text_end" and evt.get("citations"):
@@ -294,13 +339,19 @@ def make_stream_tap(
                     role=ROLE_CODE,
                     name=_tool_name,
                     input=meta.get("input") or {},
-                    output=str(evt.get("result") or ""),
+                    # What the model read, so every later request sends
+                    # the same bytes; the frame's ``result`` is a preview.
+                    output=str(evt.get(STORED_RESULT_KEY, evt.get("result")) or ""),
                     caller=assistant_msg_id,
                     metadata={
                         **_memory_stamp(req),
                         "tool_call_id": tid,
                         "is_error": bool(evt.get("is_error")),
                         "outcome": evt.get("outcome"),
+                        **({"details": evt[STORED_DETAILS_KEY]}
+                           if evt.get(STORED_DETAILS_KEY) else {}),
+                        **({"media": evt[STORED_MEDIA_KEY]}
+                           if evt.get(STORED_MEDIA_KEY) else {}),
                     },
                 )
                 SessionNodeWriter(

@@ -12,7 +12,8 @@ shape transforms over what the agent loop emits.
   * ``extract_usage`` — normalize the dozen variations of usage
     dict/object providers return into a single 4-key shape.
   * ``shorten`` / ``stringify_tool_result`` — render tool output
-    payloads for the chat bubble.
+    payloads for the chat bubble; ``stored_tool_result`` is the whole
+    text a tool node keeps.
 """
 from __future__ import annotations
 
@@ -99,17 +100,32 @@ def agent_event_to_envelope(ev, req: "TurnRequest") -> Optional[dict]:
         }
 
     if t == "tool_execution_end":
+        stored = stored_tool_result(getattr(ev, "result", ""))
+        raw_details = getattr(getattr(ev, "result", None), "details", None)
+        shown, truncated = card_text(stored, raw_details)
+        event = {"type": "tool_result",
+                 "tool": getattr(ev, "tool_name", "?"),
+                 "result": shown,
+                 "is_error": bool(getattr(ev, "is_error", False)),
+                 "outcome": getattr(ev, "outcome", None),
+                 "tool_call_id": getattr(ev, "tool_call_id", None)}
+        if truncated:
+            event["full_output"] = truncated
+        if event["result"] != stored:
+            event[STORED_RESULT_KEY] = stored
+        media = _stored_media(req, getattr(getattr(ev, "result", None), "content", None))
+        if media:
+            event[STORED_MEDIA_KEY] = media
+        from openprogram.models.providers.shared.tool_loads import durable_details
+        details = durable_details(raw_details)
+        if details:
+            event[STORED_DETAILS_KEY] = details
         return {
             "type": "chat_response",
             "data": {"type": "stream_event",
                      "session_id": cid,
                      "msg_id": req.user_msg_id,
-                     "event": {"type": "tool_result",
-                               "tool": getattr(ev, "tool_name", "?"),
-                               "result": shorten(getattr(ev, "result", "")),
-                               "is_error": bool(getattr(ev, "is_error", False)),
-                               "outcome": getattr(ev, "outcome", None),
-                               "tool_call_id": getattr(ev, "tool_call_id", None)}},
+                     "event": event},
         }
 
     return None
@@ -246,11 +262,80 @@ def extract_usage(msg) -> dict:
 
 
 
+def card_text(stored: str, details) -> tuple[str, dict | None]:
+    """What a tool card shows for a result, and its truncation line.
+
+    A result the agent loop bounded (``tool_dispatch._as_stored``) shows
+    the head of the tool's own output, not the head, tail and note written
+    for the model; the second value then says how long the whole output is,
+    and "view full output" reads the saved file (the card's
+    ``full_output``). Any other result shows its stored text, cut to a
+    preview."""
+    output = details.get("output") if isinstance(details, dict) else None
+    preview = details.get("preview") if isinstance(details, dict) else None
+    if isinstance(output, dict) and isinstance(preview, str):
+        return preview, {"total_lines": output.get("total_lines"),
+                         "total_chars": output.get("total_chars"),
+                         "shown_chars": len(preview)}
+    return shorten(stored), None
+
+
 def shorten(value, limit: int = 4000) -> str:
     s = stringify_tool_result(value)
     if len(s) <= limit:
         return s
     return s[:limit] + f"... (+{len(s) - limit} more)"
+
+
+# The frame key carrying a tool result's whole text when the frame's
+# ``result`` is a preview. The stream tap stores it on the tool node and
+# removes it before the frame goes on to any client.
+STORED_RESULT_KEY = "stored_result"
+
+# The frame key carrying a tool result's durable details (its load record,
+# ``shared.tool_loads``). The stream tap stores them in the tool node's
+# metadata and removes them before the frame goes on to any client.
+STORED_DETAILS_KEY = "stored_details"
+
+
+# The frame key carrying where a tool result's images (and other media) are
+# kept (``store.session.media``). The stream tap stores it in the tool
+# node's metadata and removes it before the frame goes on to any client.
+STORED_MEDIA_KEY = "stored_media"
+
+
+def _stored_media(req, content) -> list:
+    """Keep a tool result's media in its conversation's folder and return
+    their records, so later requests send them where the turn did."""
+    if not content or not any(getattr(block, "data", None) for block in content):
+        return []
+    try:
+        from openprogram.runtime.context.session_db import default_db
+        from openprogram.state.store.session.media import records_for_blocks
+
+        session_dir = default_db()._session_dir(req.session_id)  # noqa: SLF001
+        return records_for_blocks(session_dir, content)
+    except Exception:  # noqa: BLE001 - the turn goes on without the copy
+        import logging
+        logging.getLogger(__name__).warning(
+            "tool result media not kept for session %s", getattr(req, "session_id", None), exc_info=True)
+        return []
+
+
+def stored_tool_result(value) -> str:
+    """The text a tool node keeps: the result exactly as the model read it.
+
+    Every later request renders history from this text, so it is never a
+    preview: a cut result would hide the rest from the model and change the
+    request bytes after the turn that ran the tool, which the provider then
+    reads again uncached. Size is bounded once, where the result is made:
+    the agent loop's bound to ``spill.result_cap()``
+    (``tool_dispatch._as_stored``), the model's ``tool_output_weight`` or
+    less (a smaller cap the tool declared, a small window). The bound also
+    makes the turn send this same single text. An old result is never
+    shortened; only compaction replaces it.
+    """
+    return stringify_tool_result(value)
 
 
 def stringify_tool_result(value) -> str:

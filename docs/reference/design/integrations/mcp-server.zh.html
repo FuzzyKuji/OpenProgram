@@ -12,7 +12,6 @@
 <tr><th scope="row"><code translate="no">prompt_cancel</code></th><td>取消本连接发起的进行中提示</td><td><code translate="no">reply</code></td><td>无</td></tr>
 <tr><th scope="row"><code translate="no">tools_list</code></th><td>列出对此客户端暴露的 Runtime 工具及 schema</td><td><code translate="no">reply</code></td><td>无</td></tr>
 <tr><th scope="row"><code translate="no">tool_call</code></th><td>按名调用一个已暴露的 Runtime 工具</td><td>取决于工具</td><td>经过下面三道关卡</td></tr>
-<tr><th scope="row"><code translate="no">web_use</code></th><td>观察或控制已授权的浏览器 Page。只在浏览器应用提供服务时列出</td><td><code translate="no">browser.control</code>，层级 <code translate="no">mcp_browser</code></td><td>只限确切 Page，见 <a href="web-use.zh.html">Web Use</a></td></tr>
 </tbody>
 </table>
 <p class="note">不提供：工具注册、改写配置、读取凭据、直接的文件工具。读文件走 <code translate="no">tool_call</code>。同类：codex 两个工具，openclaw 九个，hermes 十个；暴露全部工具的做法被排除。</p>
@@ -61,7 +60,7 @@
 <tbody>
 <tr><th scope="row">已认证的本地 Web、CLI、TUI</th><td><code translate="no">principal_id=owner</code>，交互式</td><td><code translate="no">owner</code>，持有 <code translate="no">approval.request</code></td><td>入口必须显式构造；认证无效则拒绝</td></tr>
 <tr><th scope="row">已配对的频道账号</th><td>实例所有者；发言人单独存储</td><td><code translate="no">paired</code></td><td>无层级的消息被拒绝，不降级</td></tr>
-<tr><th scope="row">外部 MCP 客户端</th><td>实例所有者；客户端 id 单独存储，<code translate="no">speaker_kind=client</code>，非交互</td><td><code translate="no">paired</code> ∩ 白名单；<code translate="no">web_use</code> 用 <code translate="no">mcp_browser</code></td><td>拒绝连接</td></tr>
+<tr><th scope="row">外部 MCP 客户端</th><td>实例所有者；客户端 id 单独存储，<code translate="no">speaker_kind=client</code>，非交互</td><td><code translate="no">paired</code> ∩ 白名单</td><td>拒绝连接</td></tr>
 <tr><th scope="row">continuation、子智能体</th><td>显式继承 owner</td><td>调用方层级，绝不提升</td><td>状态错误：拒绝</td></tr>
 <tr><th scope="row">Cron 触发</th><td>创建时由所有者批准</td><td>批准时固定的任务能力</td><td>触发时不按交互式重算</td></tr>
 </tbody>

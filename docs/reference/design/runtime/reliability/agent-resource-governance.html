@@ -50,7 +50,7 @@
 <table class="stack">
 <thead><tr><th scope="col">Limit</th><th scope="col">Exists</th><th scope="col">Reason</th></tr></thead>
 <tbody>
-<tr><th scope="row"><code translate="no">max_live_global</code></th><td>No</td><td><code translate="no">OPENPROGRAM_JOB_WORKERS</code> (default 4) already sets the process-wide <code translate="no">ThreadPoolExecutor</code>. A second setting could conflict. The UI shows it read-only.</td></tr>
+<tr><th scope="row"><code translate="no">max_live_global</code></th><td>No</td><td><code translate="no">OPENPROGRAM_JOB_WORKERS</code> (default 8) already sets the process-wide <code translate="no">ThreadPoolExecutor</code>. A second setting could conflict. The UI shows it read-only.</td></tr>
 <tr><th scope="row"><code translate="no">max_live_per_session</code></th><td>Yes</td><td>One session cannot take every worker. Counts only work running or not yet confirmed stopped.</td></tr>
 <tr><th scope="row"><code translate="no">max_queued_per_session</code></th><td>Yes</td><td>Bounds the persistent queue.</td></tr>
 <tr><th scope="row"><code translate="no">max_jobs_per_session</code></th><td>Yes</td><td>Bounds successful admissions over the session's life.</td></tr>
@@ -64,8 +64,8 @@
 <table class="stack">
 <thead><tr><th scope="col">Limit</th><th scope="col">Counts</th><th scope="col">At the limit</th></tr></thead>
 <tbody>
-<tr><th scope="row"><code translate="no">agent.max_spawn_depth</code></th><td>Generations in the execution context. Only <code translate="no">agent(...)</code> creating a branch adds one.</td><td>Refuses the new branch (<code translate="no">quota.spawn_depth</code>). Existing branches still take work.</td></tr>
-<tr><th scope="row"><code translate="no">agent.max_messages</code></th><td>Per path: spawn, <code translate="no">agent(to=...)</code> and <code translate="no">send_message</code> set the target to sender plus one. Automatic follow-up reuses the completed Job's count. Parallel calls in one turn share no counter.</td><td>Refuses new deliveries and hides <code translate="no">agent</code>. Cancels nothing.</td></tr>
+<tr><th scope="row"><code translate="no">agent.max_spawn_depth</code></th><td>Generations in the execution context, default 1. Only <code translate="no">agent(...)</code> creating a branch adds one.</td><td>Refuses the new branch (<code translate="no">quota.spawn_depth</code>). Existing branches still take work.</td></tr>
+<tr><th scope="row"><code translate="no">agent.max_messages</code></th><td>Per path: spawn and <code translate="no">send_message</code> set the target to sender plus one. Automatic follow-up reuses the completed Job's count. Parallel calls in one turn share no counter.</td><td>Refuses new deliveries and hides <code translate="no">agent</code>. Cancels nothing.</td></tr>
 <tr><th scope="row"><code translate="no">agent.max_spawn_fanout</code></th><td>New branches (<code translate="no">creates_agent=true</code>) per caller <code translate="no">(session_id, turn_id)</code>.</td><td>Refuses more branches this turn (<code translate="no">quota.spawn_fanout</code>). Child completion returns nothing.</td></tr>
 <tr><th scope="row"><code translate="no">max_jobs_per_session</code></th><td>Successful admissions for the target session (<code translate="no">parent_session_id</code>), on new or existing branches. Caller provenance is recorded separately.</td><td><code translate="no">quota.jobs_exhausted</code>, not retryable.</td></tr>
 <tr><th scope="row"><code translate="no">max_queued_per_session</code></th><td>Target-session admissions in <code translate="no">preparing</code> or <code translate="no">queued</code>.</td><td><code translate="no">quota.queue_full</code>, retryable. No Job is created.</td></tr>
@@ -81,11 +81,11 @@
 </tbody>
 </table>
 <ul>
-<li>A Job's <code translate="no">id</code> is its canonical <code translate="no">execution_id</code>; <code translate="no">job_output(job_id=...)</code> takes that identity.</li>
-<li><code translate="no">agent(to=...)</code> creates no branch but a new execution: message limit plus target-session admission.</li>
+<li>A Job's <code translate="no">id</code> is its canonical <code translate="no">execution_id</code>; <code translate="no">read_conversation(execution_id)</code> and <code translate="no">close_agent</code> take that identity.</li>
+<li><code translate="no">send_message</code> creates no branch but a new execution: message and hop limits plus target-session admission.</li>
 <li><code translate="no">send_message</code> to an idle target creates a <code translate="no">creates_agent=false</code> Job through <code translate="no">run_agent_turn_async</code> and consumes target-session admission.</li>
-<li>The message limit binds new deliveries only. <code translate="no">job_output</code>, <code translate="no">list_jobs</code> and cancellation of owned executions stay available.</li>
-<li>Registered tools are <code translate="no">agent</code>, <code translate="no">list_jobs</code>, <code translate="no">job_output</code>. There is no <code translate="no">job_stop</code>; cancellation goes through execution control and the internal <code translate="no">JobRunner.cancel_execution</code>.</li>
+<li>The message limit binds new deliveries only. <code translate="no">read_conversation</code>, <code translate="no">list_agents</code> and <code translate="no">close_agent</code> on owned executions stay available.</li>
+<li>The model sees <code translate="no">agent</code>, <code translate="no">send_message</code>, <code translate="no">list_agents</code>, <code translate="no">read_conversation</code> and <code translate="no">close_agent</code>; <code translate="no">list_jobs</code> and <code translate="no">job_output</code> stay registered for programs but hidden. <code translate="no">close_agent</code> cancels through <code translate="no">JobRunner._cancel_cascade</code>; the UI and API go through execution control.</li>
 </ul>
 <p class="note">Operation and message counts: <a href="../collaboration/agent-collaboration.html">Agent collaboration design §5</a>.</p>
 
@@ -113,7 +113,7 @@
 </table>
 
 <h2 id="admission">Admission</h2>
-<p>Every Job creation calls <code translate="no">ResourceGovernor.admit_job</code>: synchronous and asynchronous <code translate="no">agent()</code>, <code translate="no">agent(to=...)</code> busy-target precreation, <code translate="no">run_agent_turn_async</code>, WebSocket and API spawn, model tools, and any direct <code translate="no">JobRunner.spawn_job</code>. The model tool also keeps a process-local fan-out precheck.</p>
+<p>Every Job creation calls <code translate="no">ResourceGovernor.admit_job</code>: synchronous and asynchronous <code translate="no">agent()</code>, <code translate="no">send_message</code> busy-target precreation, <code translate="no">run_agent_turn_async</code>, WebSocket and API spawn, model tools, and any direct <code translate="no">JobRunner.spawn_job</code>. The model tool also keeps a process-local fan-out precheck.</p>
 <ol>
 <li>Create <code translate="no">job_id</code>, <code translate="no">admission_id</code> and request fingerprint. Validate arguments, target and permissions without changes.</li>
 <li>In a run-table transaction, check depth, fan-out, queue and cumulative count, then write the budget scope and a <code translate="no">preparing</code> admission. Every concurrent check sees it.</li>
@@ -212,7 +212,7 @@
 <tr><th scope="row">Web</th><td>Job and resource state, queue position, session live, queued and cumulative, four remaining budgets, known or unknown cost, reason.</td><td>Existing Job cards and cancel. No background-session UI or standalone Tasks panel.</td><td><code translate="no">job_status</code> gains optional resource fields.</td></tr>
 <tr><th scope="row">TUI</th><td>Compact session capacity, selected Job's remaining budgets, stop reason.</td><td>Existing list, details, stop.</td><td>Missing fields render as legacy, not zero.</td></tr>
 <tr><th scope="row">CLI</th><td>Tables and stable JSON: effective limits, usage, reservations, reason, retryable.</td><td>Existing query and cancel commands.</td><td>New fields are additive; the status enum is unchanged.</td></tr>
-<tr><th scope="row">Model tools</th><td><code translate="no">list_jobs</code>, <code translate="no">job_output</code> and execution control return the same reason and simplified budgets.</td><td>A refusal is a structured tool result, with no invented Job record.</td><td>Text results stay; machine-readable fields are added.</td></tr>
+<tr><th scope="row">Model tools</th><td><code translate="no">read_conversation</code>, <code translate="no">close_agent</code> and execution control return the same reason and simplified budgets.</td><td>A refusal is a structured tool result, with no invented Job record.</td><td>Text results stay; machine-readable fields are added.</td></tr>
 </tbody>
 </table>
 

@@ -57,14 +57,8 @@ def glob_tool(pattern: str, path: str | None = None) -> str:
     if _remote_fs is not None:
         from . import _remote
         return _remote.glob(_remote_fs, pattern, path)
-    if path:
-        root = path
-    else:
-        try:
-            from openprogram.state.paths import get_default_workdir
-            root = get_default_workdir()
-        except Exception:
-            root = os.getcwd()
+    from openprogram.state.worktree.path_resolve import resolve_root
+    root, outside_warning = resolve_root(path)
     if not os.path.isabs(root):
         return f"Error: path must be absolute, got {root!r}"
     if not os.path.isdir(root):
@@ -115,8 +109,9 @@ def glob_tool(pattern: str, path: str | None = None) -> str:
         matches = [m for m in matches if not denied(m)]
     matches.sort(key=lambda p: os.path.getmtime(p), reverse=True)
 
+    lead = f"{outside_warning}\n" if outside_warning else ""
     if not matches:
-        return f"No matches for {pattern!r} under {root}"
+        return f"{lead}No matches for {pattern!r} under {root}"
     if len(matches) > 500:
-        return f"# {len(matches)} matches (showing 500 newest)\n" + "\n".join(matches[:500])
-    return f"# {len(matches)} matches\n" + "\n".join(matches)
+        return f"{lead}# {len(matches)} matches (showing 500 newest)\n" + "\n".join(matches[:500])
+    return f"{lead}# {len(matches)} matches\n" + "\n".join(matches)

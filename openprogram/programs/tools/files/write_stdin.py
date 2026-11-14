@@ -23,7 +23,7 @@ def _approval(chars: str = "", **_):
     return "write_stdin types into a running command"
 
 
-@function(name="write_stdin", description=DESCRIPTION, max_result_chars=30_000, persist_full=True,
+@function(name="write_stdin", description=DESCRIPTION, max_result_weight=7_500,
           toolset=["core"], unsafe_in=["plan"],
           requires_approval=_approval, path_params={}, url_params=[])
 def write_stdin(session_id: str, chars: str = "", yield_time_ms: int | None = None):

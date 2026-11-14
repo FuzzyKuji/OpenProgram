@@ -100,42 +100,6 @@ def _job_execution_view(job: Any) -> _ExecutionView:
     )
 
 
-def _persist_job_cancel_intent(
-    session_id: str,
-    job_id: str,
-    *,
-    reason_code: str,
-    requested_at: float,
-    terminal: bool,
-) -> bool:
-    """Stamp job cancel intent without signaling owners."""
-    jobs = hooks.job_records()
-    job = jobs.load(session_id, job_id) or _find_job(job_id)
-    if job is None:
-        return False
-    existing = getattr(job, "reason_code", None)
-    if (
-        existing
-        and str(existing).startswith("budget.")
-        and reason_code == "cancel.user"
-    ):
-        reason_code = existing
-    session_id = getattr(job, "parent_session_id", None) or session_id
-    if jobs.is_terminal(job):
-        return False
-    try:
-        jobs.update_status(
-            session_id,
-            job_id,
-            "cancelled" if terminal or jobs.is_waiting(job) else job.status,
-            cancel_requested_at=requested_at,
-            reason_code=reason_code,
-        )
-        return True
-    except Exception:
-        return False
-
-
 def _find_job(
     execution_id: str, *, session_id: str | None = None,
 ) -> Any | None:
@@ -248,37 +212,6 @@ def _caller_descendants(store: Any, session_id: str, execution_id: str) -> list[
                 added = True
         if not added:
             break
-    return descendants
-
-
-def _job_descendants(execution_id: str) -> list[tuple[str, Any]]:
-    records = hooks.job_records()
-    try:
-        store = _canonical_store()
-        jobs = []
-        for session in store.list_sessions(limit=10**9, include_archived=True):
-            jobs.extend(records.list(session["id"]))
-    except Exception:
-        return []
-    children: dict[str, list[Any]] = {}
-    for job in jobs:
-        parent_id = getattr(job, "parent_job_id", None)
-        if parent_id:
-            children.setdefault(parent_id, []).append(job)
-    seen = {execution_id}
-    queue = [execution_id]
-    descendants: list[tuple[str, Any]] = []
-    while queue:
-        parent_id = queue.pop(0)
-        for job in children.get(parent_id, []):
-            if job.id in seen:
-                continue
-            seen.add(job.id)
-            queue.append(job.id)
-            descendants.append((
-                job.parent_session_id,
-                _job_execution_view(job),
-            ))
     return descendants
 
 

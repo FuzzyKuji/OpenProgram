@@ -284,11 +284,27 @@ def _instance_tool_callable(bound):
     return tool
 
 
+def _passed_runtime(signature, instance, args, kwargs):
+    """The runtime the caller handed to this call, by name or by position,
+    so the scope around the method is the caller's and not a default one
+    resolved from a profile."""
+    from .call_state import _RUNTIME_PARAMS
+    try:
+        passed = signature.bind_partial(instance, *args, **kwargs).arguments
+    except TypeError:
+        # The call does not fit the method; the method itself reports that.
+        return _UNSET
+    return next((passed[name] for name in signature.parameters
+                 if name in _RUNTIME_PARAMS and passed.get(name) is not None), _UNSET)
+
+
 def _configured_method(fn):
+    signature = inspect.signature(fn)
     if inspect.iscoroutinefunction(fn):
         @wraps(fn)
         async def async_method(self, *args, **kwargs):
-            with _configuration_scope(self) as link:
+            runtime = _passed_runtime(signature, self, args, kwargs)
+            with _configuration_scope(self, runtime=runtime) as link:
                 result = await fn(self, *args, **kwargs)
                 if link is not None:
                     link.output = result
@@ -296,7 +312,8 @@ def _configured_method(fn):
         return async_method
     @wraps(fn)
     def method(self, *args, **kwargs):
-        with _configuration_scope(self) as link:
+        runtime = _passed_runtime(signature, self, args, kwargs)
+        with _configuration_scope(self, runtime=runtime) as link:
             result = fn(self, *args, **kwargs)
             if link is not None:
                 link.output = result

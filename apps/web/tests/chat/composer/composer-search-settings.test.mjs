@@ -14,6 +14,7 @@ globalThis.searchScopeHook = selector => useStore(React.useContext(Scope), selec
 registerHooks({
  resolve(s,c,next) {
   const mocks = {
+   '@/lib/agents/branch-settings': 'export const persistBranchSettings = () => {}; export const draftTouchedPatch = () => ({})',
    '@/lib/session-store/session-scope': 'export const useSessionScope = s => globalThis.searchScopeHook(s)',
    '@/lib/i18n': 'export const useTranslation = () => globalThis.searchTranslation',
    '@/lib/prefs/settings-cache': 'export const cachedFetch = async () => globalThis.searchCatalog; export const invalidate = () => {}',

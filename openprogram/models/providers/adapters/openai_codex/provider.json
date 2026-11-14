@@ -27,5 +27,8 @@
     }
    }
   }
+ },
+ "tool_search": {
+  "openai-codex": "responses"
  }
 }

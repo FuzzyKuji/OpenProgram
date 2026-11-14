@@ -45,7 +45,7 @@ openprogram config set ui.web_port 8101</code></pre>
 <tr><th scope="row"><code translate="no">sandbox.deny_write</code></th><td>不可写 glob，另加始终屏蔽的函数监视目录和受保护启动文件</td><td>[]</td><td>立即</td></tr>
 <tr><th scope="row"><code translate="no">sandbox.network</code></th><td>网络访问</td><td>false</td><td>立即</td></tr>
 <tr><th scope="row"><code translate="no">sandbox.pass_env</code></th><td>内置白名单之外传入的环境变量名</td><td>[]</td><td>立即</td></tr>
-<tr><th scope="row"><code translate="no">sandbox.unavailable_policy</code></th><td><code translate="no">refuse</code>：后端缺失或无法隔离时命令失败；<code translate="no">warn</code>：不用沙箱运行</td><td>refuse</td><td>立即</td></tr>
+<tr><th scope="row"><code translate="no">sandbox.unavailable_policy</code></th><td><code translate="no">refuse</code>：后端缺失或无法隔离时命令失败；<code translate="no">warn</code>：不用沙箱运行</td><td>refuse；Windows 上为 warn</td><td>立即</td></tr>
 </tbody>
 </table>
 <p class="note">后端：macOS Seatbelt，Linux bubblewrap，Windows 通过默认 WSL2 发行版的 bubblewrap。Docker 不是自动回退。</p>

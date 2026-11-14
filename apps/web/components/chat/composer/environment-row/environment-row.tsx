@@ -7,6 +7,7 @@ import { ProjectBadge, WorkingDirChips } from "../../top-bar";
 import { ChannelChip } from "./chips/channel-chip";
 import { EnvironmentChip } from "./chips/environment-chip";
 import { WebSurfaceChip } from "./chips/web-surface-chip";
+import { WorktreeChip } from "./chips/worktree-chip";
 import { useCompactEnvironmentRow } from "./use-compact-environment-row";
 import styles from "./environment-row.module.css";
 
@@ -21,6 +22,8 @@ export function EnvironmentRow({ sessionId }: EnvironmentRowProps) {
   return (
     <div ref={rowRef} className={styles.envChips} data-environment-row>
       <EnvironmentChip />
+      {/* Checkout or the branch's own worktree (Codex's Local / Worktree). */}
+      <WorktreeChip />
       <ChannelChip />
       <ProjectBadge />
       <WorkingDirChips />

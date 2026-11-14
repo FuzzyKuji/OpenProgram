@@ -39,7 +39,7 @@
 <thead class="sr"><tr><th scope="col">规则</th><th scope="col">细节</th></tr></thead>
 <tbody>
 <tr><th scope="row">调用方标记</th><td>内容块上的 <code translate="no">cache_control</code> 原样透传；<code translate="no">Tool.cache_control</code> 同样（<a href="../plans/cache-control-passthrough.html">透传方案</a>）</td></tr>
-<tr><th scope="row">未标记</th><td><code translate="no">apply_cache_policy</code>（<code translate="no">settings/cache_policy.py</code>）标记最后一个工具和最新用户消息的最后文本块，否则其最后一块；调用方的标记保留</td></tr>
+<tr><th scope="row">未标记</th><td><code translate="no">apply_cache_policy</code>（<code translate="no">settings/cache_policy.py</code>）标记最后一个不带 <code translate="no">defer_loading</code> 的工具和最新用户消息的最后文本块，否则其最后一块；调用方的标记保留</td></tr>
 <tr><th scope="row">预算</th><td><code translate="no">max_breakpoints</code>（4），先给工具，再给消息</td></tr>
 <tr><th scope="row">TTL</th><td><code translate="no">≥ 3600 秒</code> 为 <code translate="no">1h</code>，否则提供商默认 5 分钟；<code translate="no">models.prompt_cache_ttl</code> 设为 <code translate="no">1h</code> 时普通缓存活一小时</td></tr>
 <tr><th scope="row">system</th><td>单个字符串，由各提供商的 <code translate="no">_build_system</code> 标记整块；策略只管工具和消息</td></tr>

@@ -35,6 +35,7 @@ from .retry import _call_predecessor
 from .retry import handle_retry_function
 from .conversation_channel import handle_set_conversation_channel
 from .commands import handle_compact
+from .commands import handle_operation_cancel
 from .commands import handle_sandbox
 from .rewind import handle_rewind_list
 from .rewind import handle_rewind
@@ -48,6 +49,7 @@ ACTIONS = {
     "retry_function": handle_retry_function,
     "set_conversation_channel": handle_set_conversation_channel,
     "compact": handle_compact,
+    "operation.cancel": handle_operation_cancel,
     "sandbox": handle_sandbox,
     "rewind_list": handle_rewind_list,
     "rewind": handle_rewind,

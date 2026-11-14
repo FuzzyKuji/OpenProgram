@@ -24,7 +24,6 @@ _MAX_LISTED_FILES = 50
     name="skill",
     description=_DESC,
     toolset=["core"],
-    max_result_chars=60_000,
 )
 def skill(name: str = "") -> str:
     """Return a skill's SKILL.md body.

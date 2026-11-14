@@ -23,6 +23,8 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from openprogram.host._platform.filesystem import replace_file
+
 MAX_REPORTS = 200
 # Over a week of half-hourly firings, enough for the weekly health read.
 MAX_WAKE_LOG = 500
@@ -65,7 +67,7 @@ def _replace_file(path: Path, write) -> None:
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             write(handle)
-        os.replace(temporary, path)
+        replace_file(temporary, path)
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
@@ -109,7 +111,7 @@ def update_state(session_id: str, **changes: Any) -> dict[str, Any]:
             raise ValueError(f"conversation {session_id!r} not found")
         state = load_state(session_id)
         state.update(changes)
-        path.write_text(json.dumps(state, ensure_ascii=False, indent=2))
+        path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
         return state
 
 
@@ -321,4 +323,4 @@ def _write_reports(session_id: str, rows: list[dict[str, Any]]) -> None:
     path = _reports_path(session_id)
     if path is None:
         raise ValueError(f"conversation {session_id!r} not found")
-    path.write_text("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows))
+    path.write_text("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows), encoding="utf-8")

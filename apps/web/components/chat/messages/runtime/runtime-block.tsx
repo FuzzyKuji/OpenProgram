@@ -1,4 +1,5 @@
 "use client";
+import { adoptCheckedOutBranch, pendingBranchSettings } from "@/lib/agents/branch-settings";
 
 /**
  * Manual function run — renders a fn-form///run function call as the
@@ -89,12 +90,15 @@ function checkoutSibling(
     },
     showToast,
   );
-  fetch("/api/chat/checkout", {
+  Promise.resolve(pendingBranchSettings(sessionId)).then(() => fetch("/api/chat/checkout", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ session_id: sessionId, msg_id: targetId }),
-  })
-    .then(() => wsSend({ action: "load_session", session_id: sessionId }))
+  }))
+    .then(async (response) => {
+      if (response.ok) adoptCheckedOutBranch(sessionId, await response.json().catch(() => null));
+      wsSend({ action: "load_session", session_id: sessionId });
+    })
     .catch(() => {
       /* revert is handled by the optimisticAction timeout */
     });
@@ -220,10 +224,22 @@ export function RuntimeBlock({
           fields: { status: "running", contextTree: undefined, siblingIndex: total, siblingTotal: total },
           clear: ["until_row_gone"],
         });
+        // Stop works from the click: it names this request until the
+        // server's answer names the execution.
+        if (!store.runningTasks[sessionId]) {
+          store.setRunningTaskFor(sessionId, {
+            session_id: sessionId, msg_id: rid, func_name: fnName,
+            started_at: Date.now() / 1000, client_request_id: requestId,
+          });
+        }
       },
       settled: () => !selectRow(sessionId, rid)(useSessionStore.getState()),
       restore: () => {
-        useSessionStore.getState().applyLocalChange(sessionId, { kind: "overlay_clear", rowId: rid });
+        const current = useSessionStore.getState();
+        current.applyLocalChange(sessionId, { kind: "overlay_clear", rowId: rid });
+        if (current.runningTasks[sessionId]?.client_request_id === requestId) {
+          current.setRunningTaskFor(sessionId, null);
+        }
       },
       send: () => wsSend(retryPayload), toast: showToast,
       timeoutMessage: text(

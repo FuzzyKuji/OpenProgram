@@ -6,6 +6,7 @@ Layout (under ``<state-dir>/`` resolved by ``openprogram.state.paths.get_state_d
     worker.pid    — PID + start-timestamp written by the running worker
     worker.port   — port the in-process webui WebSocket is listening on
     worker.log    — combined stdout + stderr from a detached worker
+    worker.stop   — PID a stop was asked of, where no signal can ask (Windows)
 """
 from __future__ import annotations
 
@@ -33,3 +34,7 @@ def port_path() -> Path:
 
 def log_path() -> Path:
     return state_dir() / "worker.log"
+
+
+def stop_request_path() -> Path:
+    return state_dir() / "worker.stop"

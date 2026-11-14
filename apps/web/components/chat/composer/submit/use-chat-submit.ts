@@ -19,7 +19,8 @@
  * free at once. The send queue waits until the server releases the turn.
  * Server cancelled still wins on reload.
  */
-import type { ExecutionCommand } from "@/lib/execution/execution-debugger";
+import { sendExecutionCancel, sendRequestCancel } from "@/lib/execution/cancel-execution";
+import { getPendingUserRequestId } from "@/lib/chat/send/pending-user-text";
 import { useCallback } from "react";
 
 import { selectViewRows, useSessionStore } from "@/lib/session-store";
@@ -27,7 +28,7 @@ import { stopOverlay } from "@/lib/chat/transcript/apply-transcript-update";
 import { getSocket, runtimeState } from "@/lib/runtime-bridge/state";
 import { parseFunctionInvocation } from "@/lib/execution/function-invocation";
 import { showToast } from "@/lib/format-utils/toast";
-import { deferStopUntilIdentified, enqueueMessage, holdDrainAfterStop, holdSteeringForStop, useSendQueue } from "@/lib/chat/send/send-queue";
+import { enqueueMessage, holdDrainAfterStop, holdSteeringForStop, useSendQueue } from "@/lib/chat/send/send-queue";
 import { steerQueuedMessage } from "@/lib/chat/send/steer-message";
 import { openDecisionFor, sendWaitAnswer } from "@/lib/chat/decisions/answer-wait";
 import { translateText } from "@/lib/i18n";
@@ -45,6 +46,7 @@ import type { SubmittedAttachments, useComposerAttachments } from "../attach/use
 import type { useSlashMenu } from "../slash/use-slash-menu";
 import type { FunctionDispatcher } from "../modes/fn-form/use-function-dispatch";
 import { isSettled } from "@/lib/chat/transcript/row-status";
+import { operationCancelCommand } from "@/lib/chat/run/run-operation";
 
 type Attachments = ReturnType<typeof useComposerAttachments>;
 
@@ -500,17 +502,22 @@ export function stopSession(
 ): void {
   const store = useSessionStore.getState();
   const task = store.runningTasks[targetSessionId];
+  const operationCancel = operationCancelCommand(targetSessionId, task);
+  if (operationCancel) {
+    // /compact or a rewind has no execution: Stop names the operation.
+    if (!send(operationCancel)) {
+      showToast("Could not send the stop request. Reconnect and try again.", { tone: "error" });
+      return;
+    }
+    holdDrainAfterStop(targetSessionId);
+    showToast("Stop requested. Cancelling the current operation…");
+    store.setRunningTaskFor(targetSessionId, null, "never");
+    return;
+  }
   const waiting = task ? null : openDecisionFor(targetSessionId);
   if (waiting) {
     // The run waits on a request: stopping it cancels that run.
-    const sent = send({
-      type: "execution.command",
-      action: "execution.cancel",
-      command_id: crypto.randomUUID(),
-      execution_id: waiting.executionId,
-      expected_version: waiting.expectedVersion,
-      payload: {},
-    } satisfies ExecutionCommand);
+    const sent = sendExecutionCancel(send, waiting.executionId, waiting.expectedVersion);
     if (!sent) {
       showToast("Could not send the stop request. Reconnect and try again.", { tone: "error" });
       return;
@@ -536,56 +543,39 @@ export function stopSession(
       break;
     }
   }
-  // 1. Tell the server first so the model HTTP stream can abort.
-  const cancelSent = Boolean(executionId && typeof expectedVersion === "number");
-  if (executionId && typeof expectedVersion === "number") {
+  // 1. Tell the server first so the model HTTP stream can abort. A stop
+  //    names its execution; the version is only what the page last saw
+  //    (a reconnect's run state may hand over the ids alone).
+  const cancelSent = Boolean(executionId);
+  if (executionId) {
     runtimeState._optimisticCancels[commandId] = {
       sessionId: targetSessionId,
       task: { ...task },
       messageId: optimisticMessage?.id,
       previousMessageStatus: optimisticMessage?.status,
     };
-    let sent = false;
-    try {
-      sent = send({
-        type: "execution.command",
-        action: "execution.cancel",
-        command_id: commandId,
-        execution_id: executionId,
-        expected_version: expectedVersion,
-        payload: {},
-      } satisfies ExecutionCommand);
-    } catch {
-      // A transport exception does not establish that the run stopped.
-    }
+    // A transport exception does not establish that the run stopped.
+    const sent = sendExecutionCancel(send, executionId, typeof expectedVersion === "number" ? expectedVersion : 0, commandId);
     if (!sent) {
       delete runtimeState._optimisticCancels[commandId];
       showToast("Could not send the stop request. The task may still be running; reconnect and try again.", { tone: "error" });
       // Keep the task, reply and queue intact so Stop remains retryable.
       return;
     }
-  } else if (executionId) {
-    // The slot names the turn but not its version (a reconnect's run state
-    // handed over the ids alone). A cancel is exact, so marking the reply
-    // stopped here would only pretend: hold the Stop, ask for the turn's
-    // version and send the cancel when it arrives. The composer keeps
-    // showing the turn as running until the server really stops it.
-    deferStopUntilIdentified(targetSessionId, executionId, () => stopSession(targetSessionId, (payload) => {
-      const socket = getSocket();
-      if (socket?.readyState !== WebSocket.OPEN) return false;
-      socket.send(JSON.stringify(payload));
-      return true;
-    }));
-    showToast("Stop requested. Cancelling the current operation…");
-    return;
   } else if (task) {
     // The Stop button can win the ACK/activation race while the task still
-    // has only its local placeholder. Keep a session-level pending-stop
-    // record so chat_ack
-    // cannot revive that turn without first issuing an exact cancel.
+    // has only its local placeholder. The stop names the send at once (the
+    // Worker keeps it for the send's admission); the session-level record
+    // keeps chat_ack from showing that turn as running again.
+    // A function run or retry names its own request; a chat send the one
+    // waiting for its ACK.
+    const requestId = task.client_request_id || getPendingUserRequestId(targetSessionId);
+    const byRequest = Boolean(requestId)
+      && sendRequestCancel(send, targetSessionId, requestId as string, commandId);
     runtimeState._optimisticStops[targetSessionId] = {
       messageId: optimisticMessage?.id,
       previousMessageStatus: optimisticMessage?.status,
+      ...(byRequest ? { commandId } : {}),
     };
   }
   if (task) {

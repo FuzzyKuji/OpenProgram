@@ -26,7 +26,8 @@
 <tr><th scope="row">Write path</th><td>Staged write: validates references, rebuilds derived views, commits Git history, renders Markdown as before. Source validation is unchanged.</td></tr>
 <tr><th scope="row">Stale edit</th><td>Submitted <code translate="no">base_content</code> is compared under the write lock; a mismatch is rejected and the draft kept with an error.</td></tr>
 <tr><th scope="row">Normalization</th><td>The reply returns canonical saved text, because normalization may alter source.</td></tr>
-<tr><th scope="row">Status shown</th><td>Errors and Git warnings inline only; no saving or saved indicator.</td></tr>
+<tr><th scope="row">Headings only</th><td>Kept as saved: a person's save never prunes a Topic, and an uncited paragraph a person writes gets a block ID like any other.</td></tr>
+<tr><th scope="row">Status shown</th><td>Errors and warnings inline only (a failed Git commit); no saving or saved indicator. The preview puts a Nova badge "Added by you" after each paragraph a person added without a citation, and a file written outside OpenProgram gets one badge by its title, "Written outside OpenProgram · read only to memory".</td></tr>
 <tr><th scope="row">Navigation, reload</th><td>Drafts survive locally.</td></tr>
 <tr><th scope="row">Access</th><td>Owner-authorized endpoints read bounded Git history restricted to topic Markdown. Path and revision inputs cannot escape Memory; a revision must be a full commit id.</td></tr>
 </tbody>

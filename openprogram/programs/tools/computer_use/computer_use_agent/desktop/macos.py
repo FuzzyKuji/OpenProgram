@@ -36,6 +36,7 @@ from . import audio
 from . import keys as keymap
 from . import ocr
 from . import window_watch
+from .base import StaleElement
 from .base import (CUE_LEAD_SECONDS, HOVER_SECONDS, INCLUDE, MAX_COPY_CHARS, MAX_TEXT_CHARS, OCR_SPARSE_NODES,
                    AudioClip, ComputerUseError, NotAnswering, RefusedApps, refuse_password_field, NotDispatched, Observation, Report,
                    check_cancelled as _check_cancelled,
@@ -93,6 +94,8 @@ MAX_NODES = 1500
 MAX_DEPTH = 60
 MAX_IMAGE_SIDE = 1568
 MAX_DRAG_STEPS = 24
+# A cell lies this many levels at most below the row that selects it.
+_ROW_DEPTH = 3
 # After an action the tool waits for the window to settle: until two quick
 # reads agree (at most SETTLE_MAX seconds), or up to BUSY_MAX seconds while
 # a progress or busy indicator is on screen.
@@ -1114,14 +1117,14 @@ class MacComputer:
             raise NotDispatched("element_index must be an integer") from exc
         element = state.elements.get(index)
         if element is None:
-            raise NotDispatched(f"element_index {index} is not in the last state of this window. "
+            raise StaleElement(f"element_index {index} is not in the last state of this window. "
                                    "Use an index from the latest tree (get_app_state, or find).")
         _, ax, _, _ = _frameworks()
         code, _ = ax.AXUIElementCopyAttributeValue(element, "AXRole", None)
         if code == _INVALID_ELEMENT:
             element = self._rebind(state, index)
             if element is None:
-                raise NotDispatched(f"element {index} no longer exists. Call get_app_state for a fresh tree.")
+                raise StaleElement(f"element {index} no longer exists. Call get_app_state for a fresh tree.")
         return element
 
     def _rebind(self, state: WindowState, index: int):
@@ -1488,7 +1491,7 @@ class MacComputer:
 
     # ------------------------------------------------------------------ text helpers
     def _focus(self, element) -> None:
-        if self._settable(element, "AXFocused"):
+        if self._attr(element, "AXFocused") is not True and self._settable(element, "AXFocused"):
             self._set(element, "AXFocused", True)
             time.sleep(0.08)
 
@@ -1628,12 +1631,15 @@ class MacComputer:
             actions = self._actions(element)
             simple = count == 1 and not flags and not hold
             if simple and button == "left":
+                row = self._row_of(element, node)
                 for action in ("AXPress", "AXConfirm", "AXPick"):
                     if action in actions and self._perform(element, action) == 0:
                         return f"pressed {node.body()}"
-                if node.role in ("AXRow", "AXOutlineRow", "AXCell") and self._settable(element, "AXSelected"):
-                    if self._set(element, "AXSelected", True) == 0:
+                    # Outlook's message cells answer a press with an error and select the row all the same.
+                    if action in actions and row is not None and self._attr(row, "AXSelected") is True:
                         return f"selected {node.body()}"
+                if row is not None and self._select_row(row):
+                    return f"selected {node.body()}"
                 if node.role in _TEXT_ROLES and self._settable(element, "AXFocused"):
                     if self._set(element, "AXFocused", True) == 0:
                         return f"focused {node.body()}"
@@ -1646,6 +1652,29 @@ class MacComputer:
         self._background_click(state, pid, point, button, count, flags, hold)
         return (f"{_click_words(button, count)} at ({args.get('x')}, {args.get('y')})"
                 + (f" (held {hold:g}s)" if hold else ""))
+
+    def _row_of(self, element, node):
+        """The row of a list or table that ``element`` is or lies in, when it can be selected.
+
+        Selecting the row is what a click on it does, and it needs no mouse:
+        a mouse-down, even one delivered in the background, lets the app bring
+        its window forward or make itself the front app.
+        """
+        if node.role not in ("AXRow", "AXOutlineRow", "AXCell"):
+            return None
+        candidate = element
+        for _ in range(_ROW_DEPTH):
+            if candidate is None:
+                return None
+            if self._settable(candidate, "AXSelected"):
+                return candidate
+            candidate = self._attr(candidate, "AXParent")
+            if candidate is None or self._attr(candidate, "AXRole") not in ("AXRow", "AXOutlineRow", "AXCell"):
+                return None
+        return None
+
+    def _select_row(self, row) -> bool:
+        return self._attr(row, "AXSelected") is True or self._set(row, "AXSelected", True) == 0
 
     def _do_hover(self, app, pid, state, args) -> str:
         """Move the pointer over an element or point, in the app only, and rest there."""
@@ -1770,8 +1799,9 @@ class MacComputer:
                 raise ComputerUseError(
                     "The window is on another Space, where macOS does not deliver keys to it, and the focused "
                     "element takes no inserted text. Focus a text field first, or use element actions.")
+            newline_note = "; a newline went in as text, not as Return" if "\n" in text or "\r" in text else ""
             return (f"inserted {len(text)} character(s) at the focused field (the window is on another Space, "
-                    "where keys do not arrive; a newline went in as text, not as Return)")
+                    f"where keys do not arrive{newline_note})")
         self._refuse_file_panel(app, pid)
         self._post_text(pid, text)
         return f"typed {len(text)} character(s)"
@@ -1902,6 +1932,8 @@ class MacComputer:
             raise ComputerUseError("This is a password field; computer_use does not focus or type into it.")
         if not self._settable(element, "AXFocused"):
             raise ComputerUseError(f"element {index} cannot take keyboard focus; click it instead")
+        if self._attr(element, "AXFocused") is True:
+            return Report(f"already focused {node.body()}")
         self._set(element, "AXFocused", True)
         # Apps apply focus on their next run-loop turn, sometimes later.
         deadline = time.monotonic() + 0.5

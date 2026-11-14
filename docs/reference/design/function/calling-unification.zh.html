@@ -40,7 +40,7 @@
 <thead class="sr"><tr><th scope="col">设置</th><th scope="col">控制</th></tr></thead>
 <tbody>
 <tr><th scope="row"><code translate="no">name</code>、<code translate="no">description</code>、<code translate="no">parameters</code>、<code translate="no">label</code></th><td>LLM 看到的内容。<code translate="no">@function</code> 从签名和 docstring 推导；Agent 方法复用 <code translate="no">_build_agentic_tool_spec</code></td></tr>
-<tr><th scope="row"><code translate="no">max_result_chars</code>、<code translate="no">persist_full</code>、<code translate="no">head_ratio</code>、<code translate="no">stream_capacity_chars</code></th><td>头尾截断加标记，完整副本落盘，流式 <code translate="no">on_update</code> 的有界尾部</td></tr>
+<tr><th scope="row"><code translate="no">max_result_weight</code>、<code translate="no">stream_capacity_chars</code></th><td>比模型更小的结果上限，记为 <code translate="no">details["cap"]</code>，由 agent 循环截一次，完整文字存到对话的 <code translate="no">tool_results/&lt;sha256&gt;.txt</code>（<a href="../context/overview.zh.html#cross-turn-tool-context">工具输出</a>）；流式 <code translate="no">on_update</code> 的有界尾部</td></tr>
 <tr><th scope="row"><code translate="no">timeout</code>、<code translate="no">timeout_min</code>、<code translate="no">timeout_max</code></th><td>静态或由 LLM 控制的超时</td></tr>
 <tr><th scope="row"><code translate="no">cache</code>、<code translate="no">cache_ttl</code></th><td>按名称和参数记忆</td></tr>
 <tr><th scope="row"><code translate="no">describe</code></th><td>当前的描述和参数，每次解析工具列表时应用（<code translate="no">current_tool</code>），工具只说出可用的东西</td></tr>
@@ -53,9 +53,10 @@
 <table class="stack fixed">
 <thead class="sr"><tr><th scope="col">旋钮</th><th scope="col">行为</th></tr></thead>
 <tbody>
-<tr><th scope="row">动态结果上限</th><td><code translate="no">min(单工具上限, 0.3 × 上下文窗口)</code>，小上下文模型自动收缩。<code translate="no">_effective_max_chars</code>、每轮设置的 <code translate="no">_current_context_window_chars</code></td></tr>
+<tr><th scope="row">小窗口里的结果占比</th><td>agent 循环存下的结果限制在模型的 <code translate="no">tool_output_weight</code>（默认 10,000）以内，且不超过 <code translate="no">0.3 × 上下文窗口</code>，按权重计：中日韩字符算 1，其余算 0.25。手动添加、没填窗口的本地模型（4,096 token）得到 1,228，32,768 token 的模型得到 9,830。<code translate="no">spill.result_cap</code> 在每次工具调度前按模型设置，周报读取来源时也一样</td></tr>
+<tr><th scope="row">这个占比里的 read 分页</th><td><code translate="no">read</code> 按同样的上限分页，页头和续读提示都算在内，单行截到一页放得下的长度。读取碰到的 AGENTS.md 放在结果旁边、单独截断，不占这一页的地方</td></tr>
 <tr><th scope="row">LLM 可控超时</th><td>函数声明 <code translate="no">timeout</code> 且装饰器设了范围时，值被钳制，同时用作 <code translate="no">wait_for</code> 预算和参数</td></tr>
-<tr><th scope="row">有界流式尾部</th><td><code translate="no">_TailAccumulator</code>；容量默认 <code translate="no">max_result_chars</code>，溢出时淘汰头部</td></tr>
+<tr><th scope="row">有界流式尾部</th><td><code translate="no">_TailAccumulator</code>；容量默认 40,000 字符，溢出时淘汰头部</td></tr>
 <tr><th scope="row"><code translate="no">can_use()</code></th><td>会话级“这个用户或角色能否用”，与 <code translate="no">check_fn</code>（进程）、<code translate="no">unsafe_in</code>（渠道）并列</td></tr>
 </tbody>
 </table>
@@ -102,7 +103,7 @@ PROGRAM_ENTRIES = [researcher.research]</code></pre>
 <thead><tr><th scope="col">入口</th><th scope="col">控制</th><th scope="col">层</th><th scope="col">存储</th></tr></thead>
 <tbody>
 <tr><th scope="row">Programs 页、<code translate="no">/api/tool-profiles</code></th><td>创建、编辑、删除 profile</td><td>2b</td><td><code translate="no">functions_meta.json</code></td></tr>
-<tr><th scope="row">输入框“+”菜单</th><td>Web Search 开关，叠加在 Agent 的工具集上</td><td>2b、5</td><td>会话 meta</td></tr>
+<tr><th scope="row">输入框“+”菜单</th><td>Web Search 开关，叠加在 Agent 的工具集上</td><td>2b、5</td><td>会话元数据中的分支配置</td></tr>
 <tr><th scope="row">Agent profile <code translate="no">tools</code></th><td>全部、选定、Access preset、无；禁用名称</td><td>2b、5</td><td><code translate="no">~/.openprogram/agents/&lt;id&gt;.json</code></td></tr>
 <tr><th scope="row">Attended 开关（CLI、TUI、Web）</th><td>无人值守时扣下 <code translate="no">ask_user_question</code></td><td>5</td><td>会话状态</td></tr>
 <tr><th scope="row">全局工具禁用</th><td>单个工具全局关闭；覆盖任何 profile；很少用</td><td>5</td><td><code translate="no">config.json</code>：<code translate="no">tools.disabled</code></td></tr>
@@ -112,20 +113,19 @@ PROGRAM_ENTRIES = [researcher.research]</code></pre>
 
 <h2>解析路径</h2>
 <ol>
-<li>一轮开始；<code translate="no">TurnBindings</code> 安装该会话的 <code translate="no">_loaded_deferred</code> 集合，<code translate="no">tool_search</code> 会更新它，后续轮次保留。</li>
 <li><code translate="no">resolve_tools</code> 调用 <code translate="no">agent_tools(toolset=…, source=req.source, only_available=True)</code>，走第 2 到 5 层，不走第 6 层。</li>
-<li>由初始集合算出的延迟目录进入系统提示。<code translate="no">agent_loop</code> 仍收到完整列表。</li>
-<li>每次 provider 调用前，<code translate="no">split_tools_for_dispatch</code> 保留非延迟和已加载的工具作为 <code translate="no">tools=[]</code>。</li>
+<li>延迟目录作为 <code translate="no">turn_context</code> 的 <code translate="no">deferred_catalog</code> 段放在用户消息旁：范围内的全部延迟工具，加载与否都列出，第一次发完整列表，之后只发新增和移除，所以加载工具或服务器连上都不会改动提示（<a href="deferred-tools.zh.html#catalog">延迟工具</a>）。<code translate="no">agent_loop</code> 仍收到完整列表。</li>
+<li>每次 provider 调用前，<code translate="no">split_tools_for_dispatch</code> 保留非延迟工具，以及本次请求自己的消息加载过的工具（<code translate="no">loaded_tools(messages)</code>：工具结果上的加载记录、压缩摘要携带的名字），作为 <code translate="no">tools=[]</code>。</li>
 <li>收到 <code translate="no">ToolCall</code> 时，<code translate="no">agent_loop</code> 在 <code translate="no">context.tools</code> 或 <code translate="no">_registry</code> 查找，校验参数，await <code translate="no">execute(call_id, args, cancel, on_update)</code>。</li>
-<li><code translate="no">tool_search(select="cron")</code> 把 <code translate="no">cron</code> 加入 <code translate="no">_loaded_deferred</code>，下一次请求带上其 schema。</li>
+<li><code translate="no">tool_search(select="cron")</code> 加载 <code translate="no">cron</code>：下一次请求带上其 schema，因为这次搜索的结果记下每个加载工具的定义（<code translate="no">details.loads</code>、<code translate="no">record_loads</code>），历史里保留模型第一次收到的版本。原生发送加载器的 Responses provider 把它放在这次搜索的结果里，而不是 <code translate="no">tools=[]</code>（<a href="../providers/codex-transport.zh.html#deferred-tools">Codex 传输</a>）。</li>
 </ol>
 
 <details><summary>各部分所在位置</summary>
 <table class="stack fixed">
 <thead class="sr"><tr><th scope="col">文件</th><th scope="col">内容</th></tr></thead>
 <tbody>
-<tr><th scope="row"><code translate="no">openprogram/programs/_host/runtime.py</code></th><td><code translate="no">_registry</code>（第 2 层来源）、<code translate="no">_toolset_membership</code>、<code translate="no">_unsafe_in_channel</code>、<code translate="no">filter_for</code>、<code translate="no">_build_and_register_tool</code>、<code translate="no">function</code>、<code translate="no">_parse_docstring</code>、<code translate="no">_build_parameters_schema</code>、<code translate="no">_evaluate_approval</code>、<code translate="no">tool_requires_approval</code>、<code translate="no">_effective_max_chars</code>、<code translate="no">_TailAccumulator</code>、<code translate="no">_loaded_deferred</code>、<code translate="no">install_loaded_deferred</code>、<code translate="no">mark_deferred_loaded</code>、<code translate="no">split_tools_for_dispatch</code>、<code translate="no">deferred_catalog_text</code>、<code translate="no">tool_search</code></td></tr>
-<tr><th scope="row"><code translate="no">openprogram/programs/_host/execution.py</code></th><td><code translate="no">_normalize_result</code>、<code translate="no">_cap_result_text</code>、<code translate="no">_persist_full_result</code></td></tr>
+<tr><th scope="row"><code translate="no">openprogram/programs/_host/runtime.py</code></th><td><code translate="no">_registry</code>（第 2 层来源）、<code translate="no">_toolset_membership</code>、<code translate="no">_unsafe_in_channel</code>、<code translate="no">filter_for</code>、<code translate="no">_build_and_register_tool</code>、<code translate="no">function</code>、<code translate="no">_parse_docstring</code>、<code translate="no">_build_parameters_schema</code>、<code translate="no">_evaluate_approval</code>、<code translate="no">tool_requires_approval</code>、<code translate="no">_TailAccumulator</code>、<code translate="no">loaded_tools</code>、<code translate="no">record_loads</code>、<code translate="no">split_tools_for_dispatch</code>、<code translate="no">deferred_catalog_text</code>、<code translate="no">tool_search</code></td></tr>
+<tr><th scope="row"><code translate="no">openprogram/programs/_host/execution.py</code></th><td><code translate="no">_normalize_result</code>（从不截断）、<code translate="no">with_cap</code>、<code translate="no">_persist_full_result</code></td></tr>
 <tr><th scope="row"><code translate="no">openprogram/programs/_authoring/helpers.py</code></th><td><code translate="no">is_available_agent_tool</code>：第 4 层</td></tr>
 <tr><th scope="row"><code translate="no">openprogram/programs/__init__.py</code></th><td><code translate="no">DEFAULT_TOOLS</code>、<code translate="no">TOOLSETS</code>、<code translate="no">agent_tools</code>、<code translate="no">apply_tool_policy</code>、<code translate="no">get_agent_tool</code>、<code translate="no">list_registered_agent_tools</code>、<code translate="no">list_available</code>；导入所有子包使工具注册</td></tr>
 <tr><th scope="row"><code translate="no">openprogram/programs/tools/&lt;group&gt;/&lt;name&gt;/</code></th><td>每个叶子工具一个 <code translate="no">@function</code></td></tr>
@@ -144,7 +144,7 @@ PROGRAM_ENTRIES = [researcher.research]</code></pre>
 <p><code translate="no">tests/unit/programs/runtime/test_tools_runtime.py</code>、<code translate="no">tests/component/agent/turns/test_dispatcher_tools.py</code>：</p>
 <ul>
 <li>docstring 和签名转参数 schema；同步、异步分发；异常转 <code translate="no">AgentToolResult(is_error=True)</code></li>
-<li>字符上限和 <code translate="no">persist_full</code>；<code translate="no">on_update</code> 投递和尾部累积；取消传播；<code translate="no">asyncio.wait_for</code> 超时；<code translate="no">requires_approval</code></li>
+<li>记下声明的上限，循环只截一次并保存全文；<code translate="no">on_update</code> 投递和尾部累积；取消传播；<code translate="no">asyncio.wait_for</code> 超时；<code translate="no">requires_approval</code></li>
 <li>按 toolset、source、names 过滤；所有内置工具在导入时注册；<code translate="no">@function</code> 覆盖项</li>
 <li>第 1 层在 False 或异常时跳过注册</li>
 <li>第 6 层 sidecar、<code translate="no">tool_search</code> 提升、未知名称、目录文本</li>

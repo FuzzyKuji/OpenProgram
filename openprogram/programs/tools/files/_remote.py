@@ -93,18 +93,7 @@ def read(fs: RemoteFS, file_path: str, offset: int, limit: int) -> str:
         media = mimetypes.guess_type(path)[0] or "application/octet-stream"
         return f"# {host}:{path} (binary, {len(data)} bytes, {media})"
     lines = data.decode("utf-8", "replace").splitlines()
-    total = len(lines)
-    start = max(1, offset) - 1
-    end = min(total, start + max(1, limit))
-    rows = []
-    for i, line in enumerate(lines[start:end], start=start + 1):
-        if len(line) > local.MAX_LINE_LENGTH:
-            line = line[:local.MAX_LINE_LENGTH] + "…[truncated]"
-        rows.append(f"{i:>6}\t{line}")
-    header = f"# {host}:{path} (lines {start + 1}-{end} of {total})"
-    if not rows:
-        return header + "\n(empty range)"
-    return header + "\n" + "\n".join(rows)
+    return local.numbered_page(lines, offset, limit, shown=f"{host}:{path}", path=path)
 
 
 # ---- write / edit ---------------------------------------------------------

@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, replace
 import re
+import sys
 from decimal import Decimal, InvalidOperation
 import ipaddress
 from pathlib import Path
@@ -461,6 +462,19 @@ def _validate_limit(v: Any) -> Optional[str]:
     return None
 
 
+def _validate_nonnegative_number(v: Any) -> Optional[str]:
+    """A spend limit: any number >= 0, where 0 = no limit."""
+    if isinstance(v, bool):
+        return "must be a number (0 = no limit)"
+    try:
+        n = float(v)
+    except (TypeError, ValueError):
+        return "must be a number (0 = no limit)"
+    if n != n or n < 0 or n == float("inf"):
+        return "must be 0 (no limit) or a positive number"
+    return None
+
+
 def _validate_positive_optional(v: Any) -> Optional[str]:
     if v is None:
         return None
@@ -511,6 +525,11 @@ def _validate_hooks(v: Any) -> Optional[str]:
             if not isinstance(e, dict) or not isinstance(e.get("command"), str) \
                     or not e["command"].strip():
                 return f'{event}: each entry needs a non-empty "command" string'
+            if e.get("shell") is not None and e.get("shell") not in ("bash", "powershell"):
+                return f'{event}: shell must be "bash" or "powershell"'
+            a = e.get("args")
+            if a is not None and not (isinstance(a, list) and all(isinstance(x, str) for x in a)):
+                return f"{event}: args must be a list of strings"
             t = e.get("timeout")
             if t is not None and (not isinstance(t, int) or isinstance(t, bool)
                                   or t <= 0):
@@ -533,8 +552,9 @@ SETTINGS: list[SettingSpec] = [
         key="execution.prevent_idle_sleep", path=("execution", "prevent_idle_sleep"),
         group="Execution", label="Prevent idle system sleep", widget="toggle",
         apply=APPLY_LIVE, default=False,
-        help="On macOS, prevent idle system sleep during active agent execution. "
-             "Disabled by default. Read at the next execution; display sleep and explicit sleep remain available.",
+        help="Prevent idle system sleep during active agent execution. Disabled by default. "
+             "Read at the next execution; the display may still sleep. Linux needs systemd-inhibit, "
+             "and a suspend you ask for waits for the execution there.",
     ),
     SettingSpec(
         key="execution.instant_steer", path=("execution", "instant_steer"),
@@ -868,24 +888,72 @@ SETTINGS: list[SettingSpec] = [
     SettingSpec(
         key="agent.max_spawn_depth", path=("agent", "max_spawn_depth"),
         group="Agent", label="Max spawn depth", widget="number",
-        apply=APPLY_LIVE, default=0, validate=_validate_limit,
+        apply=APPLY_LIVE, default=1, validate=_validate_limit,
         help="How many generations of NEW agents one chain may create. "
-             "0 (default) = no limit. 1 = you spawn workers and a worker "
-             "does the work itself; 2 lets a worker spawn its own worker. "
-             "Only creating an agent counts, so an agent that "
-             "reads a worker's result can still create the next wave. A "
-             "spawn past the limit is refused with a message telling the "
-             "agent to do the work itself.",
+             "1 (default): the main agent spawns helpers and a helper does "
+             "the work itself, so a helper has no agent tool. 2 lets a "
+             "helper spawn its own helper; 0 = no limit. Only creating an "
+             "agent counts, so an agent that reads a helper's result can "
+             "still create the next wave.",
     ),
     SettingSpec(
         key="agent.max_messages", path=("agent", "max_messages"),
         group="Agent", label="Max messages per chain", widget="number",
         apply=APPLY_LIVE, default=0, validate=_validate_limit,
-        help="How many messages one collaboration chain may pass in "
-             "total — spawns, send_message deliveries, and agent(to=…) "
-             "dispatches all count, and a reply coming back counts too, "
-             "so A↔B ping-pong stops at the ceiling. 0 (default) = no "
-             "limit.",
+        help="Older limit on how many messages one collaboration chain may "
+             "pass. Still honoured when set; agent.max_hops and "
+             "agent.max_sends_per_hour now bound agent-to-agent messages. "
+             "0 (default) = no limit.",
+    ),
+    SettingSpec(
+        key="agent.max_hops", path=("agent", "max_hops"),
+        group="Agent", label="Max message hops", widget="number",
+        apply=APPLY_LIVE, default=4, validate=_validate_limit,
+        help="How many times one chain of work may pass a message on to "
+             "another agent with send_message (A to B to C counts 2). A "
+             "reply coming back does not count. 4 (default); 0 = no limit.",
+    ),
+    SettingSpec(
+        key="agent.max_sends_per_hour", path=("agent", "max_sends_per_hour"),
+        group="Agent", label="Max messages per agent per hour", widget="number",
+        apply=APPLY_LIVE, default=20, validate=_validate_limit,
+        help="How many messages one conversation may send to other agents "
+             "with send_message in an hour. 20 (default); 0 = no limit.",
+    ),
+    SettingSpec(
+        key="agent.max_running_agents", path=("agent", "max_running_agents"),
+        group="Agent", label="Max running agents per conversation", widget="number",
+        apply=APPLY_LIVE, default=6, validate=_validate_limit,
+        help="How many helper agents one conversation runs at the same "
+             "time; more wait in a queue and start as others finish. The "
+             "worker pool (OPENPROGRAM_JOB_WORKERS, 8 by default) still "
+             "bounds all conversations together. 6 (default); 0 = only the "
+             "pool bounds it.",
+    ),
+    SettingSpec(
+        key="agent.max_tree_usd", path=("agent", "max_tree_usd"),
+        group="Agent", label="Max spend per delegation (USD)", widget="number",
+        apply=APPLY_LIVE, default=2.0, validate=_validate_nonnegative_number,
+        help="How much the helpers started from one turn may spend together, "
+             "in US dollars. Once reached, no new helper starts from that "
+             "turn, the running ones are stopped and the conversation is "
+             "told. Usage whose price is unknown does not count. 2 (default); "
+             "0 = no limit.",
+    ),
+    SettingSpec(
+        key="agent.stall_minutes", path=("agent", "stall_minutes"),
+        group="Agent", label="Stalled after (minutes)", widget="number",
+        apply=APPLY_LIVE, default=10, validate=_validate_limit,
+        help="A helper agent with no model or tool activity for this long is "
+             "marked stalled and the conversation that started it is told; it "
+             "keeps running. 10 (default); 0 = never.",
+    ),
+    SettingSpec(
+        key="agent.max_agent_hours", path=("agent", "max_agent_hours"),
+        group="Agent", label="Stop helpers after (hours)", widget="number",
+        apply=APPLY_LIVE, default=2, validate=_validate_limit,
+        help="A helper agent still running after this many hours is stopped "
+             "and reported as timed out. 2 (default); 0 = no limit.",
     ),
     SettingSpec(
         key="agent.max_spawn_fanout", path=("agent", "max_spawn_fanout"),
@@ -928,7 +996,9 @@ SETTINGS: list[SettingSpec] = [
         apply=APPLY_NEXT_START, default={},
         validate=_validate_hooks,
         help='Shell commands subscribed to bus events, as {"<event>": '
-             '[{"command": "...", "timeout": 60}]}. The event arrives as '
+             '[{"command": "...", "timeout": 60}]}. An entry may add '
+             '"shell": "bash" (the default) or "powershell", or "args": '
+             '[...] to run the command directly without a shell. The event arrives as '
              "JSON on the command's stdin. Gate events (tool.before, "
              "turn.stop) follow the Claude Code hooks exit-code protocol: "
              "exit 0 allows, exit 2 denies with stderr as the reason, any "
@@ -1046,14 +1116,29 @@ SETTINGS: list[SettingSpec] = [
     SettingSpec(
         key="sandbox.unavailable_policy", path=("sandbox", "unavailable_policy"),
         group="Sandbox", label="When the sandbox cannot run", widget="enum",
-        apply=APPLY_LIVE, default="refuse",
+        apply=APPLY_LIVE, default="warn" if sys.platform == "win32" else "refuse",
         choices=lambda: list(_sandbox_unavailable_policy()),
         help="What happens when the mode is on but the platform backend is "
              "missing or cannot create its required isolation. `refuse` "
              "fails the command and says why. `warn` "
              "runs it unsandboxed and logs a warning — convenient, and "
              "the reason a security setting can end up doing nothing "
-             "without anyone noticing.",
+             "without anyone noticing. The default is `refuse`, except on "
+             "Windows, where the sandbox needs WSL2 that most machines do "
+             "not have: there it is `warn`, and the Sandbox switch and "
+             "`openprogram doctor` say the sandbox needs WSL2.",
+    ),
+    SettingSpec(
+        key="shell.windows_bash_path", path=("shell", "windows_bash_path"),
+        group="Execution", label="Bash for commands on Windows", widget="text",
+        apply=APPLY_LIVE, default="",
+        validate=lambda v: None if isinstance(v, str) else "must be a path to bash.exe",
+        help="The bash.exe commands, hooks and the environment block use on "
+             "Windows, for a Git or MSYS2 installed where it is not found on "
+             "its own. The environment variable OPENPROGRAM_GIT_BASH_PATH "
+             "wins over this setting. A path that is not a file is passed "
+             "over: the shell is looked for as usual and `openprogram "
+             "doctor` says the path is not used. Ignored on macOS and Linux.",
     ),
     SettingSpec(
         key="git.co_author", path=("git", "co_author"), group="Git",
@@ -1351,6 +1436,11 @@ def set_setting(key: str, value: Any) -> dict:
         preferences.write_search_default_provider(None if coerced == "auto" else coerced)
     else:
         user_config.update_config(lambda cfg: _set_at(cfg, spec.path, coerced))
+    if spec.key == "models.prompt_cache_ttl":
+        # Every conversation's next request changes its cache lifetime on
+        # purpose: the prompt-cache check records it as expected.
+        from openprogram.models.usage.prefix_fingerprint import expect_break_everywhere
+        expect_break_everywhere("ttl_switch")
 
     result: dict = {"applied": spec.apply, "value": coerced}
 

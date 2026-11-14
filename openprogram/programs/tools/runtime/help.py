@@ -12,7 +12,7 @@ _DESC = (
 )
 
 
-@function(name="help", description=_DESC, toolset=["core"], max_result_chars=40_000)
+@function(name="help", description=_DESC, toolset=["core"])
 def guide_help(name: str = "") -> str:
     """Return a guide's text.
 

@@ -106,6 +106,10 @@ class RepairingStream:
                 return
             await close_stream(self.current)
             self._context = fixed
+            # The mended request is the one answered: it replaces the
+            # refused one in the attempt's request slot.
+            from ..recording.capture import reopen_slot
+            reopen_slot()
             self.current = self._stream_fn(self._model, fixed, self._options)
 
 

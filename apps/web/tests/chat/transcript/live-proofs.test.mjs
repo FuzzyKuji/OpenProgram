@@ -73,6 +73,14 @@ test("citations come from the real frame", async () => {
   assert.ok(reply.blocks.some((block) => block.citations?.length));
 });
 
+test("a turn stopped before it started shows a stopped reply, live and after a reload", async () => {
+  const { mismatches, live } = await lastView(named("stopped_before_start"));
+  assert.deepEqual(mismatches, []);
+  const reply = Object.values(live.rows).find((row) => row.role === "assistant");
+  assert.equal(reply?.status, "cancelled");
+  assert.equal(reply.content, "");
+});
+
 test("text stops after Stop and the terminal row is the last thing to change the reply", async () => {
   const { mismatches, live } = await lastView(named("stopped_during_tool"));
   assert.deepEqual(mismatches, []);

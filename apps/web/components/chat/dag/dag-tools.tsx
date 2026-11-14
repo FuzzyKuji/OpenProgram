@@ -12,6 +12,7 @@
  * belongs to the pane's perspective controls.
  */
 
+import { platformKeyCaps, useIsMacPlatform } from "@/lib/shortcut-keys";
 import { useSyncExternalStore } from "react";
 import {
   Copy,
@@ -42,6 +43,7 @@ function useSelectionVersion(): number {
 
 function DagSelectionBar() {
   const { text } = useTranslation();
+  const mac = useIsMacPlatform();
   useSelectionVersion();
   const ids = selectedIds();
   const pending = deletionPending();
@@ -56,7 +58,7 @@ function DagSelectionBar() {
         </span>
         <span className="dag-select-sep" aria-hidden="true" />
         <button type="button" className="dag-select-act" disabled={pending}
-          onClick={() => undoDeletion()} data-tip={text("Undo", "撤销")} data-tip-keys="⌘ Z">
+          onClick={() => undoDeletion()} data-tip={text("Undo", "撤销")} data-tip-keys={platformKeyCaps("⌘ Z", mac)}>
           <Undo2 size={14} strokeWidth={2} />
           <span>{text("Undo", "撤销")}</span>
         </button>

@@ -105,7 +105,9 @@ def test_actions_registered():
 def test_revert_turn_rejects_active_run(store, monkeypatch):
     from openprogram.interfaces.server import server as _server
 
-    monkeypatch.setattr(_server, "_is_run_active", lambda _session_id: True)
+    # Only the branches whose line holds the turn have to be free: here the
+    # selected one, which is running.
+    monkeypatch.setattr(_server, "_is_selected_run_active", lambda _session_id: True)
     ws = FakeWS()
     _run(tf.handle_revert_turn(ws, {
         "session_id": "busy", "msg_id": "u1_reply",

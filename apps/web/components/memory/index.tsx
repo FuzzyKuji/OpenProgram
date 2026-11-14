@@ -82,6 +82,10 @@ export function MemoryPage({
   const [topicPages, setTopicPages] = useState<TopicPage[]>([]);
   const [topicsLoading, setTopicsLoading] = useState(true);
   const [selectedTopic, setSelectedTopic] = useState<TopicPage | null>(null);
+  // Bumped when a topic save or delete lands, so the banner re-reads which
+  // files are still held aside after the person fixes one in the editor.
+  const [statusRevision, setStatusRevision] = useState(0);
+  const refreshStatus = useCallback(() => setStatusRevision((value) => value + 1), []);
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState("");
   const searchValue = query !== undefined ? query : search;
@@ -195,7 +199,7 @@ export function MemoryPage({
     );
   }, [topicPages]);
 
-  async function deleteTopic() {
+  async function deleteTopic(target?: { removed?: boolean }) {
     if (!selectedTopic) return;
     if (!(await confirmAction({
       title: text(`Delete "${selectedTopic.title || selectedTopic.path}"?`, `删除“${selectedTopic.title || selectedTopic.path}”？`),
@@ -203,10 +207,15 @@ export function MemoryPage({
       confirmLabel: text("Delete", "删除"),
       destructive: true,
     }))) return;
-    const r = await fetch(api(`/api/memory/topics/${selectedTopic.path}`), { method: "DELETE" });
+    // A save that left only the title already removed the file; deleting
+    // it is closing what is left in the editor.
+    const r = target?.removed
+      ? { ok: true as const }
+      : await fetch(api(`/api/memory/topics/${selectedTopic.path}`), { method: "DELETE" });
     if (r.ok) {
       setSelectedTopic(null);
       fetchTopics();
+      refreshStatus();
     } else {
       // A refused delete says why (a block another topic still links to,
       // for one), so show the reason instead of swallowing it — same as
@@ -268,7 +277,7 @@ export function MemoryPage({
         </Button>
       </div>
       )}
-      <WriterHealthBanner statusUrl={api("/api/memory/status")} />
+      <WriterHealthBanner statusUrl={api("/api/memory/status")} revision={statusRevision} />
 
       {/* Body — single grid: tabBar (row 1 col 1) + tree (row 2 col 1) +
           editor/placeholder (col 2 spans both rows so it starts right at
@@ -343,6 +352,8 @@ export function MemoryPage({
                     path={selectedTopic.path}
                     url={api(`/api/memory/topics/${selectedTopic.path.split("/").map(encodeURIComponent).join("/")}`)}
                     onDelete={deleteTopic}
+                    onSaved={refreshStatus}
+                    onRemovedChange={fetchTopics}
                     onPreviewClick={handlePreviewClick}
                   />
                 ) : !topicsLoading && topicPages.length === 0 && !searchValue ? (

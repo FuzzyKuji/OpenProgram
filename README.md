@@ -50,7 +50,7 @@
 curl -fsSL https://openprogram.io/install | sh
 ```
 
-On Windows (from v1.1.0): `irm https://openprogram.io/install.ps1 | iex`. The macOS desktop App is a DMG on the [releases page](https://github.com/FuzzyKuji/OpenProgram/releases); the Linux and Windows Apps arrive in v1.1.0. If openprogram.io does not answer: `curl -fsSL https://raw.githubusercontent.com/FuzzyKuji/OpenProgram/main/docs/_static_root/install.sh | sh`. More options in [installation](https://openprogram.io/docs/install/install.html).
+On Windows (from v1.2.0): `irm https://openprogram.io/install.ps1 | iex`. The macOS desktop App is a DMG on the [releases page](https://github.com/FuzzyKuji/OpenProgram/releases); the Linux App is a deb or AppImage on the same page, and the Windows App arrives in v1.1.1. If openprogram.io does not answer: `curl -fsSL https://raw.githubusercontent.com/FuzzyKuji/OpenProgram/main/docs/_static_root/install.sh | sh`. More options in [installation](https://openprogram.io/docs/install/install.html).
 
 ## Quick start
 
@@ -101,7 +101,7 @@ Each entry links to its design document.
 
 | | |
 |---|---|
-| **[Desktop and web UI](https://openprogram.io/docs/reference/design/ui/README.html)** | The App on macOS, and from v1.1.0 on Linux and Windows; the web UI on any of them or a server. |
+| **[Desktop and web UI](https://openprogram.io/docs/reference/design/ui/README.html)** | The App on macOS and Linux, and from v1.2.0 on Windows; the web UI on any of them or a server. |
 | **[Split panes](https://openprogram.io/docs/reference/design/ui/workspace/center-tabs-and-split-layout.html)** | Chats, files, terminals and web pages side by side. |
 | **[Built-in browser](https://openprogram.io/docs/reference/design/ui/browser/built-in-browser.html)** | A browser the agent reads and operates while you watch. |
 | **[Integrated terminal](https://openprogram.io/docs/reference/design/ui/workspace/integrated-terminal.html)** | Terminals in the workspace, shared with the agent. |

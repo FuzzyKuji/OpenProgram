@@ -398,8 +398,7 @@ function(
     description=DESCRIPTION,
     parameters=SPEC["parameters"],
     toolset=['core', 'research'],
-    max_result_chars=30_000,
-    persist_full=True,
+    max_result_weight=7_500,
     url_params=["url"],
 )(_execute_agent_tool)
 

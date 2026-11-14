@@ -10,6 +10,7 @@
  * just deleted, and owns the enter/exit animation bookkeeping
  * (`enteringIds` / `closingIds`) that the strip renders from.
  */
+import { isMacPlatform } from "@/lib/shortcut-keys";
 import { useEffect, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 
@@ -412,7 +413,7 @@ export function useTabLifecycle({
     };
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || desktopBridge()) return;
-      const shortcut = shortcutForKey(event, /Mac|iPhone|iPad/.test(navigator.platform));
+      const shortcut = shortcutForKey(event, isMacPlatform());
       if (!shortcut) return;
       event.preventDefault();
       runShortcut(shortcut);

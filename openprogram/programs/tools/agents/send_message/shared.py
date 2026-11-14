@@ -22,16 +22,18 @@ def _current_session() -> str | None:
 
 
 def _last_text(session_id: str, *, head_id: str | None = None) -> str:
-    """Short preview = the latest message's text on a session/branch."""
+    """Short preview = the latest message's text on a session/branch.
+
+    With ``head_id`` the preview comes from that branch's own chain only:
+    a branch whose tip has no text yet (a helper stopped mid-turn) shows
+    its latest text before the tip, never another branch's message."""
     try:
-        msgs = _db().get_messages(session_id, limit=8) or []
+        if head_id:
+            msgs = _db().get_branch(session_id, head_id) or []
+        else:
+            msgs = _db().get_messages(session_id, limit=8) or []
     except Exception:
         return ""
-    # If a head is given, prefer that node's own content.
-    if head_id:
-        for m in msgs:
-            if m.get("id") == head_id:
-                return _clip(m.get("content"))
     for m in reversed(msgs):
         c = m.get("content")
         if c:

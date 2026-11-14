@@ -274,10 +274,6 @@ def real_agent_chat(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(session_actions, "broadcast_sessions_list", lambda: None)
     monkeypatch.setattr(server, "_broadcast", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(
-        "openprogram.runtime.conversation.workspace_alignment.get_workspace_alignment",
-        lambda _session_id: {"status": "aligned"},
-    )
 
     provider = _Provider()
     api_name = "continuation-real-api"
@@ -1131,7 +1127,7 @@ def test_approval_resume_reuses_saved_prompt_after_context_updates(
     import openprogram.runtime.conversation.surface_context as surfaces
 
     monkeypatch.setattr(
-        surfaces, "web_use_available", lambda _context: browser_available
+        surfaces, "browser_pages_available", lambda _context: browser_available
     )
 
     prompts = []
@@ -1169,7 +1165,7 @@ def test_approval_resume_reuses_saved_prompt_after_context_updates(
         lambda *_args, **_kwargs: "updated memory and date",
     )
     monkeypatch.setattr(
-        surfaces, "web_use_available", lambda _context: not browser_available
+        surfaces, "browser_pages_available", lambda _context: not browser_available
     )
     _question_action(real_agent_chat, "question_reply", question.id, answer="允许")
     completed = _wait(
@@ -1405,7 +1401,7 @@ def test_forced_reconcile_resumes_an_approval_the_new_policy_drops_with_no_versi
 
     # An allow rule stands in for a policy change that bumps no permission version.
     monkeypatch.setattr("openprogram.runtime.permissions.rule.load_merged_rules",
-                        lambda _sid: PermissionRules(allow=["first"]))
+                        lambda _sid, **_kwargs: PermissionRules(allow=["first"]))
     asyncio.run(reconcile_permission_waits(h.session_id, service=h.control))
     assert DurableWaitStore(h.store).get_wait(question.id).status is not WaitStatus.RESOLVED
     assert h.tools.calls == []
@@ -1997,3 +1993,44 @@ def test_chat_function_continues_original_tool_call_with_selected_code(
     ]
     assert len(function_nodes) == 1
     assert function_nodes[0].metadata["tool_call_id"] == "original-function-call"
+
+
+def test_approval_in_a_later_turn_resumes_with_the_prompt_named_by_hash(
+    real_agent_chat, monkeypatch
+):
+    """The second turn's checkpoint names the prompt its branch already
+    records by hash; approving its wait resumes the turn instead of pausing it
+    with ``continuation_contract_mismatch``."""
+    from tests.component.providers.scripted_provider import ScriptedToolCall, ScriptedText
+    import openprogram.runtime.context.components as components
+
+    monkeypatch.setattr(components, "build_system_prompt", lambda *_args, **_kwargs: "the conversation prompt")
+    real_agent_chat.provider.add_response(ScriptedText("first turn done"))
+    first = _chat(real_agent_chat)
+    _wait(lambda: real_agent_chat.store.get_execution(first.execution_id).status
+          is ExecutionStatus.COMPLETED)
+    _wait(lambda: not real_agent_chat.server._is_run_active(real_agent_chat.session_id))
+
+    real_agent_chat.tools.wait_kind = "approval"
+    real_agent_chat.provider.add_response(ScriptedToolCall("first", {}, "call-later-wait"))
+    real_agent_chat.provider.add_response(ScriptedText("completed after approval"))
+    execution = _chat(real_agent_chat)
+    question = _pending_question(real_agent_chat, kind="approval")
+    paused = _wait(
+        lambda: (item if (item := real_agent_chat.store.get_execution(execution.execution_id)).status
+                 is ExecutionStatus.PAUSED else None)
+    )
+    checkpoint = real_agent_chat.control.checkpoints.get(paused.checkpoint_head_id)
+    from openprogram.runtime.execution.agent_journal import load_journal
+    snapshot = load_journal(real_agent_chat.session_id, checkpoint.state_refs["agent_journal"]).snapshot
+    assert "system_prompt" not in snapshot and snapshot.get("system_prompt_sha256")
+
+    _question_action(real_agent_chat, "question_reply", question.id, answer="允许")
+    completed = _wait(
+        lambda: (item if (item := real_agent_chat.store.get_execution(execution.execution_id)).status
+                 in {ExecutionStatus.COMPLETED, ExecutionStatus.FAILED, ExecutionStatus.PAUSED}
+                 and item.current_attempt_id is None else None),
+        detail=lambda: real_agent_chat.store.get_execution(execution.execution_id).to_dict(),
+    )
+    assert completed.status is ExecutionStatus.COMPLETED, (completed.to_dict(), real_agent_chat.activation_errors)
+    assert real_agent_chat.tools.calls == ["first"]

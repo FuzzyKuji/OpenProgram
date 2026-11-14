@@ -93,8 +93,11 @@ def _collect() -> list[dict]:
         # "正在运行的程序" 的顶层视角；tool/process 是它的细粒度补充。
         from openprogram.interfaces.server import server as _srv
         with _srv._running_tasks_lock:
-            tasks = {sid: dict(t) for sid, t in _srv._running_tasks.items()}
-        for sid, task in tasks.items():
+            tasks = [(sid, None, dict(t)) for sid, t in _srv._running_tasks.items()]
+            # A turn on a branch that is not selected holds its own slot.
+            tasks += [(sid, branch_id, dict(t))
+                      for (sid, branch_id), t in _srv._branch_running_tasks.items()]
+        for sid, branch_id, task in tasks:
             execution_id = task.get("execution_id")
             if execution_id and any(i.get("execution_id") == execution_id for i in items):
                 continue
@@ -106,6 +109,7 @@ def _collect() -> list[dict]:
                 "label": task.get("func_name") or "chat",
                 "status": "running",
                 "started_at": task.get("started_at"),
+                **({"branch_id": branch_id} if branch_id else {}),
             })
     except Exception:
         # Each source of running items is listed independently; one failing

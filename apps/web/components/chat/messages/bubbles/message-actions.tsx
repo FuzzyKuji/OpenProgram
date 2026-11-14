@@ -1,4 +1,5 @@
 "use client";
+import { adoptCheckedOutBranch, pendingBranchSettings } from "@/lib/agents/branch-settings";
 import { useActionIconAnimation } from "./use-action-icon-animation";
 
 /**
@@ -297,8 +298,9 @@ export function MessageActions({
       kind: "overlay_set", rowId: msg.id,
       fields: { siblingIndex: (msg.siblingIndex ?? 0) + dir }, clear: ["until_read"],
     });
-    postJson("/api/chat/checkout", { session_id: sessionId, msg_id: targetId })
-      .then(() => {
+    Promise.resolve(pendingBranchSettings(sessionId)).then(() => postJson("/api/chat/checkout", { session_id: sessionId, msg_id: targetId }))
+      .then((reply) => {
+        adoptCheckedOutBranch(sessionId, reply);
         runtimeState._postCheckoutScrollTo = targetId;
         wsSend({ action: "load_session", session_id: sessionId });
       })

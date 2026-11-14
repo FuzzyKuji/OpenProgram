@@ -32,6 +32,19 @@ class PermissionRuleValue:
 
 _SHELL_TOOLS = {"bash", "exec", "shell"}
 _COMPLEX_SHELL_PREFIX = "\x1fcomplex-shell:"
+# A command for PowerShell that uses syntax the POSIX reading below does not
+# see (``{}`` script blocks and hash tables, ``,`` arrays). The value keeps the
+# command's own text: deny and ask rules read it as usual, and an allow rule
+# matches it only when the rule is that exact text ("Always allow").
+_POWERSHELL_UNREAD_PREFIX = "\x1fpowershell-unread:"
+_POWERSHELL_UNREAD_CHARS = frozenset("{},")
+# Where commands run in PowerShell the value also carries the command lowered
+# to POSIX words (``powershell_words``), each after this separator. Deny and
+# ask rules read every reading; allow rules read only the command as written.
+_POWERSHELL_READING = "\x1d"
+# The reading of a command ``powershell_words`` cannot read that may still
+# delete, move or copy files: a deny rule for those reads it as ask.
+_POWERSHELL_UNKNOWN = "\x1fpowershell-unknown"
 _ANSI_ESCAPE_RE = re.compile(
     r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\)|[@-Z\\-_])"
 )
@@ -91,12 +104,61 @@ def _shell_tokens(command: str) -> tuple[list[str], bool]:
     return tokens, complex_syntax
 
 
+def _runs_in_powershell() -> bool:
+    """Whether a command may run in PowerShell: the shell commands run in
+    now, or the host shell an approved command leaves the sandbox for."""
+    try:
+        from openprogram.host._platform import command_shell
+        from openprogram.host.environments import current_environment
+        profile = command_shell.resolve_shell(current_environment())
+    except Exception:  # noqa: BLE001 - unknown is read as the riskier shell
+        import sys
+        return sys.platform == "win32"
+    return profile.is_powershell or (profile.host is not None and profile.host.is_powershell)
+
+
 def _canonical_shell(command: object) -> str:
     normalized = _normalize_text(command).strip()
     tokens, complex_syntax = _shell_tokens(normalized)
+    powershell = _runs_in_powershell()
     if complex_syntax or not tokens:
-        return _COMPLEX_SHELL_PREFIX + normalized
-    return shlex.join(tokens)
+        base = _COMPLEX_SHELL_PREFIX + normalized
+    elif any(char in _POWERSHELL_UNREAD_CHARS for char in normalized) and powershell:
+        base = _POWERSHELL_UNREAD_PREFIX + normalized
+    else:
+        base = shlex.join(tokens)
+    if not powershell or not normalized:
+        return base
+    from openprogram.runtime.permissions import powershell_words
+    readings = powershell_words.posix_readings(normalized)
+    if readings is None:
+        return base + _POWERSHELL_READING + _POWERSHELL_UNKNOWN if powershell_words.may_run(normalized) else base
+    lowered = [shlex.join(argv) for argv in readings]
+    extra = [text for text in lowered if text != base]
+    return base + "".join(_POWERSHELL_READING + text for text in extra)
+
+
+def _split_readings(value: str) -> tuple[str, list[str]]:
+    """The command as written, and its PowerShell readings for deny and ask."""
+    if _POWERSHELL_READING not in value:
+        return value, []
+    base, *readings = value.split(_POWERSHELL_READING)
+    return base, readings
+
+
+def unread_powershell_targets(pattern: str, value: str) -> bool:
+    """Whether a deny rule ``pattern`` must ask about a PowerShell command it cannot read.
+
+    True when the command could not be lowered yet may delete, move or copy
+    (``powershell_words.may_run``), and the rule names one of those programs.
+    A rule with no such program leaves the command alone, so an owner who
+    wrote no delete rule is asked nothing new.
+    """
+    if not value.endswith(_POWERSHELL_READING + _POWERSHELL_UNKNOWN):
+        return False
+    from openprogram.runtime.permissions import powershell_words
+    words = _normalize_text(pattern).replace(":*", " ").split()
+    return bool(words) and powershell_words.targets(words[0])
 
 
 def _assignment_name(token: str) -> str | None:
@@ -176,14 +238,27 @@ def _normalize_json(value):
 
 
 def _unescape(s: str) -> str:
+    # ``rule_to_string`` doubles every backslash, so its output never has one
+    # in front of an ordinary character. A pattern that does was typed or
+    # pasted as a plain Windows path, where a doubled backslash is the start
+    # of a UNC name (two backslashes, server, share) and must stay doubled.
+    typed = any(
+        c == "\\" and (i + 1 >= len(s) or s[i + 1] not in "\\()")
+        and not (i and s[i - 1] == "\\" and _is_escaped(s, i))
+        for i, c in enumerate(s)
+    )
+    unescaped = "()" if typed else "\\()"
     out = []
     i = 0
     while i < len(s):
         c = s[i]
         # Only the rule grammar's own metacharacters are escaped. Consuming
         # arbitrary backslashes corrupts pasted Windows paths (e.g. C:\Users).
-        if c == "\\" and i + 1 < len(s) and s[i + 1] in "\\()":
+        if c == "\\" and i + 1 < len(s) and s[i + 1] in unescaped:
             out.append(s[i + 1])
+            i += 2
+        elif typed and c == "\\" and s[i + 1:i + 2] == "\\":
+            out.append("\\\\")
             i += 2
         else:
             out.append(c)
@@ -235,6 +310,48 @@ def rule_to_string(v: PermissionRuleValue) -> str:
     return f"{v.tool_name}({_escape(v.pattern)})"
 
 
+_WINDOWS_DRIVE_RE = re.compile(r"[A-Za-z]:")
+
+
+def _windows_identity(path: str, *, literal: bool = False) -> str:
+    r"""One spelling for the names Windows treats as the same file.
+
+    ``\\?\C:\x`` and ``\\.\C:\x`` open ``C:\x``, and ``\\?\UNC\srv\share``
+    opens ``\\srv\share``; ``realpath`` keeps the prefix it was given, so a
+    rule written without it would never see the call. Win32 also drops
+    trailing dots and spaces from a component and reads ``name::$DATA`` as
+    ``name``. A ``\\?\`` path skips that trimming (``literal``): there the
+    trailing dot is part of the name.
+    """
+    for prefix, replacement in (("\\\\?\\UNC\\", "\\\\"), ("\\\\?\\", ""), ("\\\\.\\", "")):
+        if path[:len(prefix)].upper() == prefix:
+            rest = path[len(prefix):]
+            if replacement or _WINDOWS_DRIVE_RE.match(rest):
+                path = replacement + rest
+            break
+    if literal:
+        return path
+    drive, tail = os.path.splitdrive(path)
+    parts = tail.split("\\")
+    for index, part in enumerate(parts):
+        if part in ("", ".", "..") or any(ch in part for ch in "*?["):
+            continue
+        if index == len(parts) - 1 and part.upper().endswith("::$DATA"):
+            part = part[:-len("::$DATA")]
+        parts[index] = part.rstrip(". ") or part
+    return drive + "\\".join(parts)
+
+
+def _is_absolute(path: str) -> bool:
+    # Python 3.13 deliberately stopped treating a single leading slash as
+    # absolute on Windows. Model/tool calls still commonly use POSIX-style
+    # ``/tmp/x`` paths there (Git Bash accepts them), so preserve the prior
+    # drive-root interpretation instead of turning them into ``\tmp\x``.
+    return os.path.isabs(path) or (
+        os.name == "nt" and path.startswith(("/", "\\"))
+    )
+
+
 def _canon_path(path: object) -> str:
     normalized = _normalize_text(path)
     if not normalized:
@@ -242,14 +359,13 @@ def _canon_path(path: object) -> str:
     # Only absolute paths resolve here. Relative paths must stay relative:
     # callers (_path_is_safe, _targets_agentics) anchor them to the session
     # worktree, not the process cwd that realpath would use.
-    # Python 3.13 deliberately stopped treating a single leading slash as
-    # absolute on Windows. Model/tool calls still commonly use POSIX-style
-    # ``/tmp/x`` paths there (Git Bash accepts them), so preserve the prior
-    # drive-root interpretation instead of turning them into ``\tmp\x``.
-    if os.path.isabs(normalized) or (
-        os.name == "nt" and normalized.startswith(("/", "\\"))
-    ):
-        return os.path.realpath(normalized)
+    if _is_absolute(normalized):
+        resolved = os.path.realpath(normalized)
+        if os.name == "nt":
+            resolved = _windows_identity(
+                resolved, literal=normalized.startswith("\\\\?\\"),
+            )
+        return resolved
     return os.path.normpath(normalized)
 
 
@@ -270,19 +386,51 @@ def _patch_paths(patch: object) -> list[str]:
 def _realpath_glob_pattern(pattern: str) -> str:
     idx = next((i for i, ch in enumerate(pattern) if ch in "*?["), None)
     if idx is None:
-        return os.path.realpath(pattern) if pattern else pattern
+        return _resolved(pattern) if pattern else pattern
     head, tail = pattern[:idx], pattern[idx:]
     if not head:
         return pattern
     if head.endswith(("/", os.sep)):
-        root = os.path.realpath(head.rstrip("/\\") or "/")
+        root = _resolved(head.rstrip("/\\") or "/")
         # The canonical value uses the native separator. A mixed
         # ``C:\etc/**`` pattern never matches ``C:\etc\passwd`` on Windows.
         return root.rstrip("/\\") + os.sep + tail
     parent, base = os.path.split(head)
     if not parent:
         return pattern
-    return os.path.join(os.path.realpath(parent), base) + tail
+    return os.path.join(_resolved(parent), base) + tail
+
+
+def _resolved(path: str) -> str:
+    resolved = os.path.realpath(path)
+    if os.name == "nt":
+        resolved = _windows_identity(resolved, literal=path.startswith("\\\\?\\"))
+    return resolved
+
+
+def _deny_values(value: str) -> list[str]:
+    """Every name a deny or ask rule must see for one call value.
+
+    A file tool resolves a relative path against the conversation's working
+    directory, so that is where the rule looks too; the process directory
+    would let ``secret/a.txt`` pass a rule written for the absolute folder.
+    """
+    if not value:
+        return [value]
+    anchored = value
+    if not _is_absolute(value):
+        from openprogram.state.worktree.context import current_worktree_path
+        base = current_worktree_path()
+        if base:
+            anchored = os.path.join(base, value)
+    values = [value, _resolved(anchored)]
+    if os.name == "nt":
+        # A rule on a file covers its alternate data streams.
+        for item in list(values):
+            head, name = os.path.split(item)
+            if ":" in name:
+                values.append(os.path.join(head, name.split(":", 1)[0]))
+    return values
 
 
 def parse_command(tool_name: str, args: dict) -> Optional[str]:
@@ -340,12 +488,15 @@ def exact_rule_for_call(tool_name: str, args: dict) -> PermissionRuleValue | Non
     value = parse_command(tool_name, args)
     if value is None:
         return None
+    value = _split_readings(value)[0]
     if tool_name.lower() in _SHELL_TOOLS and value.startswith(_COMPLEX_SHELL_PREFIX):
         return None
+    if value.startswith(_POWERSHELL_UNREAD_PREFIX):
+        value = value[len(_POWERSHELL_UNREAD_PREFIX):]
     return PermissionRuleValue(tool_name=tool_name, pattern=value)
 
 
-def load_merged_rules(session_id: str):
+def load_merged_rules(session_id: str, *, branch_id: str | None = None):
     """合并各来源的权限规则，返回 PermissionRules（低→高：global < session）。
     见 docs/reference/design/runtime/security/permission-decision.html。
 
@@ -410,8 +561,18 @@ def load_merged_rules(session_id: str):
 
     # 会话层（最高优先，一次性覆盖）
     try:
-        sess = facts().session_rules(session_id)
+        if branch_id:
+            from openprogram.runtime.context.session_db import default_db
+            from openprogram.state.store.session.branch_config import config_for_branch
+            from openprogram.runtime.permissions.modes import as_permission_rules
+            row = default_db().get_session(session_id) or {}
+            sess = as_permission_rules(config_for_branch(row, branch_id).get("permission_rules"))
+        else:
+            sess = facts().session_rules(session_id)
     except Exception as exc:
+        if branch_id:
+            # Losing the owning branch must not silently remove its deny rules.
+            raise
         _log.debug("permission rules: session config unavailable: %s", exc)
         sess = None
     else:
@@ -451,6 +612,18 @@ def rule_origin(session_id: str, raw: str | None, behavior: str) -> str:
     return "global settings"
 
 
+def _pattern_spellings(pattern: str) -> list[str]:
+    """The pattern as written, plus its native-separator form on Windows.
+
+    A call value there is already spelled with backslashes, and ``fnmatch``
+    treats a slash as an ordinary character, so ``**/.env`` copied from a
+    Mac would otherwise never meet ``C:\\proj\\.env``.
+    """
+    if os.name == "nt" and "/" in pattern:
+        return [pattern, pattern.replace("/", "\\")]
+    return [pattern]
+
+
 def _match_one(pattern: str, value: str, *, allow: bool) -> bool:
     if pattern.endswith(":*"):
         prefix = pattern[:-2]
@@ -472,11 +645,30 @@ def _match_one(pattern: str, value: str, *, allow: bool) -> bool:
         return val == pat
 
     if allow:
-        return _cmp(pattern, value)
+        if any(_cmp(pat, value) for pat in _pattern_spellings(pattern)):
+            return True
+        # The value is already the file's resolved name. Resolve the rule's
+        # folder the same way, so ``/tmp/**`` or ``c:\users\me\proj\**``
+        # allows what it names; the comparison itself stays case-sensitive.
+        if not _is_absolute(pattern):
+            return False
+        canonical = _realpath_glob_pattern(pattern)
+        return canonical != pattern and _cmp(canonical, value)
 
     seen: set[tuple[str, str]] = set()
-    for pat in (pattern, _realpath_glob_pattern(pattern)):
-        for val in (value, os.path.realpath(value) if value else value):
+    spellings = _pattern_spellings(pattern)
+    if os.name == "nt" and re.match(r"\\[^\\/]", pattern):
+        # ``\\srv/share/**`` reaches here with one leading backslash: the
+        # rule grammar reads a doubled backslash as an escaped one unless
+        # plain backslashes follow. Deny and ask also cover the share that
+        # was typed, not only a folder of that name on the current drive.
+        spellings.append("\\" + pattern)
+    patterns = [
+        pat for spelling in spellings
+        for pat in (spelling, _realpath_glob_pattern(spelling))
+    ]
+    for pat in patterns:
+        for val in _deny_values(value):
             key = (pat.casefold(), val.casefold())
             if key in seen:
                 continue
@@ -493,6 +685,20 @@ def pattern_matches(pattern: str, value: str, *, allow: bool = False) -> bool:
     - 否则 → 精确相等。
     deny 对路径做 realpath + casefold（宽松命中）；allow 保持原样匹配。"""
     pattern = _normalize_text(pattern)
+    value, readings = _split_readings(value)
+    if not allow and any(
+        pattern_matches(pattern, reading) for reading in readings if reading != _POWERSHELL_UNKNOWN
+    ):
+        return True
+    if value.startswith(_POWERSHELL_UNREAD_PREFIX):
+        text = value[len(_POWERSHELL_UNREAD_PREFIX):]
+        if allow:
+            return pattern == text
+        value = shlex.join(_shell_tokens(text)[0])
+    if os.name == "nt":
+        # The extended-length prefix names the same file; its ``?`` is not
+        # a wildcard.
+        pattern = _windows_identity(pattern, literal=True)
     parts = [p for p in value.split(_PATH_SEP) if p] if _PATH_SEP in value else [value]
     if allow:
         return all(_match_one(pattern, part, allow=True) for part in parts)

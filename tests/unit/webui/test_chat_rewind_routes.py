@@ -40,9 +40,17 @@ def test_rewind_plan_rejects_an_unknown_mode():
     assert response.status_code == 400
 
 
-def _reserve(monkeypatch, order, allowed=True):
+def _reserve(monkeypatch, order, allowed=True, scopes=None):
     from openprogram.interfaces.server import server
-    monkeypatch.setattr(server, "_try_reserve_run", lambda sid, r: order.append("reserve") or allowed)
+
+    def reserve(sid, kind, owner, *, branch_id=None, scope="branch", key=None):
+        order.append("reserve")
+        if scopes is not None:
+            scopes.append((kind, scope))
+        return None if allowed else {"code": "run_active", "kind": "reply",
+                                     "error": "A reply is being written on this branch; try again after it ends."}
+
+    monkeypatch.setattr(server, "reserve_operation", reserve)
     monkeypatch.setattr(server, "_release_run_reservation", lambda sid, r: order.append("release"))
 
 
@@ -94,6 +102,40 @@ def test_rewind_waits_for_a_running_turn(monkeypatch):
     }))
     assert response.status_code == 409
     assert order == ["reserve"]
+    body = _body(response)
+    assert (body["code"], body["kind"]) == ("run_active", "reply")
+
+
+def test_only_a_rewind_that_restores_files_holds_the_whole_conversation(monkeypatch):
+    from openprogram.interfaces.server import server
+    from openprogram.runtime.conversation import rewind, rewind_marks as marks
+    scopes: list = []
+    _reserve(monkeypatch, [], scopes=scopes)
+    monkeypatch.setattr(marks, "list_rewind_marks", lambda sid: [])
+    monkeypatch.setattr(server, "_set_active_head", lambda *a: None)
+    monkeypatch.setattr(rewind, "rewind_to", lambda *a, **kw: {"status": "committed"})
+    for mode in ("code_and_conversation", "code", "conversation"):
+        asyncio.run(routes.post_chat_rewind({
+            "session_id": "s", "msg_id": "u", "plan_hash": "p", "idempotency_key": "k", "mode": mode,
+        }))
+    assert scopes == [("rewind", "conversation"), ("rewind", "conversation"), ("rewind", "branch")]
+
+
+def test_a_refused_file_rewind_names_the_branch_to_stop(monkeypatch):
+    from openprogram.interfaces.server import server
+    blocking = {"branch_id": "branch_b", "execution_id": "exec-b", "status_version": 4,
+                "op_kind": "reply", "branch_name": "nightly"}
+    monkeypatch.setattr(server, "reserve_operation", lambda *a, **kw: {
+        "code": "branch_running", "kind": "reply", "blocking": blocking,
+        "error": "Branch “nightly” is running. Rewinding files now could undo its work; stop it, then rewind.",
+    })
+    response = asyncio.run(routes.post_chat_rewind({
+        "session_id": "s", "msg_id": "u", "plan_hash": "p", "idempotency_key": "k",
+    }))
+    assert response.status_code == 409
+    body = _body(response)
+    assert body["code"] == "branch_running" and body["blocking"] == blocking
+    assert "nightly" in body["error"]
 
 
 def test_undo_reserves_the_run_and_moves_head(monkeypatch):

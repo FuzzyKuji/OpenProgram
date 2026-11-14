@@ -117,9 +117,8 @@ def test_followup_never_resets_head_backwards(monkeypatch):
         lambda req, **kw: (done.set(), type("_R", (), {})())[1],
     )
     from openprogram.runtime.context import session_db as sdb
-    monkeypatch.setattr(sdb, "default_db", lambda: type("S", (), {
-        "set_head": staticmethod(lambda *a, **k: calls.append(a)),
-    })())
+    db = sdb.default_db()
+    monkeypatch.setattr(db, "set_head", lambda *a, **k: calls.append(a))
     runner_mod.get_runner()._dispatch_followup(_make_job())
 
     assert done.wait(30)

@@ -10,6 +10,7 @@ Mirrors google-gemini-cli.ts
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import re
@@ -34,6 +35,12 @@ from openprogram.models.providers.shared.validate_modalities import validate_inp
 from openprogram.models.providers.utils.event_stream import EventStream
 from openprogram.models.providers.utils.http_client import build_async_client
 from openprogram.models.providers.utils.sanitize_unicode import sanitize_surrogates
+from openprogram.models.providers.utils.stream_idle import (
+    event_idle_timeout_s,
+    idle_bounded,
+    idle_bounded_open,
+)
+from openprogram.models.providers.utils.stream_retry import retry_after_beyond_cap
 import logging
 
 _log = logging.getLogger(__name__)
@@ -78,6 +85,13 @@ def extract_retry_delay(error_text: str) -> int | None:
             if delay_ms > 0:
                 return delay_ms + 1000
     return None
+
+
+async def _data_lines(response: Any):
+    """The SSE ``data:`` lines of ``response``; blank and comment lines are not events."""
+    async for line in response.aiter_lines():
+        if line.startswith("data: "):
+            yield line
 
 
 def _is_retryable_error(status: int, error_text: str) -> bool:
@@ -151,9 +165,12 @@ def stream_google_gemini_cli(
 
             if opts.get("on_payload"):
                 opts["on_payload"](request_body)
+            from ...recording.capture import GOOGLE, capture_request
+            capture_request(model, request_body, wire=GOOGLE)
 
             ev_stream.push({"type": "start", "partial": output})
 
+            idle_s = event_idle_timeout_s()
             from ...streaming.budget import provider_retry_attempts
             max_attempts = provider_retry_attempts(_MAX_RETRIES + 1)
             attempts_used = 0
@@ -180,12 +197,20 @@ def stream_google_gemini_cli(
                     ),
                 ) as client:
                     attempts_used += 1
-                    async with client.stream(
-                        "POST",
-                        endpoint_url,
-                        headers=headers,
-                        content=json.dumps(request_body),
-                    ) as response:
+                    # Read under its own idle bound, not the stream
+                    # chokepoint's: the waits between attempts below are
+                    # silent by design and must not count as a stall.
+                    async with contextlib.AsyncExitStack() as attempt_scope:
+                        response = await idle_bounded_open(
+                            attempt_scope.enter_async_context(client.stream(
+                                "POST",
+                                endpoint_url,
+                                headers=headers,
+                                content=json.dumps(request_body),
+                            )),
+                            idle_s,
+                            label="gemini-subscription",
+                        )
                         if response.status_code not in (200, 201):
                             error_text_bytes = await response.aread()
                             error_text = error_text_bytes.decode()
@@ -198,7 +223,12 @@ def stream_google_gemini_cli(
                                 endpoint_index += 1
                                 continue
                             if attempts_used < max_attempts and _is_retryable_error(response.status_code, error_text):
-                                delay = extract_retry_delay(error_text) or (
+                                hinted = extract_retry_delay(error_text)
+                                # A quota reset hours away is not sat through
+                                # in-process: the error goes up at once.
+                                if hinted and retry_after_beyond_cap(hinted / 1000):
+                                    raise RuntimeError(f"HTTP {response.status_code}: {error_text}")
+                                delay = hinted or (
                                     _BASE_DELAY_MS * (2 ** (attempts_used - 1))
                                 )
                                 await asyncio.sleep(delay / 1000)
@@ -213,15 +243,15 @@ def stream_google_gemini_cli(
                             return len(blocks) - 1
 
                         _sig = opts.get("signal")
-                        async for line in response.aiter_lines():
+                        async for line in idle_bounded(
+                            _data_lines(response), idle_s, label="gemini-subscription event",
+                        ):
                             # Caller cancel (Stop button): raising unwinds
                             # through ``async with client.stream(...)``, which
                             # closes the connection.
                             if _sig is not None and callable(getattr(_sig, "is_set", None)) and _sig.is_set():
                                 from openprogram.models.providers.utils.errors import StreamAborted
                                 raise StreamAborted("stream cancelled by caller signal")
-                            if not line.startswith("data: "):
-                                continue
                             data_str = line[6:].strip()
                             if not data_str or data_str == "[DONE]":
                                 continue
@@ -364,7 +394,9 @@ def stream_google_gemini_cli(
             # auto-retries it.
             ev_stream.fail(exc)
 
-    asyncio.ensure_future(_run())
+    # Owned by the stream: closing it (a steer, a stop, the idle bound)
+    # cancels the request instead of leaving it to wait on the socket.
+    ev_stream.attach_producer(asyncio.ensure_future(_run()))
     return ev_stream
 
 

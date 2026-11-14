@@ -22,14 +22,23 @@ def board(monkeypatch, tmp_path):
     """Session context + todos.json redirected to a tmp file."""
     monkeypatch.setattr(shared, "current_session_id", lambda: "sess1")
     monkeypatch.setattr(shared, "todos_path", lambda sid: tmp_path / "todos.json")
+    # The selected branch, without a session database behind it.
+    monkeypatch.setattr(shared, "_selected_branch", lambda sid: "main")
+    monkeypatch.setattr(shared, "_parent_branch", lambda sid, bid: None)
     return tmp_path / "todos.json"
+
+
+def _branch(board, branch_id="main"):
+    """One branch's ``{todos, plans}`` as stored in todos.json (version 3)."""
+    blob = json.loads(board.read_text())
+    assert blob["version"] == 3
+    return blob["branches"][branch_id]
 
 
 def test_create_returns_id_and_persists(board):
     out = _todo_create_impl("write tests", "cover the board")
     assert out == "Todo #1 created: write tests"
-    blob = json.loads(board.read_text())
-    (entry,) = blob["todos"]
+    (entry,) = _branch(board)["todos"]
     assert entry["subject"] == "write tests"
     assert entry["description"] == "cover the board"
     assert entry["status"] == "pending"
@@ -57,7 +66,7 @@ def test_update_fields_and_status(board):
     _todo_create_impl("a")
     out = _todo_update_impl("1", status="in_progress", owner="claude")
     assert out == "Todo #1 updated (status, owner)"
-    (entry,) = json.loads(board.read_text())["todos"]
+    (entry,) = _branch(board)["todos"]
     assert entry["status"] == "in_progress"
     assert entry["owner"] == "claude"
 
@@ -138,9 +147,9 @@ def turn(reply_id, *, source="web", agent_id="main"):
         _current_turn_id.reset(token)
 
 
-def _placed(board):
-    blob = json.loads(board.read_text())
-    return [(p["anchor_id"], p["plan_id"], [(t["id"], t["status"]) for t in p["todos"]]) for p in blob["plans"]]
+def _placed(board, branch_id="main"):
+    plans = _branch(board, branch_id)["plans"]
+    return [(p["anchor_id"], p["plan_id"], [(t["id"], t["status"]) for t in p["todos"]]) for p in plans]
 
 
 def test_a_plan_is_placed_under_the_turn_that_made_it(board):
@@ -148,7 +157,6 @@ def test_a_plan_is_placed_under_the_turn_that_made_it(board):
         _todo_create_impl("a")
         _todo_create_impl("b")
         _todo_update_impl("1", status="in_progress")
-    assert json.loads(board.read_text())["version"] == 2
     assert _placed(board) == [("u1_reply", "1", [("1", "in_progress"), ("2", "pending")])]
 
 
@@ -194,7 +202,7 @@ def test_a_sub_agent_plan_is_its_own(board):
         _todo_create_impl("parent step")
     with turn("job7_user_reply", source="agent_spawn", agent_id="worker"):
         _todo_create_impl("worker step")
-    todos = json.loads(board.read_text())["todos"]
+    todos = _branch(board)["todos"]
     assert "scope" not in todos[0]
     assert todos[1]["scope"] == "agent:worker"
     assert _placed(board) == [
@@ -220,10 +228,25 @@ def test_a_version_one_board_still_reads_and_upgrades(board):
     assert "#1 old" in _todo_list_impl()
     with turn("u9_reply"):
         _todo_update_impl("1", status="completed")
-    blob = json.loads(board.read_text())
-    assert blob["version"] == 2
-    assert blob["todos"][0]["status"] == "completed"
+    # The older file's single board now belongs to the selected branch.
+    assert list(json.loads(board.read_text())["branches"]) == ["main"]
+    assert _branch(board)["todos"][0]["status"] == "completed"
     assert _placed(board) == [("u9_reply", "1", [("1", "completed")])]
+
+
+def test_each_branch_keeps_its_own_board(board, monkeypatch):
+    with turn("u1_reply"):
+        _todo_create_impl("main step")
+    # A branch made from main starts with a copy of main's board.
+    monkeypatch.setattr(shared, "_parent_branch", lambda sid, bid: "main" if bid == "side" else None)
+    monkeypatch.setattr(shared, "current_branch_id", lambda sid: "side")
+    with turn("u2_reply"):
+        _todo_update_impl("1", status="completed")
+        _todo_create_impl("side step")
+    assert [(t["id"], t["status"]) for t in _branch(board, "side")["todos"]] == [("1", "completed"), ("2", "pending")]
+    assert [(t["id"], t["status"]) for t in _branch(board, "main")["todos"]] == [("1", "pending")]
+    # The chat draws every branch's placed plans, each under its own turn.
+    assert {p["anchor_id"] for p in shared.load_all_plans("sess1")} == {"u1_reply", "u2_reply"}
 
 
 def test_frames_carry_the_placed_plans(board, monkeypatch):

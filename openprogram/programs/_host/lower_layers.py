@@ -8,9 +8,7 @@ through ports they own, filled in here:
   tools (settings), the Goal tool's marks on transcript messages (the
   session graph);
 * ``models.usage.goal_port`` — the Goal tool's lock, load, publish and
-  usage refresh, which the usage ledger runs around a provider request;
-* ``models.providers.utils.argument_normalizers`` — the browser's
-  ``web_use`` argument normal form, applied by tool-call validation.
+  usage refresh, which the usage ledger runs around a provider request.
 
 Each provider imports its Program module when it is called, never here,
 so loading this module stays cheap and a test that replaces a Goal
@@ -19,9 +17,6 @@ function (``monkeypatch.setattr(goal, "load_goal", ...)`` on the package,
 """
 from __future__ import annotations
 
-from typing import Any
-
-from openprogram.models.providers.utils.argument_normalizers import register_argument_normalizer
 from openprogram.models.usage import goal_port
 from openprogram.state import program_facts
 
@@ -75,16 +70,6 @@ def _goal_accumulate_usage(session_id: str, goal: dict) -> None:
     goals.accumulate_goal_usage(session_id, goal)
 
 
-def _normalize_web_use(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-    """web_use's arguments in the browser's own normal form; refused without the browser."""
-    from openprogram.programs._host import services
-
-    browser = services.lookup("browser")
-    if browser is None:
-        raise ValueError(f'Validation failed for tool "{tool_name}": the browser is not enabled')
-    return browser.normalize_web_use_arguments(arguments)
-
-
 def register() -> None:
     program_facts.register(
         web_search_provider_names=_web_search_provider_names,
@@ -98,7 +83,6 @@ def register() -> None:
         load_goal=_goal_load,
         accumulate_goal_usage=_goal_accumulate_usage,
     )
-    register_argument_normalizer("web_use", _normalize_web_use)
 
 
 __all__ = ["register"]

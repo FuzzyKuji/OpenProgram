@@ -338,6 +338,59 @@ def _attempt(*, resumed: bool, stream: list[dict]) -> B.BoundReply:
     return reply
 
 
+def _restart() -> dict:
+    return {"type": "chat_response", "data": {
+        "type": "stream_event", "session_id": SID, "msg_id": ASSISTANT,
+        "event": {"type": "retry", "attempt": 2, "reason": "transport", "restart": True}}}
+
+
+def _sent(reply: B.BoundReply, final_text: str, posted) -> list[str]:
+    reply.finish(final_text)
+    assert B.wait_for_deliveries(10)
+    return [text for _, _, _, text in posted]
+
+
+def test_a_response_sent_again_does_not_repeat_the_paragraph_already_sent(world):
+    """The failed response had one paragraph out and half of the next; the
+    request goes out again and says the same thing from the start."""
+    _, posted, _, _ = world
+    reply = _attempt(resumed=False, stream=[
+        _text(FIRST), _text("\n\nSecond par"), _restart(),
+        *[_text(part) for part in REPLY_PARTS],
+    ])
+    assert _sent(reply, REPLY, posted) == [FIRST.strip(), "Second part. The end."]
+
+
+def test_a_response_sent_again_with_other_words_is_sent_whole(world):
+    """What went out stays; the unsent half paragraph of the failed response
+    never goes out, and the new response does."""
+    _, posted, _, _ = world
+    other = "A different answer this time."
+    reply = _attempt(resumed=False, stream=[
+        _text(FIRST), _text("\n\nSecond par"), _restart(), _text(other),
+    ])
+    assert _sent(reply, other, posted) == [FIRST.strip(), other]
+
+
+def test_a_response_sent_again_before_anything_went_out_leaves_no_trace(world):
+    _, posted, _, _ = world
+    reply = _attempt(resumed=False, stream=[
+        _text("Half a sentence that"), _restart(), _text("The whole reply."),
+    ])
+    assert _sent(reply, "The whole reply.", posted) == ["The whole reply."]
+
+
+def test_a_restart_voids_only_the_response_being_sent_again(world):
+    """Text before a tool call belongs to a response that ended."""
+    _, posted, _, _ = world
+    reply = _attempt(resumed=False, stream=[
+        _text("I will look."), _tool_use(), _text(FIRST), _text("\n\nSecond par"),
+        _restart(), *[_text(part) for part in REPLY_PARTS],
+    ])
+    assert _sent(reply, "I will look." + REPLY, posted) == [
+        "I will look.", FIRST.strip(), "Second part. The end."]
+
+
 def test_an_app_turn_paused_twice_sends_each_part_once(world):
     """Each attempt sends what it streamed; the final ``final_text``
     repeats the earlier attempts' text, which never goes out again."""

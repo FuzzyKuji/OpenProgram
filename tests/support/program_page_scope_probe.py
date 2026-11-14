@@ -1,9 +1,8 @@
-"""Owned renderer inventory, real Program spawn and registered web_use probe."""
+"""Owned renderer inventory, real Program spawn and the registered screen tool listing its tabs."""
 
 from __future__ import annotations
 import asyncio
 import json
-import inspect
 import os
 from pathlib import Path
 
@@ -27,6 +26,10 @@ if os.environ.get("PAGE_PROBE_RECEIPT"):
     session_store.shared._default_store = DB
     execution.default_store = lambda: STORE
     runtime_factory.create_runtime = lambda **_kw: Runtime(call=lambda *_a, **_k: "unused")
+
+
+# The call that lists the built-in browser's tabs.
+LIST_TABS = {"target": "browser", "action": "tabs", "args": {"all": True}}
 
 
 def _decided(decision):
@@ -53,34 +56,6 @@ def source_identity():
     return paths
 
 
-class OwnedBrowser:
-    """Only the native browser connection is replaced by an owned headless DOM."""
-
-    def __init__(self):
-        self._sessions = {}
-
-    def execute(self, action, **kwargs):
-        if action == "open":
-            from playwright.sync_api import sync_playwright
-            from openprogram.host.resources.desktop_link import request_bound_tab
-
-            resolved = request_bound_tab(kwargs["binding_id"])
-            assert resolved.get("ok"), resolved
-            self.pw = sync_playwright().start()
-            self.browser = self.pw.chromium.launch(headless=True)
-            page = self.browser.new_page()
-            page.set_content(
-                '<title>Owned Page</title><label for="field">Owned field</label><input id="field" value="actual owned DOM receipt">'
-            )
-            self._sessions["br_owned"] = {"page": page}
-            return "Opened `br_owned`"
-        if action == "close":
-            self.browser.close()
-            self.pw.stop()
-            return "closed"
-        raise AssertionError(action)
-
-
 class PageScopeProbeAgent(Agent):
     method_options = {
         "page_scope_probe": {"name": "page_scope_probe", "tool": True},
@@ -92,62 +67,21 @@ class PageScopeProbeAgent(Agent):
             inner_turn_request,
         )
         from openprogram.programs import get_agent_tool
-        import openprogram.programs.applications.browser.web_use as browser
-        from openprogram.programs.applications.browser.web_use.controller import (
-            BrowserPageController,
-        )
-
-        browser._new_controller = lambda: BrowserPageController(
-            browser_api=OwnedBrowser()
-        )
         req = get_turn_request()
         inner = inner_turn_request("program")
-        native = get_agent_tool("web_use")
+        native = get_agent_tool("computer_use_agent")
         gated = runtime._gate_inner_tools([native])[0]
 
         async def calls():
             try:
-                listed = await gated.execute(
-                    "list-owned",
-                    {"command": "list_pages", "backend": "open_claude_chrome"},
-                    None,
-                    None,
-                )
+                listed = await gated.execute("list-owned", dict(LIST_TABS), None, None)
             except RuntimeError as exc:
                 if os.environ.get("PAGE_PROBE_SCENARIO") != "stale_binding":
                     raise
-                return {
-                    "listed_error": True,
-                    "listed": None,
-                    "listed_text": str(exc),
-                    "observed": None,
-                    "observed_error": None,
-                }
-            data = (
-                json.loads("".join(c.text for c in listed.content if not c.text.startswith("[notice]")))
-                if not listed.is_error
-                else None
-            )
-            observed = None
-            if isinstance(data, dict) and data.get("ok") and data.get("pages"):
-                observed = await gated.execute(
-                    "observe-owned",
-                    {
-                        "command": "observe",
-                        "backend": "open_claude_chrome",
-                        "page_context_token": data["pages"][0]["page_context_token"],
-                    },
-                    None,
-                    None,
-                )
+                return {"listed_error": True, "listed_text": str(exc)}
             return {
                 "listed_error": listed.is_error,
-                "listed": data,
-                "listed_text": "".join(c.text for c in listed.content),
-                "observed": json.loads("".join(c.text for c in observed.content if not c.text.startswith("[notice]")))
-                if observed and not observed.is_error
-                else None,
-                "observed_error": observed.is_error if observed else None,
+                "listed_text": "".join(c.text for c in listed.content if hasattr(c, "text")),
             }
 
         result = await calls()
@@ -166,8 +100,6 @@ class PageScopeProbeAgent(Agent):
             inner_scope=inner.surface_context,
             child_mode=req.permission_mode,
             inner_mode=inner.permission_mode,
-            web_use_source=inspect.unwrap(browser.web_use).__code__.co_filename,
-            controller_source=inspect.unwrap(BrowserPageController.execute).__code__.co_filename,
         )
         result["source_identity"] = source_identity()
         return json.dumps(result)
@@ -279,8 +211,8 @@ def main():
 
         req.permission_rules = SimpleNamespace(
             allow=[],
-            deny=["web_use"] if scenario == "deny" else [],
-            ask=["web_use"] if scenario == "ask" else [],
+            deny=["computer_use_agent"] if scenario == "deny" else [],
+            ask=["computer_use_agent"] if scenario == "ask" else [],
         )
     if scenario == "active_plan":
         req.permission_mode = "plan"
@@ -302,7 +234,7 @@ def main():
             save_session_run_config(
                 req.session_id,
                 agent_id="main",
-                permission_rules={behavior: ["web_use"]},
+                permission_rules={behavior: ["computer_use_agent"]},
             )
     from openprogram.runtime.permissions.lifecycle import current_permission_request
     from openprogram.runtime.permissions.policy import permission_decision
@@ -310,7 +242,7 @@ def main():
 
     parent_effective = current_permission_request(req)
     parent_decision = permission_decision(
-        get_agent_tool("web_use"), parent_effective, {"command": "list_pages"}
+        get_agent_tool("computer_use_agent"), parent_effective, dict(LIST_TABS)
     )
     tool = get_agent_tool("page_scope_probe")
     assert tool is page_scope_probe._agent_tool

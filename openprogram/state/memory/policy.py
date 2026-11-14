@@ -375,6 +375,36 @@ class ScopedBackend:
         return self.backend.shutdown()
 
 
+_owner_edit: ContextVar[bool] = ContextVar('memory_owner_edit', default=False)
+
+
+@contextmanager
+def owner_edit():
+    """A person editing the shared memory store by hand, outside any execution.
+
+    Settings and ``openprogram memory edit`` write the store a scope-less
+    call writes (``legacy_global``, or the project layer over it). A
+    background pass without a scope is not this: it never cites a stamped
+    turn, which its own execution's pass writes.
+    """
+    token = _owner_edit.set(True)
+    try:
+        yield
+    finally:
+        _owner_edit.reset(token)
+
+
+def owner_editing() -> bool:
+    """Whether a person is editing memory by hand right now (``owner_edit``)."""
+    return _owner_edit.get()
+
+
+def automatic_writer() -> bool:
+    """Whether the write under way is an automatic one: a writer or the
+    organizer running for an execution, not a person's own edit."""
+    return current() is not None and not _owner_edit.get()
+
+
 def source_matches_execution(message):
     if not eligible(message):
         return False
@@ -383,7 +413,22 @@ def source_matches_execution(message):
     if raw is None:
         return policy is None or (policy.write_space == 'legacy_global' and policy.epoch == 0)
     source = from_snapshot(raw)
+    if policy is None and _owner_edit.get():
+        # The person's own edit cites any conversation that wrote to the
+        # store being edited; one an Agent kept for its own space stays there.
+        return source.write_space == 'legacy_global'
     return policy is not None and (source.agent_id, source.epoch, source.created_at, source.write_space) == (policy.agent_id, policy.epoch, policy.created_at, policy.write_space)
+
+
+def source_refusal(message) -> str:
+    """Why ``source_matches_execution`` refuses this message, for a person."""
+    if not eligible(message):
+        return ('its conversation ran with memory off or read-only, or under an '
+                'Agent memory setting that has changed since, so memory does not learn from it')
+    raw = node_policy(message)
+    if raw is not None and current() is None and from_snapshot(raw).write_space != 'legacy_global':
+        return "it belongs to an Agent's own memory space, not this one"
+    return 'it is outside the conversation this write may cite'
 
 
 def guard_tool(function, *, write=False):

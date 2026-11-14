@@ -198,11 +198,59 @@ class TurnRequest:
     # keeps off the page in front as that turn does (detached_from_window).
     detached: bool = False
 
+    # Stable settings owner; independent of the page-selected branch and HEAD.
+    branch_id: Optional[str] = None
+    # None is a frozen "inherit project/global" choice when the flag is set.
+    # Old requests have no frozen choice and resolve their own branch on bind.
+    sandbox_enabled: Optional[bool] = None
+    sandbox_config_frozen: bool = False
+    # A person's turn on a recorded branch that is not the selected one
+    # (``branch_id``, ``advance_head=False``), running beside the selected
+    # branch's turn: it reads its branch's whole history, moves only its
+    # own branch (compacting it when over budget, and counting its tokens on
+    # it), and leaves the conversation's status, unread dot, model, title
+    # and channel replies to the selected branch.
+    side_branch: bool = False
+    # Frozen at admission: whether this turn carries the conversation's own
+    # effects (its head, status, unread dot, title, the conversation token
+    # count and channel replies). False for a turn on a branch that is not
+    # the selected one and for a background check-in. Read through
+    # ``owns_conversation_effects``; ``None`` only on a request admitted
+    # before the flag existed, which derives it from the two flags above.
+    owns_conversation_effects: Optional[bool] = None
+    # Frozen at admission: the settings this turn runs with, where each came
+    # from, and the Agent they belong to (``freeze_branch_request``). Written
+    # on the turn's user message as ``turn_settings``.
+    turn_settings: Optional[dict[str, Any]] = None
+    # A typed ``/task`` (``"spawn"``) or ``/merge`` (``"merge"``): the turn
+    # carries out that slash action instead of a model round. ``interaction``
+    # keeps the authority's value. A request admitted before this field
+    # marked the action in ``interaction``; read both with ``slash_action_of``.
+    slash_action: Optional[str] = None
+    # A foreground sub-agent's approval questions are shown in its caller's
+    # conversation, which waits on it: ``{"session_id", "execution_id",
+    # "label"}``, frozen at admission (permissions/lifecycle.py
+    # ``spawn_question_route``). None: nobody waits on this turn's questions.
+    asks_through: Optional[dict[str, Any]] = None
+
     def __post_init__(self) -> None:
         if self.profile_snapshot is not None:
             if not isinstance(self.profile_snapshot, dict):
                 raise ValueError("profile_snapshot must be a dict")
             self.profile_snapshot = deepcopy(self.profile_snapshot)
+
+
+def owns_conversation_effects(request: Any) -> bool:
+    """Whether a turn carries the conversation's own effects.
+
+    Read from the flag frozen at admission; the rule lives in
+    :mod:`openprogram.runtime.execution.turn_effects`, below the call core,
+    because the execution control plane reads it too.
+    """
+    from openprogram.runtime.execution.turn_effects import (
+        owns_conversation_effects as read_frozen_flag,
+    )
+    return read_frozen_flag(request)
 
 
 current_turn_request: contextvars.ContextVar[Optional[Any]] = (
@@ -260,8 +308,16 @@ def inner_turn_request(source: str) -> Optional[Any]:
     )
 
 
+def slash_action_of(request: Any) -> Optional[str]:
+    """The slash action a turn request carries out, or ``None`` for a model
+    turn (:func:`openprogram.runtime.execution.slash_actions.slash_action_of`,
+    which recovery reads stored requests with)."""
+    from openprogram.runtime.execution.slash_actions import slash_action_of as _of
+    return _of(request)
+
+
 __all__ = [
-    "PermissionMode", "INHERIT_PARENT", "TurnRequest",
+    "PermissionMode", "INHERIT_PARENT", "TurnRequest", "slash_action_of",
     "current_turn_request", "set_turn_request", "get_turn_request",
-    "reset_turn_request", "inner_turn_request",
+    "reset_turn_request", "inner_turn_request", "owns_conversation_effects",
 ]

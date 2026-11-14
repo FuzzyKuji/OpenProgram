@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { branchTarget } from "@/lib/agents/branch-target";
 import { wsRequest } from "@/lib/net/ws/ws-request";
 import { useSessionScope } from "@/lib/session-store/session-scope";
 
@@ -13,6 +14,7 @@ interface SandboxState {
 }
 
 export function useSandboxToggle(sessionId: string | null, persisted = true) {
+  const branchId = useSessionScope((s) => s.settings.active_branch_id ?? null);
   const sandbox = useSessionScope((s) => s.settings.sandbox !== false);
   const patchSettings = useSessionScope((s) => s.patchSettings);
   const [available, setAvailable] = useState(true);
@@ -36,12 +38,12 @@ export function useSandboxToggle(sessionId: string | null, persisted = true) {
     setReason(null);
     // Provisional drafts already own a local choice; a server read has no row.
     if (sessionId && persisted) {
-      void wsRequest<SandboxState>("set_sandbox", { session_id: sessionId },
+      void wsRequest<SandboxState>("set_sandbox", { session_id: sessionId, ...branchTarget(branchId) },
         "sandbox_changed", { requestId: true, signal: controller.signal },
       ).then((d) => { if (!controller.signal.aborted) apply(d); });
     }
     return () => { controller.abort(); operation.current?.abort(); };
-  }, [sessionId, persisted, apply]);
+  }, [sessionId, branchId, persisted, apply]);
 
   const toggleSandbox = useCallback(() => {
     if (!available || busy.current) return;
@@ -50,14 +52,14 @@ export function useSandboxToggle(sessionId: string | null, persisted = true) {
     operation.current = controller;
     busy.current = true;
     void wsRequest<SandboxState>("set_sandbox",
-      { session_id: sessionId, sandbox_enabled: !sandbox }, "sandbox_changed",
+      { session_id: sessionId, ...branchTarget(branchId), sandbox_enabled: !sandbox }, "sandbox_changed",
       { requestId: true, signal: controller.signal },
     ).then((d) => {
       if (controller.signal.aborted) return;
       busy.current = false;
       if (!apply(d)) setReason("Could not update Sandbox. Reconnect and retry.");
     });
-  }, [available, sandbox, sessionId, apply]);
+  }, [available, sandbox, sessionId, branchId, apply]);
 
   return { sandbox, sandboxAvailable: available, sandboxReason: reason, toggleSandbox };
 }

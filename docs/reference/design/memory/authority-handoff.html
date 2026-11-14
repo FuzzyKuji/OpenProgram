@@ -11,7 +11,7 @@
 <tr><th scope="row">Unpaired</th><td>none</td><td>The message does not reach the agent</td></tr>
 </tbody>
 </table>
-<p class="note">Unpaired is no third tier and no reply-only state: the message is never rendered into model context, which removes that injection surface. The table has one more key, <code translate="no">mcp_browser</code> (<code translate="no">browser.control</code> only), for MCP browser callers; no speaker holds it.</p>
+<p class="note">Unpaired is no third tier and no reply-only state: the message is never rendered into model context, which removes that injection surface.</p>
 
 <h2 id="the-gate">The gate</h2>
 <p><code translate="no">authority_tier</code> is one enum on the request boundary, beside <code translate="no">principal_id</code>, <code translate="no">speaker_kind</code>, <code translate="no">speaker_id</code>, <code translate="no">speaker_display</code> and <code translate="no">interaction</code>. A request carries no capability list a caller could mint.</p>

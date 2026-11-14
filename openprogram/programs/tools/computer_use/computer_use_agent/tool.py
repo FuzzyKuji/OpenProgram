@@ -342,7 +342,6 @@ function(
     # No overall limit, as for the agent tool: every action bounds itself and
     # code stops at its own timeout.
     timeout=None,
-    max_result_chars=60_000,
     path_params={},
     url_params=[],
 )(computer_use_agent)

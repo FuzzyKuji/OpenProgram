@@ -8,21 +8,23 @@
 <thead><tr><th scope="col">该 profile 的 Worker</th><th scope="col">运行位置</th><th scope="col">具备</th></tr></thead>
 <tbody>
 <tr><th scope="row">运行中（桌面 App、<code translate="no">openprogram worker start</code>、前台 <code translate="no">openprogram web</code>）</th><td>该 Worker，在对应的 Web UI 会话里实时显示</td><td>内置浏览器、频道桥接、会话设置</td></tr>
-<tr><th scope="row">没有，或设置了 <code translate="no">OPENPROGRAM_PRINT_IN_PROCESS=1</code></th><td>当前进程</td><td>没有浏览器和频道</td></tr>
+<tr><th scope="row">没有，或用了 <code translate="no">--standalone</code>（<code translate="no">OPENPROGRAM_PRINT_IN_PROCESS=1</code>）</th><td>当前进程</td><td>没有浏览器和频道</td></tr>
 </tbody>
 </table>
 <table class="stack">
 <thead><tr><th scope="col">在 Worker 上</th><th scope="col">结果</th></tr></thead>
 <tbody>
 <tr><th scope="row">Agent 追问</th><td>打印到 stderr，在终端作答。没有终端时不作答，轮次继续。</td></tr>
-<tr><th scope="row">Ctrl-C</th><td>取消这次执行</td></tr>
+<tr><th scope="row">Ctrl-C 或 SIGTERM</th><td>像 Web UI 的停止键一样在 Worker 上停止这一轮，最多等 30 秒让它结束（再来一个信号后等 2 秒）；退出码 130，SIGTERM 为 143。等待中 Worker 重启也不会丢掉这次停止：命令重新连接，在回来的 Worker 上停止这一轮。Worker 没有确认停止时，stderr 会说明这一轮可能仍在运行</td></tr>
+<tr><th scope="row">在 Web UI 里停止</th><td>stderr 打印 <code translate="no">[cancelled]</code>，退出码 130；已输出的部分回复留在会话里</td></tr>
 <tr><th scope="row">Worker 报错</th><td>打印到 stderr，退出码 1</td></tr>
 <tr><th scope="row">Worker 重启（刷新、晋升）</th><td>命令重新连接，跟随同一轮次直到结束</td></tr>
 <tr><th scope="row">三分钟内没有 Worker 回来，或轮次已被中断</th><td>命令会说明；Web UI 会话显示停在哪里</td></tr>
 </tbody>
 </table>
-<p><code translate="no">--print</code> 只接受参数里的字符串，不读 stdin。要带上文件内容：</p>
-<pre translate="no"><code>openprogram --print "审查这段代码：$(cat &lt;file&gt;)"</code></pre>
+<p>管道输入作为 <code translate="no">&lt;stdin&gt;</code> 块随提示一起发送；<code translate="no">-p</code> 是 <code translate="no">--print</code> 的简写，不给提示时提示本身从 stdin 读：</p>
+<pre translate="no"><code>cat &lt;file&gt; | openprogram -p "审查这段代码"
+echo "总结 README" | openprogram -p</code></pre>
 <p><code translate="no">--json-schema PATH</code> 要求输出符合 JSON Schema；<code translate="no">-</code> 表示从 stdin 读 Schema。</p>
 <h2>恢复会话</h2>
 <pre translate="no"><code>openprogram sessions list

@@ -1,13 +1,9 @@
 "use client";
 
 /** The list's non-message states: the pending-reply indicator, the
- *  loading skeleton and the workspace alignment banner. */
+ *  loading skeleton. */
 import { ThinkingStatus } from "../../execution/thinking-status";
-import { useEffect, useRef, useState } from "react";
-import { useSessionStore } from "@/lib/session-store";
-import { useTranslation } from "@/lib/i18n";
-import { getSocket } from "@/lib/runtime-bridge/state";
-import { showToast } from "@/lib/format-utils/toast";
+import { useState } from "react";
 import { MessageTimestamp } from "../../bubbles/message-actions";
 
 /** Pin `#chatArea` to the bottom as `#chatMessages` grows, unless the
@@ -58,6 +54,22 @@ export function PendingReplyIndicator({ timestamp }: { timestamp?: number }) {
   );
 }
 
+/** The running operation that is not a reply, named in the indicator's
+ *  place: "Compacting context…" while /compact runs or a turn compacts.
+ *  It comes from the branch's running task, so a reload shows it again;
+ *  the composer's Stop stops it. */
+export function OperationStatusIndicator({ label, timestamp }: { label: string; timestamp?: number }) {
+  const [fallbackTimestamp] = useState(() => Date.now());
+  return (
+    <div className="message assistant pending-standalone" data-operation-status>
+      <div className="pending-body" role="status" aria-live="polite">
+        <span className="text-muted-foreground">{label}</span>
+        <MessageTimestamp timestamp={timestamp ?? fallbackTimestamp} />
+      </div>
+    </div>
+  );
+}
+
 /** claude.ai-style transcript skeleton — one user-bubble block top
  *  right, then progressively shorter grey bars. Shown while a session
  *  switch is waiting on the load_session reply (no full cache). */
@@ -71,64 +83,6 @@ export function TranscriptSkeleton() {
       <div className="skeleton-bar" style={{ width: "90%" }} />
       <div className="skeleton-bar" style={{ width: "58%" }} />
       <div className="skeleton-bar" style={{ width: "34%" }} />
-    </div>
-  );
-}
-
-export function WorkspaceAlignmentBanner({ sessionId }: { sessionId: string | null }) {
-  const { text } = useTranslation();
-  const restoreRequest = useRef<string | null>(null);
-  const alignment = useSessionStore((state) =>
-    sessionId ? state.conversations[sessionId]?.workspace_alignment : undefined,
-  );
-  useEffect(() => {
-    const clear = (event: Event) => {
-      const detail = (event as CustomEvent).detail ?? {};
-      if (detail.session_id === sessionId) restoreRequest.current = null;
-    };
-    window.addEventListener("workspace-alignment-response", clear);
-    return () => window.removeEventListener("workspace-alignment-response", clear);
-  }, [sessionId]);
-  if (!sessionId || alignment?.status !== "mismatch") return null;
-  const resolve = (decision: "keep_current_files" | "restore_branch_code") => {
-    const socket = getSocket();
-    if (!socket || socket.readyState !== WebSocket.OPEN) {
-      showToast(text("Not connected", "连接已断开"));
-      return;
-    }
-    if (decision === "restore_branch_code" && !restoreRequest.current) {
-      restoreRequest.current = crypto.randomUUID();
-    }
-    socket.send(JSON.stringify({
-      action: "resolve_workspace_alignment",
-      session_id: sessionId,
-      decision,
-      idempotency_key: decision === "restore_branch_code"
-        ? restoreRequest.current
-        : undefined,
-      source_head_id: alignment.source_head_id,
-      target_head_id: alignment.target_head_id,
-    }));
-  };
-  return (
-    <div className="workspace-alignment-banner" role="status">
-      <b>{text(
-        "Conversation and workspace are not aligned",
-        "对话与工作区未对齐",
-      )}</b>
-      <span>{text(
-        "Choose which file state the next editing turn should use.",
-        "请选择下一次文件修改要使用的文件状态。",
-      )}</span>
-      <div>
-        <button type="button" onClick={() => resolve("keep_current_files")}>
-          {text("Keep current files", "保留当前文件")}
-        </button>
-        <button type="button" onClick={() => resolve("restore_branch_code")}>
-          {text("Restore branch code", "恢复分支代码")}
-        </button>
-        <small>{text("File edits paused", "文件修改已暂停")}</small>
-      </div>
     </div>
   );
 }

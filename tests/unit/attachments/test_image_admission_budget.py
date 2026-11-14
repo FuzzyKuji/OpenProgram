@@ -23,14 +23,22 @@ def test_image_larger_than_text_budget_is_preserved_without_mutating_input():
     assert result is not original
 
 
-def test_image_does_not_exempt_large_instruction_or_metadata():
+def test_image_does_not_exempt_large_metadata():
     original = payload("eA==", filename="n" * (256 * 1024))
     with pytest.raises(AgentDriverError, match="size limit"):
         normalize_agent_turn_payload(original)
+
+
+def test_the_message_has_its_own_budget_beside_an_image():
+    """The person's message is measured against the one-message limit, not
+    the 256 KiB envelope: what the composer accepts is admitted."""
     original = payload("eA==")
     original["request"]["user_text"] = "t" * (256 * 1024)
-    with pytest.raises(AgentDriverError, match="size limit"):
+    assert normalize_agent_turn_payload(original)["request"]["user_text"] == "t" * (256 * 1024)
+    original["request"]["user_text"] = "t" * (1024 * 1024 + 1)
+    with pytest.raises(AgentDriverError, match="size limit") as refused:
         normalize_agent_turn_payload(original)
+    assert refused.value.code == "input_too_large"
 
 
 @pytest.mark.parametrize(

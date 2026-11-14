@@ -6,7 +6,6 @@ globals, and the public ``main`` entry point. All ``_cmd_<verb>`` and
 
     programs.py  — programs list/new/edit/run/app, configure, runtime
     skills.py    — skills list/doctor/install, install_skills
-    browser.py   — browser install/status/refresh/reset/list/rm
     sessions.py  — sessions list/resume
     agents.py    — agents list/add/rm/show/set-default
     channels.py  — accounts + bindings + login

@@ -45,6 +45,7 @@ from . import diarize as _diarize
 from . import summary as _summary
 from . import system_audio as _system_audio
 from . import transcript as _transcript
+from openprogram.host._platform.filesystem import replace_file
 
 TRACKS = ("mic", "system")
 MAX_SECONDS = 4 * 3600
@@ -88,7 +89,7 @@ def language_of(value: Any) -> str:
 def _write_json(path: Path, value: Any) -> None:
     temp = path.with_name(path.name + ".tmp")
     temp.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(temp, path)
+    replace_file(temp, path)
 
 
 def _read_json(path: Path, default: Any = None) -> Any:

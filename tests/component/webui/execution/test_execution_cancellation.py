@@ -156,9 +156,12 @@ def test_ws_execution_cancel_returns_canonical_status_and_releases_occupancy(
             },
         )
     )
-    rejected = ws.frames[-2]["command"]
-    assert rejected["status"] == "rejected"
-    assert rejected["latest_snapshot"]["status_version"] == execution.status_version
+    # A stop of an ended execution, whatever version it names, is answered
+    # with the final state: not a refusal, and no command is written.
+    ended = ws.frames[-2]["command"]
+    assert ended["status"] == "already_terminal"
+    assert ended["latest_snapshot"]["status_version"] == execution.status_version
+    assert store.get_command("cancel-web-stale") is None
 
 
 def test_ws_rejected_control_does_not_publish_an_unauthorized_snapshot(
@@ -278,8 +281,8 @@ def test_http_execution_cancel_returns_canonical_status_and_body(
             "expected_version": 999,
         },
     )
-    assert stale.status_code == 409
-    assert stale.json()["command"]["status"] == "rejected"
+    assert stale.status_code == 200
+    assert stale.json()["command"]["status"] == "already_terminal"
     latest = store.get_execution(record.execution_id)
     assert latest is not None
     assert (

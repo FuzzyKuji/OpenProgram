@@ -57,6 +57,11 @@ _working_dirs_var: contextvars.ContextVar[Optional[list]] = contextvars.ContextV
 _plan_mode_var: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "_plan_mode_var", default=False,
 )
+# A conversation's own turn gets the deferred-tool catalog beside its message
+# (``turn_context`` section ``deferred_catalog``), not in its prompt.
+_catalog_beside_var: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "_catalog_beside_var", default=False,
+)
 # L2 builders describe this one call; what they read about it (the turn's
 # surface context, whether its browser tools are on …) rides this var.
 _turn_var: contextvars.ContextVar[Optional[dict]] = contextvars.ContextVar(
@@ -228,6 +233,55 @@ def prompt_sections(text: str) -> Optional[list[dict]]:
     return [dict(row) for row in found] if found else None
 
 
+#: Prompts a turn composed from a built prompt and text it appended, by
+#: text, as ``(name, part)`` pairs that join back to the text.
+_RECENT_PARTS: dict[str, list[tuple[str, str]]] = {}
+
+
+def prompt_parts(text: str) -> Optional[list[tuple[str, str]]]:
+    """``text`` cut into the named parts it was composed from in this
+    process, joining back to it exactly; None for any other text. The
+    prompt-cache check names a changed part by these
+    (``models/providers/recording/capture.py``)."""
+    composed = _RECENT_PARTS.get(text)
+    if composed is not None:
+        return list(composed)
+    sections = _RECENT_SECTIONS.get(text)
+    if not sections:
+        return None
+    parts: list[tuple[str, str]] = []
+    pos = len(_FENCE_OPEN)
+    for index, row in enumerate(sections):
+        start = pos if index == 0 else pos - len(_SEPARATOR)
+        pos += int(row.get("chars") or 0)
+        parts.append((str(row.get("name") or "other"), text[start:pos]))
+        pos += len(_SEPARATOR)
+    if parts:
+        name, first = parts[0]
+        parts[0] = (name, text[:len(_FENCE_OPEN)] + first)
+        consumed = sum(len(part) for _name, part in parts)
+        if consumed < len(text):
+            parts.append(("other", text[consumed:]))
+    return parts
+
+
+def remember_composed(parts: list[tuple[str, str]]) -> str:
+    """Join ``parts`` into the prompt a turn sends and remember its parts; a
+    part named ``base`` that is a built prompt is cut into its sections."""
+    named: list[tuple[str, str]] = []
+    for name, part in parts:
+        if not part:
+            continue
+        built = prompt_parts(part) if name == "base" else None
+        named.extend(built or [(name, part)])
+    text = "".join(part for _name, part in named)
+    _RECENT_PARTS.pop(text, None)
+    _RECENT_PARTS[text] = named
+    while len(_RECENT_PARTS) > _RECENT_SECTIONS_MAX:
+        _RECENT_PARTS.pop(next(iter(_RECENT_PARTS)))
+    return text
+
+
 def split_sections(text: str, sections: list[dict]) -> list[tuple[str, str]]:
     """Cut a recorded prompt back into ``(component, block)`` pairs using
     the lengths :func:`prompt_sections` gave. Text past the last section
@@ -252,6 +306,7 @@ def build_system_prompt(
     additional_working_dirs: Optional[list] = None,
     plan_mode: bool = False,
     chat_delivery: Optional[str] = None,
+    catalog_beside: bool = False,
 ) -> str:
     """Compose the system prompt from registered L0 + L1-project components.
 
@@ -263,7 +318,11 @@ def build_system_prompt(
     that emit platform-specific rendering guidance. ``tools`` drives the
     tool-runtime block and the deferred-tool catalog; ``plan_mode`` appends
     the plan-mode reminder. ``chat_delivery`` marks a conversation turn (see
-    ``_chat_delivery_var``); only those are told they are messaging someone."""
+    ``_chat_delivery_var``); only those are told they are messaging someone.
+    ``catalog_beside`` leaves the deferred-tool catalog out: the
+    conversation's own turn sends it beside its message instead, so a tool
+    that appears or goes never changes the prompt."""
+    t_catalog = _catalog_beside_var.set(catalog_beside)
     try:
         sections = assemble_sections(
             agent, ["L0", "L1"],
@@ -283,6 +342,8 @@ def build_system_prompt(
     except Exception:
         inline = _attr(agent, "system_prompt", "") or ""
         return str(inline).strip()
+    finally:
+        _catalog_beside_var.reset(t_catalog)
 
 
 # Builders for the existing 5 blocks (migrated from system_prompt)
@@ -383,6 +444,55 @@ def _git_root(cwd: str) -> str:
     return str(root) if root else ""
 
 
+def _shell_line(profile: Any) -> str:
+    syntax = profile.syntax
+    return f"{profile.name} ({profile.path})" + (f" — {syntax}" if syntax else "")
+
+
+def _command_shell_note(env: Any) -> str:
+    """The shell the command tool runs in, as ``command_shell.resolve_shell``
+    decides it for this environment and the sandbox in force.
+
+    Not ``$SHELL`` or ``COMSPEC``: those name the user's terminal shell
+    (zsh, cmd.exe), and a command never runs in cmd.exe. With the sandbox
+    on it is the sandbox's bash, which on Windows is a Linux one in WSL;
+    the host shell then runs only a command approved to leave the sandbox.
+    A remote environment has its own line and its own shell.
+    """
+    try:
+        from openprogram.host._platform.command_shell import resolve_shell
+        profile = resolve_shell(env)
+    except Exception:
+        return ""
+    if profile.kind == "remote":
+        return ""
+    if not profile.sandboxed:
+        return f" · Shell: {_shell_line(profile)}"
+    note = f" · Shell: {profile.name} ({profile.path})"
+    if profile.kind != "wsl-bash":
+        return note
+    return (f"{note} — sandboxed commands are Linux commands: write bash syntax and Linux paths; "
+            "the working directory is the WSL path of the Windows one (C:\\ is usually /mnt/c). "
+            f"A command approved to run outside the sandbox runs in {_shell_line(profile.host)}")
+
+
+def worktree_notice(cwd: str) -> str:
+    """One line when the turn runs in an agent worktree, as Claude Code's
+    ``buildWorktreeNotice`` tells a forked agent: where the checkout is,
+    that it is untouched, and that earlier paths and reads refer to it."""
+    try:
+        from openprogram.state.worktree.store import active_at_path
+        wt = active_at_path(cwd)
+    except Exception:
+        return ""
+    if wt is None:
+        return ""
+    return (f"Isolated worktree: this work runs in a git worktree of {wt.source_repo} on branch "
+            f"{wt.branch_name}. The checkout at {wt.source_repo} stays as it is until the person "
+            "merges this work. Paths into that checkout from earlier messages name the same files "
+            "here by their relative path; re-read a file here before editing it.")
+
+
 def environment_block(tools: Optional[list] = None,
                       additional_working_dirs: Optional[list] = None,
                       channel: str = "") -> str:
@@ -398,18 +508,20 @@ def environment_block(tools: Optional[list] = None,
         osname = _platform.system() or _os.name
     except Exception:
         osname = _os.name
-    shell = _os.environ.get("SHELL") or _os.environ.get("COMSPEC") or ""
-    cwd = current_worktree_path() or get_default_workdir()
-    lines = [f"OS: {osname}" + (f" · Shell: {shell}" if shell else ""),
-             f"Working directory: {cwd}"]
-    root = _git_root(cwd)
-    if root:
-        lines.append(f"Git repository: {root}")
     try:
         from openprogram.host.environments import current_environment
         env = current_environment()
     except Exception:
         env = None
+    cwd = current_worktree_path() or get_default_workdir()
+    lines = [f"OS: {osname}" + _command_shell_note(env),
+             f"Working directory: {cwd}"]
+    root = _git_root(cwd)
+    if root:
+        lines.append(f"Git repository: {root}")
+    notice = worktree_notice(str(cwd))
+    if notice:
+        lines.append(notice)
     if env is not None and env.kind == "ssh":
         lines.append(f"Runs on SSH host {env.ssh_target} ({env.name}): shell and file tools act on "
                      "that machine, and paths are remote paths.")
@@ -461,11 +573,17 @@ def _build_chat_surface(agent: Any) -> str:
     return ""
 
 
-def _build_date(agent: Any) -> str:
-    """Today's date at day granularity (not minute) — stable within a day,
-    cache-friendly. See design §四'·4."""
+def current_date_note(today: Any = None) -> str:
+    """Today's date as the line a turn sends beside its message.
+
+    Not part of the system prompt: the date changes at midnight with nothing
+    else changing, and in the system prompt it would end every cached prefix
+    (Codex's instructions come before tools and input). A turn's message
+    carries the date it was sent on, stored on its node, so earlier turns
+    render the same bytes after midnight; Codex sends the date the same way,
+    in the environment context of the turn's input."""
     import datetime as _dt
-    today = _dt.date.today()
+    today = today or _dt.date.today()
     return today.strftime("Today is %A, %B %d, %Y.")
 
 
@@ -511,9 +629,10 @@ def _web_rules() -> str:
 
 def _build_deferred_catalog(agent: Any) -> str:
     """Layer 6 catalog: the deferred tools' names, so the model can discover
-    (and ``tool_search``) them even though their schemas aren't shipped."""
+    (and ``tool_search``) them even though their schemas aren't shipped.
+    Left out of a conversation's own prompt (``catalog_beside``)."""
     tools = _tools_var.get()
-    if not tools:
+    if not tools or _catalog_beside_var.get():
         return ""
     from openprogram.programs import (
         deferred_catalog_text, split_tools_for_dispatch,
@@ -601,7 +720,7 @@ def _build_capabilities(agent: Any) -> str:
 # The system prompt, top to bottom. Most stable first, so the cached prefix
 # survives the longest:
 #   L0 — the same in every session of this agent.
-#   L1 — this session and project; the date and plan mode at the very end.
+#   L1 — this session and project; plan mode at the very end.
 register(ContextComponent("base", "L0", 10, _build_base))
 # Output style shapes how replies are written; the agent's own instructions
 # come after it and win on any conflict.
@@ -616,12 +735,12 @@ register(ContextComponent("memory", "L1", 30, _build_memory))
 # Order 35 in L1 is the conversation package's "open_work" section, which
 # it registers on import (openprogram.runtime.conversation.context_registration).
 register(ContextComponent("capabilities", "L1", 40, _build_capabilities))
-# The date is the one component guaranteed to change on its own — at
-# midnight, without anything in the session changing. At the tail only what
-# follows it loses the cache.
-register(ContextComponent("current_date", "L1", 85, _build_date))
-# Plan mode last: it overrides everything above it, and it toggles, so keeping
-# it at the tail limits the cache-prefix damage when it flips.
+# No date here: it changes at midnight on its own, so it rides each turn's
+# message instead (``current_date_note``, ``context.render.turn_block``).
+# Plan mode last: it overrides everything above it. Only a turn with a prompt
+# of its own has it here; the conversation's own turn gets it beside its
+# message (``conversation.plan_mode.note_for``), so entering and leaving Plan
+# never rebuilds the conversation's prompt.
 register(ContextComponent("plan_mode", "L1", 90, _build_plan_mode))
 
 
@@ -670,5 +789,6 @@ __all__ = [
     "register",
     "assemble",
     "build_system_prompt",
+    "current_date_note",
     "detect_injection_patterns",
 ]

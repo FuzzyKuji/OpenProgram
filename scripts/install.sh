@@ -28,7 +28,6 @@
 #   curl -fsSL .../scripts/install.sh | bash    # full development install
 #   ./scripts/install.sh                   # full install (everything above)
 #   ./scripts/install.sh --python /p/bin/python   # pick the interpreter
-#   ./scripts/install.sh --stealth         # + stealth browsers (patchright/camoufox)
 #   ./scripts/install.sh --target DIR      # where to clone when run off the web (default ~/OpenProgram)
 #   ./scripts/install.sh --yes             # skip every prompt, use defaults (-y)
 #
@@ -89,14 +88,13 @@ else
 fi
 
 # ---- args -------------------------------------------------------------------
-PYTHON_BIN=""; WITH_STEALTH=0
+PYTHON_BIN=""
 CLONE_TARGET=""; ASSUME_YES=0; BOOTSTRAPPED=0; BOOTSTRAP_ONLY=0
 FORWARD_ARGS=()   # rebuilt to forward across the bootstrap exec
 while [ $# -gt 0 ]; do
   case "$1" in
     --minimal) die "--minimal was removed: development installs include the complete product" ;;
     --python) PYTHON_BIN="${2:?--python needs a path}"; FORWARD_ARGS+=("$1" "$2"); shift 2 ;;
-    --stealth) WITH_STEALTH=1; FORWARD_ARGS+=("$1"); shift ;;
     --programs) [ $# -ge 2 ] || die "--programs needs a value"; warn "--programs was removed; install Programs with: openprogram programs install <source>"; shift 2 ;;
     --target) CLONE_TARGET="${2:?--target needs a directory}"; shift 2 ;;   # consumed by bootstrap, not forwarded
     -y|--yes) ASSUME_YES=1; FORWARD_ARGS+=("$1"); shift ;;
@@ -228,15 +226,6 @@ install_default_extras() {
   "$PY" -m playwright install chromium
 }
 
-# ---- 8. heavier opt-in extras: stealth browsers ------------------------------
-install_extras() {
-  if [ "$WITH_STEALTH" = "1" ]; then
-    step "installing stealth browser (patchright + camoufox)"; PIP install -e "$HOST_ROOT[browser-stealth]"
-    "$PY" -m patchright install chromium || warn "patchright install chromium failed"
-    "$PY" -m camoufox fetch || warn "camoufox fetch failed"
-  fi
-}
-
 # ---- 9. verify the product extras import --------------------------------------
 verify_product_extras() {
   "$PY" - <<'PY'
@@ -253,7 +242,6 @@ step "OpenProgram development setup  (os=$OS)"
 install_web
 install_tui
 install_default_extras
-install_extras
 verify_product_extras
 
 # ---- done --------------------------------------------------------------------

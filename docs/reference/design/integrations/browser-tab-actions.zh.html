@@ -24,6 +24,7 @@
 <tr><th scope="row">保留</th><td>驱动从快照里记下每个 ref 的角色和名称。</td></tr>
 <tr><th scope="row">查找</th><td>解析不到的 ref 按这对角色和名称重新查找，直接用 <code translate="no">role</code> 和 <code translate="no">name</code> 指定的元素也这样找。</td></tr>
 <tr><th scope="row">失败</th><td>仍然找不到时，动作以 <code translate="no">element_gone</code> 失败，并附上页面的当前状态。</td></tr>
+<tr><th scope="row">用户的浏览器</th><td>在用户的 Chrome 或 Edge 里，ref 原样交给 Playwright MCP，<code translate="no">role</code> 加 <code translate="no">name</code> 则作为定位器 <code translate="no">getByRole(role, { name, exact: true })</code> 交给它，它的 <code translate="no">target</code> 除 ref 外也接受定位器。定位器匹配到多个元素时以 <code translate="no">ambiguous_element</code> 失败，一个也没匹配到时以 <code translate="no">element_gone</code> 失败；针对元素的动作没有指明元素时，在发出任何请求之前以 <code translate="no">target_required</code> 失败。</td></tr>
 </tbody>
 </table>
 
@@ -74,10 +75,11 @@
 <tbody>
 <tr><th scope="row">能读到什么</th><td><code translate="no">evaluate</code> 能读到已登录页面持有的一切，包括快照遮盖掉的内容。</td></tr>
 <tr><th scope="row">授权</th><td>它是操作浏览器的一部分：在内置浏览器里随 Page 授权运行，在用户的 Chrome 或 Edge 里随那个浏览器的授权运行（<code translate="no">computer_use_agent(browser:chrome)</code>）。</td></tr>
-<tr><th scope="row">标记</th><td><code translate="no">page_script</code> 标出带 <code translate="no">evaluate</code> 步骤（单步或在 <code translate="no">actions</code> 里）的 <code translate="no">computer_use_agent</code> 浏览器调用，以及 <code translate="no">web_use</code> 的 evaluate；策略只用这个标记做一件事：这一轮由所有者以外的人发起时拒绝这类调用（<code translate="no">IDENTITY_PAGE_SCRIPT</code>：外部 MCP 客户端、别人设置的 agent 或定时任务）。</td></tr>
+<tr><th scope="row">标记</th><td><code translate="no">page_script</code> 标出带 <code translate="no">evaluate</code> 步骤（单步或在 <code translate="no">actions</code> 里）的 <code translate="no">computer_use_agent</code> 浏览器调用；策略只用这个标记做一件事：这一轮由所有者以外的人发起时拒绝这类调用（<code translate="no">IDENTITY_PAGE_SCRIPT</code>：外部 MCP 客户端、别人设置的 agent 或定时任务）。</td></tr>
 <tr><th scope="row">代码模式</th><td>代码模式的校验器对代码调用里的 <code translate="no">evaluate</code> 步骤用同一个判断（<code translate="no">identity.unattended</code>）。</td></tr>
 <tr><th scope="row">卡片</th><td>询问带脚本的调用时，卡片完整展示参数。</td></tr>
 <tr><th scope="row">脱敏</th><td>结果经过同样的密码遮盖。</td></tr>
+<tr><th scope="row">元素</th><td>带 <code translate="no">ref</code>（或 <code translate="no">role</code> 和 <code translate="no">name</code>）时，函数脚本的参数就是那个元素。</td></tr>
 <tr><th scope="row">写法</th><td>函数脚本直接调用；其他脚本像控制台那样运行：先当表达式解析，不行就当多条语句（最后一条的值是结果），再不行（有 <code translate="no">await</code> 时）当 async 函数体（<code translate="no">return</code> 的值是结果），所以只运行一次；返回的 Promise 最多等 30 秒（<code translate="no">SCRIPT_SECONDS</code>）。</td></tr>
 <tr><th scope="row">错误</th><td>脚本抛错时以 <code translate="no">script_error</code> 失败，带页面自己的错误信息。</td></tr>
 <tr><th scope="row">上限</th><td>脚本上限 8000 字符，结果上限 20,000 字符。</td></tr>

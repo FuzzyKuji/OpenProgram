@@ -960,7 +960,6 @@ function checkPreloadWindowIdentity(...args) { return webtabChecks.checkPreloadW
 
 function checkPreloadPopupSubscription(...args) { return webtabChecks.checkPreloadPopupSubscription(...args); }
 
-function checkPreloadHumanInputSubscription(...args) { return webtabChecks.checkPreloadHumanInputSubscription(...args); }
 
 function checkPreloadLocalFilePath(...args) { return webtabChecks.checkPreloadLocalFilePath(...args); }
 
@@ -1113,7 +1112,6 @@ Promise.all([
   .then(async () => {
     checkPreloadWindowIdentity();
     checkPreloadPopupSubscription();
-    checkPreloadHumanInputSubscription();
     checkPreloadLocalFilePath();
     checkPreloadTabTransfer();
     checkContextMenuEndAlignment();

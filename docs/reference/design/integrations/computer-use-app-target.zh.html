@@ -11,7 +11,7 @@
 <tbody>
 <tr><th scope="row">读取</th><td><code translate="no">list_apps</code>、<code translate="no">list_windows</code>、<code translate="no">get_app_state</code>（<code translate="no">include</code> = all / tree / screenshot，<code translate="no">window</code> 或 <code translate="no">window_id</code>）、<code translate="no">zoom</code>（以完整像素密度查看上一张截图的一块区域）、<code translate="no">find</code>（在上一棵树里按文字和角色查找）。</td></tr>
 <tr><th scope="row">执行</th><td>，即 Codex 的目标 API：<code translate="no">click</code>（按钮、次数、按住的修饰键、按住时长）、<code translate="no">type_text</code>、<code translate="no">press_key</code>、<code translate="no">set_value</code>、<code translate="no">scroll</code>（按页或按像素）、<code translate="no">drag</code>、<code translate="no">perform_secondary_action</code>、<code translate="no">select_text</code>、<code translate="no">paste</code>；以及来自 Claude App <code translate="no">app_*</code> 一组的 <code translate="no">copy</code>、<code translate="no">focus</code>、<code translate="no">menu</code>、<code translate="no">show_window</code>；还有 <code translate="no">open_file</code>（macOS）。</td></tr>
-<tr><th scope="row">多个步骤</th><td>（<code translate="no">actions</code>）：对同一个应用按顺序执行至多 20 个执行类步骤，遇到第一个错误即停止；最后只等待稳定一次、只返回一次状态。</td></tr>
+<tr><th scope="row">多个步骤</th><td>（<code translate="no">actions</code>）：对同一个应用按顺序执行至多 20 个执行类步骤，遇到第一个错误即停止；最后只等待稳定一次、只返回一次状态。末尾的 <code translate="no">get_app_state</code> 步骤决定这份状态是什么：只要树、完整的树，或另一个窗口。</td></tr>
 </tbody>
 </table>
 

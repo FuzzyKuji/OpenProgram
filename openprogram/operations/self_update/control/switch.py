@@ -33,6 +33,7 @@ from ..versions.layout import Layout
 from .held_turns import count as count_held
 from .maintenance import enter_maintenance, leave_maintenance
 from .rollback_intent import RECOVERY_SECONDS, begin_rollback
+from openprogram.host._platform import filesystem
 
 _log = logging.getLogger(__name__)
 
@@ -545,7 +546,7 @@ class SwitchController:
             source = self.directory / name
             if source.exists():
                 keep.mkdir(exist_ok=True)
-                os.replace(source, keep / name)
+                filesystem.replace_file(source, keep / name)
 
     def _quiescing(self) -> None:
         record = self._record()

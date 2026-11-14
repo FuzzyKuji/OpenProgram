@@ -51,8 +51,23 @@
     $Manifest = (& $Curl --disable --proto "=https" --tlsv1.2 --location --silent --fail `
         --connect-timeout 15 "https://github.com/$Repository/releases/download/v$Version/release-manifest.json" | Out-String)
     if ($LASTEXITCODE -eq 0 -and $Manifest.Trim()) {
-        if (-not $Manifest.Contains("OpenProgram-$Version-runtime-windows-$Arch.zip") -and
-            -not $Manifest.Contains("OpenProgram-$Version-seed-windows-$Arch.tar.gz")) {
+        $Listed = $Manifest.Contains("OpenProgram-$Version-runtime-windows-$Arch.zip") -or
+            $Manifest.Contains("OpenProgram-$Version-seed-windows-$Arch.tar.gz")
+        # Windows 11 on Arm (build 22000 and later) runs the x64 package under
+        # emulation; the installer picks it and says so.
+        $Emulated = $Arch -eq "arm64" -and [Environment]::OSVersion.Version.Build -ge 22000 -and (
+            $Manifest.Contains("OpenProgram-$Version-runtime-windows-x86_64.zip") -or
+            $Manifest.Contains("OpenProgram-$Version-seed-windows-x86_64.tar.gz"))
+        if (-not $Listed -and $Emulated) {
+            # The installer comes from the release's own tag, and only one that
+            # picks the x64 package itself can use it; an earlier one would
+            # download and then stop on the missing Arm package.
+            $Tagged = (& $Curl --disable --proto "=https" --tlsv1.2 --location --silent --fail `
+                --connect-timeout 15 --retry 3 `
+                "https://raw.githubusercontent.com/$Repository/v$Version/scripts/release/install-release.ps1" | Out-String)
+            $Emulated = $LASTEXITCODE -eq 0 -and $Tagged.Contains("function Select-PackageArchitecture")
+        }
+        if (-not $Listed -and -not $Emulated) {
             throw "OpenProgram $Version has no command-line package for Windows on $Arch. What this release includes is listed at $ReleasesPage/tag/v$Version. To install from source instead, see $InstallGuide#development-checkout"
         }
     }

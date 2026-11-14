@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 import time
 from pathlib import Path
 
@@ -121,6 +122,72 @@ def test_a_deleted_node_and_a_branch_move_make_the_window_stale(chat) -> None:
     assert [change["reason"] for change in _changes(chat) if change["kind"] == "window_stale"] == ["branch", "structure"]
 
 
+def _first_row_of_read(chat) -> dict:
+    """The first row of the newest read in the timeline."""
+    read = next(step["read"] for step in reversed(chat.timeline) if "read" in step)
+    loaded = next(frame["data"] for frame in read["frames"] if frame["type"] == "session_loaded")
+    return loaded["turns"][0]["rows"][0]
+
+
+def test_a_turn_on_a_branch_that_is_not_shown_moves_the_arrow_that_leads_to_it(chat) -> None:
+    rows = Rows(chat)
+    rows.turn("b")
+    rows.last = "ROOT"
+    rows.turn("a")
+    rows.finish()
+    chat.client_read("open")
+    chat.wait_published()
+    assert _first_row_of_read(chat)["prevSiblingId"] == "b_reply"
+    chat.timeline.clear()
+    # The other branch's turn: its rows hang from that branch's tip and the head stays.
+    rows.add("b2", "user", "b2 prompt", chain=False, predecessor="b_reply")
+    rows.add("b2_reply", "assistant", "the other branch's reply", chain=False, predecessor="b2", status="done")
+    chat.wait_published()
+    assert chat.sessions.get_session(chat.session_id)["head_id"] == "a_reply"
+    assert not any(change["kind"] in ("window_stale", "turn_upsert", "row_upsert") for change in _changes(chat))
+    arrow = [change for change in _changes(chat) if change["kind"] == "row_patch" and change["rowId"] == "a"]
+    assert arrow and arrow[-1]["turnId"] == "a" and arrow[-1]["fields"] == {"prevSiblingId": "b2_reply"}
+    chat.client_read("again")
+    chat.wait_published()
+    assert _first_row_of_read(chat)["prevSiblingId"] == "b2_reply", "the patch says what a read says"
+    # A row on the shown branch moves no arrow.
+    chat.timeline.clear()
+    rows.turn("a2")
+    rows.finish()
+    chat.wait_published()
+    assert not any(change["kind"] == "row_patch" and "prevSiblingId" in change["fields"] for change in _changes(chat))
+
+
+def test_a_read_that_already_shows_the_moved_arrow_does_not_hide_the_move(chat, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The step that follows another branch's write runs after a second read
+    has rebuilt the view; the holder that read first still gets the patch."""
+    rows = Rows(chat)
+    rows.turn("b")
+    rows.last = "ROOT"
+    rows.turn("a")
+    rows.finish()
+    chat.wait_published()
+    chat.client_read("open")
+    assert _first_row_of_read(chat)["prevSiblingId"] == "b_reply"
+    chat.timeline.clear()
+    live = publisher.current()
+    second_read_done = threading.Event()
+    publish_session = live._publish_session
+
+    def after_the_second_read(session_id, dirty):
+        assert second_read_done.wait(10)
+        return publish_session(session_id, dirty)
+
+    monkeypatch.setattr(live, "_publish_session", after_the_second_read)
+    rows.add("b2", "user", "b2 prompt", chain=False, predecessor="b_reply")
+    chat.client_read("another socket's read")
+    assert _first_row_of_read(chat)["prevSiblingId"] == "b2"
+    second_read_done.set()
+    chat.wait_published()
+    arrow = [change for change in _changes(chat) if change["kind"] == "row_patch" and change["rowId"] == "a"]
+    assert arrow and arrow[-1]["fields"] == {"prevSiblingId": "b2"}
+
+
 def test_the_dag_panel_is_told_about_an_attach(chat) -> None:
     rows = _opened(chat)
     sent: list[str] = []
@@ -132,17 +199,24 @@ def test_the_dag_panel_is_told_about_an_attach(chat) -> None:
     assert any(json.loads(item)["type"] == "branches_changed" for item in sent)
 
 
-def test_a_rebuilt_view_reports_a_number_its_holders_have_not_seen(chat) -> None:
+def test_a_view_rebuilt_while_publishing_counts_on_from_the_number_its_holders_hold(chat) -> None:
+    """The rebuild's own update starts at the holders' cursor, so it applies
+    without a repair read; every later update reports a number nobody has seen.
+    Each write is published on its own, so the two never share one update."""
     rows = _opened(chat)
-    cursor = turn_index.cached_view(chat.session_id).revision
     held = turn_index.cached_view(chat.session_id)
+    cursor = held.revision
     rows.add("event", "system", "an event", kind="event")
+    chat.wait_published()
+    assert turn_index.cached_view(chat.session_id) is not held
+    rebuilt = _updates(chat)[-1]
+    assert rebuilt["previous"] == cursor and rebuilt["revision"] > cursor
     rows.add("card", "assistant", "agent", chain=False, predecessor="a_reply", display="runtime", function="attach",
              attach={"session_id": chat.session_id, "status": "running"})
     chat.wait_published()
-    assert turn_index.cached_view(chat.session_id) is not held
     update = _updates(chat)[-1]
-    assert update["previous"] != cursor and update["revision"] > update["previous"]
+    assert update["previous"] == rebuilt["revision"] != cursor and update["revision"] > update["previous"]
+    assert turn_index.cached_view(chat.session_id).revision == update["revision"]
 
 
 def test_a_view_a_socket_holds_is_not_evicted_and_the_cap_closes_the_oldest(chat) -> None:

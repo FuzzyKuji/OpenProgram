@@ -25,6 +25,47 @@ def _add_provider_args(parser):
 
 
 
+#: What ``--output-format`` takes.
+OUTPUT_FORMATS = ("text", "json", "stream-json")
+
+
+def _add_headless_options(parser, *, suppress: bool) -> None:
+    """The ``--print`` options added for headless runs, on the top level and
+    on ``tui`` (where an option written before the verb must not be reset)."""
+    default = (lambda value: argparse.SUPPRESS) if suppress else (lambda value: value)
+    parser.add_argument("--standalone", action="store_true", default=default(False),
+        help="Run in this process instead of the running App's Worker")
+    parser.add_argument("--output-format", dest="output_format", choices=OUTPUT_FORMATS,
+        default=default(None),
+        help="What a --print call writes on stdout: text (the reply), json (one "
+             "record of how the run ended) or stream-json (one event per line, "
+             "init first and result last)")
+    parser.add_argument("--include-partial-messages", dest="include_partial_messages",
+        action="store_true", default=default(False),
+        help="With --output-format stream-json, also stream text and reasoning deltas")
+    parser.add_argument("--permission-mode", dest="print_permission_mode", metavar="MODE",
+        choices=("ask", "acceptEdits", "plan", "auto", "bypass"), default=default(None),
+        help="Permission mode for this --print turn only (ask, acceptEdits, plan, "
+             "auto, bypass); not saved to the conversation")
+    parser.add_argument("--continue", "-c", dest="print_continue", action="store_true",
+        default=default(False),
+        help="Continue the most recently updated conversation of this folder's project")
+    parser.add_argument("--session-id", dest="print_session_id", metavar="ID",
+        default=default(None),
+        help="Start the --print conversation with this id; fails if it exists")
+    parser.add_argument("--at", dest="print_at", metavar="REF", default=default(None),
+        help="With --resume or --continue: run on this branch, or after this "
+             "message (a message inside a branch starts a new branch)")
+    parser.add_argument("--no-project-binding", dest="no_project_binding",
+        action="store_true", default=default(False),
+        help="Do not bind a new --print conversation to this folder: nothing is "
+             "written here, the conversation is kept in the profile")
+    parser.add_argument("--no-web", dest="no_web", action="store_true",
+        default=default(False),
+        help="Run this --print turn without any web tool (search, fetch) and "
+             "without the provider's own web search")
+
+
 def _create_root_parser() -> argparse.ArgumentParser:
     """Create the top-level parser with its epilog and chat-mode options."""
     parser = argparse.ArgumentParser(
@@ -37,6 +78,11 @@ def _create_root_parser() -> argparse.ArgumentParser:
             "    (none)          open the chat (terminal UI)\n"
             "    web             open the browser UI at http://localhost:18100\n"
             "    --print \"...\"   one-shot prompt; print reply and exit\n"
+            "                    (--model provider/id, --effort LEVEL,\n"
+            "                    --usage-file PATH, --transcript-file PATH)\n"
+            "                    exit: 0 done, 1 failed, 2 usage, 3/4 structured\n"
+            "                    output unsupported/failed, 129 SIGHUP,\n"
+            "                    130 SIGINT, 143 SIGTERM or SIGBREAK\n"
             "    --resume <id>   resume a prior chat session\n"
             "\n"
             "  background service\n"
@@ -52,7 +98,6 @@ def _create_root_parser() -> argparse.ArgumentParser:
             "    recordings      record, replay, inspect, and prune provider calls\n"
             "    ports           show / set the web UI ports\n"
             "    mcp             manage MCP servers\n"
-            "    browser         install / maintain the browser tools\n"
             "\n"
             "  content\n"
             "    agents          manage agents (model, skills, tools per persona)\n"
@@ -85,20 +130,40 @@ def _create_root_parser() -> argparse.ArgumentParser:
     # programs``, etc. The ``--web`` / ``--cli`` / ``--tui`` / ``--no-tui``
     # flags from earlier versions are gone; use the equivalent verb
     # (``openprogram web``) or just bare ``openprogram`` (chat).
-    parser.add_argument("--print", dest="print_prompt", metavar="PROMPT",
-        help="One-shot prompt; send, print reply, exit")
+    parser.add_argument("--print", "-p", dest="print_prompt", metavar="PROMPT",
+        nargs="?", const="-",
+        help="One-shot prompt; send, print reply, exit. '-' or no value reads the "
+             "prompt from stdin; text with piped stdin appends it as a <stdin> block")
+    _add_headless_options(parser, suppress=False)
     from importlib.metadata import PackageNotFoundError, version
     try:
         package_version = version("openprogram")
     except PackageNotFoundError:
         package_version = "unknown"
+    from openprogram.interfaces.cli.build_info import version_text
     parser.add_argument(
         "--version",
         action="version",
-        version=f"%(prog)s {package_version}",
+        version=f"%(prog)s {version_text(package_version)}",
     )
     parser.add_argument("--json-schema", dest="json_schema", metavar="PATH",
         help="Require JSON Schema output for a one-shot --print call; '-' reads stdin")
+    parser.add_argument("--model", dest="print_model", metavar="PROVIDER/MODEL",
+        help="Model for a one-shot --print call in a new conversation, "
+             "e.g. anthropic/claude-sonnet-4-6; the provider needs a saved key "
+             "(`openprogram providers login <provider> --api-key-stdin`)")
+    parser.add_argument("--effort", dest="print_effort", metavar="LEVEL",
+        choices=("off", "none", "minimal", "low", "medium", "high", "xhigh", "max"),
+        help="Reasoning effort for a one-shot --print call (off, minimal, low, "
+             "medium, high, xhigh, max; none is off); without it the Agent's own "
+             "effort applies. Not saved to the conversation")
+    parser.add_argument("--usage-file", dest="usage_file", metavar="PATH",
+        help="After a one-shot --print call, write its token usage, cost, "
+             "model, rounds and how it ended to PATH as JSON")
+    parser.add_argument("--transcript-file", dest="transcript_file", metavar="PATH",
+        help="After a one-shot --print call, write its turn to PATH as JSON lines: "
+             "every model request, reply text, tool call with its arguments and "
+             "tool result, in order, with times")
     parser.add_argument("--profile", default=None,
         help="State-dir profile name. Reroutes config/sessions/logs to "
              "~/.openprogram-<name>/ so parallel workspaces don't share state. "
@@ -220,12 +285,26 @@ def _add_chat_command(sub):
     )
     # Suppress subparser defaults so an option written before the verb is not
     # overwritten while still accepting the more natural post-verb form.
-    p_tui.add_argument("--print", dest="print_prompt", metavar="PROMPT",
-        default=argparse.SUPPRESS,
+    p_tui.add_argument("--print", "-p", dest="print_prompt", metavar="PROMPT",
+        nargs="?", const="-", default=argparse.SUPPRESS,
         help="One-shot prompt; send, print reply, exit")
+    _add_headless_options(p_tui, suppress=True)
     p_tui.add_argument("--json-schema", dest="json_schema", metavar="PATH",
         default=argparse.SUPPRESS,
         help="Require JSON Schema output for a one-shot --print call; '-' reads stdin")
+    p_tui.add_argument("--model", dest="print_model", metavar="PROVIDER/MODEL",
+        default=argparse.SUPPRESS,
+        help="Model for a one-shot --print call in a new conversation")
+    p_tui.add_argument("--effort", dest="print_effort", metavar="LEVEL",
+        choices=("off", "none", "minimal", "low", "medium", "high", "xhigh", "max"),
+        default=argparse.SUPPRESS,
+        help="Reasoning effort for a one-shot --print call")
+    p_tui.add_argument("--usage-file", dest="usage_file", metavar="PATH",
+        default=argparse.SUPPRESS,
+        help="After a one-shot --print call, write its usage summary to PATH as JSON")
+    p_tui.add_argument("--transcript-file", dest="transcript_file", metavar="PATH",
+        default=argparse.SUPPRESS,
+        help="After a one-shot --print call, write its turn to PATH as JSON lines")
     p_tui.add_argument("--resume", default=argparse.SUPPRESS, metavar="SESSION_ID",
         help="Resume a prior CLI chat session.")
     p_tui.add_argument("--no-alt-screen", action="store_true", default=argparse.SUPPRESS,
@@ -1069,8 +1148,8 @@ def _add_channels_command(sub):
     return p_channels, p_chacct, p_chaccess, p_chb
 
 
-def _add_mcp_and_browser_commands(sub):
-    """Add the ``mcp`` and ``browser`` groups."""
+def _add_mcp_command(sub):
+    """Add the ``mcp`` group."""
     # ---- mcp -------------------------------------------------------------
     p_mcp = sub.add_parser("mcp",
         help="Manage MCP (Model Context Protocol) servers. Talks to "
@@ -1125,37 +1204,7 @@ def _add_mcp_and_browser_commands(sub):
     p_mcp_test.add_argument("--env", action="append", default=None, help="Extra env var as KEY=VALUE (repeatable)",
         metavar="KEY=VALUE")
     p_mcp_test.add_argument("--timeout", type=float, default=30.0, help="Startup timeout in seconds (default: 30)")
-
-    # ---- browser ---------------------------------------------------------
-    p_browser = sub.add_parser("browser",
-        help="Install + maintain the browser's dependencies. Lifecycle "
-             "(open, login, attach) is handled automatically by the browser "
-             "itself.")
-    p_browser_sub = p_browser.add_subparsers(dest="browser_verb", metavar="verb")
-    p_br_install = p_browser_sub.add_parser("install",
-        help="Install browser-tool dependencies (Playwright + Chromium, "
-             "patchright/camoufox) in a source checkout. "
-             "Packaged releases reject this command.",
-        description="Source checkout only: install optional browser backends. "
-                    "Packaged releases reject this command.")
-    p_br_install.add_argument("target", nargs="?", default="playwright",
-        choices=["playwright", "patchright", "camoufox", "all"],
-        help="What to install (default: playwright).")
-    p_browser_sub.add_parser("status",
-        help="Show what's installed, whether the sidecar Chrome is running, "
-             "and how many saved logins exist.")
-    p_browser_sub.add_parser("refresh",
-        help="Re-copy your real Chrome profile to the sidecar (use after "
-             "logging in to a new site in your main Chrome).")
-    p_browser_sub.add_parser("reset",
-        help="Full reset — kill sidecar Chrome, drop the sidecar profile + "
-             "all saved logins + port file. Next open() re-bootstraps clean.")
-    p_browser_sub.add_parser("list",
-        help="Show every saved login under the active profile's browser-states/")
-    p_br_rm = p_browser_sub.add_parser("rm",
-        help="Delete a saved login by host or file name")
-    p_br_rm.add_argument("name", help="Host or file name (e.g. app.gptzero.me)")
-    return p_mcp, p_browser
+    return p_mcp
 
 
 def _add_agents_command(sub):
@@ -1248,6 +1297,22 @@ def _add_setup_command(sub):
     )
 
 
+def _add_transcript_command(sub) -> None:
+    """``openprogram transcript``: a ``--print`` run's transcript rebuilt
+    from its state, for a run killed before it wrote ``--transcript-file``."""
+    p_transcript = sub.add_parser(
+        "transcript",
+        help="Rebuild a --print run's transcript from its stored state",
+        description="Write the transcript of the --print run a state directory "
+                    "holds, one JSON record per line, as --transcript-file writes it.")
+    p_transcript.add_argument("--state", metavar="DIR", default=None,
+        help="State directory to read (default: the active profile's)")
+    p_transcript.add_argument("--session", metavar="ID", default=None,
+        help="Conversation to read; needed when the state holds more than one")
+    p_transcript.add_argument("--output", "-o", metavar="PATH", default=None,
+        help="Write the transcript here instead of stdout")
+
+
 def build_parser() -> argparse.ArgumentParser:
     """The full ``openprogram`` argument parser.
 
@@ -1277,10 +1342,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_worker, p_upgrade = _add_service_commands(sub)
     _add_environments_command(sub)
     p_channels, p_chacct, p_chaccess, p_chb = _add_channels_command(sub)
-    p_mcp, p_browser = _add_mcp_and_browser_commands(sub)
+    p_mcp = _add_mcp_command(sub)
     p_agents = _add_agents_command(sub)
     p_providers = _add_scheduler_and_providers_commands(sub)
     _add_setup_command(sub)
+    _add_transcript_command(sub)
 
     # main() 的 dispatch 需要这些子 parser(缺 verb 时打印对应 help),
     # 但它们是本函数局部变量 — 经 set_defaults 盖进 args,嵌套子命令
@@ -1288,7 +1354,7 @@ def build_parser() -> argparse.ArgumentParser:
     for _p in (p_logs, p_programs, p_skills, p_plugins, p_trash, p_backup, p_sessions,
                p_execution, p_jobs,
                p_subagent, p_memory, p_worker, p_channels, p_chacct,
-               p_chaccess, p_chb, p_mcp, p_browser, p_agents,
+               p_chaccess, p_chb, p_mcp, p_agents,
                p_config, p_recordings, p_upgrade, p_providers):
         _p.set_defaults(_cmd_parser=_p)
 

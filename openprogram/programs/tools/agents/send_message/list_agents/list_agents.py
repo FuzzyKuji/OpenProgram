@@ -29,7 +29,8 @@ _DESCRIPTION = (
     "shows only the current session's branches — the agents spawned "
     "here. Pass scope=\"all\" to find agents in OTHER sessions: every "
     "session is listed, most recently active first, without previews "
-    "(limit defaults to 20). Archived agents (archive_agent / "
+    "(limit defaults to 20). The session view also lists running and queued "
+    "work with its execution_id. Archived agents (close_agent / "
     "agent(archive_when_done=true)) are hidden from both; "
     "scope=\"archived\" lists exactly them — still readable with "
     "read_conversation, no longer addressable. To CREATE a new agent, "
@@ -82,6 +83,28 @@ def _branch_task(db, sid: str, head: str) -> str:
         return ", ".join(part for part in parts if part)
     except Exception:
         return ""
+
+
+_WORK_ROWS = 20
+
+
+def _work_lines(session_id: str) -> list[str]:
+    """The agent work this session started that has not ended (what
+    list_jobs showed before the five-tool set), newest first."""
+    try:
+        from openprogram.runtime.jobs.store import list_jobs
+        from openprogram.runtime.jobs.types import is_terminal
+        jobs = [j for j in list_jobs(session_id, limit=200, lock_timeout=2.0)
+                if not is_terminal(j.status)][:_WORK_ROWS]
+    except Exception:
+        return []
+    if not jobs:
+        return []
+    out = ["", "Running or queued work (close_agent stops one; read_conversation reads it):"]
+    for job in jobs:
+        subject = " ".join((job.label or job.subject or job.prompt or "").split())[:70]
+        out.append(f"  - execution_id={job.id} [{job.status.value}] {subject}")
+    return out
 
 
 def _session_lines(
@@ -191,6 +214,7 @@ def _list_agents_impl(
                 "below to send_message (a «name» works directly as `to` too); "
                 'scope="all" lists other sessions:'
             )
+            lines += _work_lines(cur)
         return "\n".join([header, *lines])
 
     # scope="all" — list_sessions returns most recently active first.

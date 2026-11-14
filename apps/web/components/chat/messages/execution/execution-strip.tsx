@@ -16,7 +16,7 @@
  */
 import { stepOpenByDefault } from "@/lib/prefs/transcript-view";
 import { useTranscriptViewHere } from "../list/transcript-view-scope";
-import type { ExecutionCommand } from "@/lib/execution/execution-debugger";
+import { sendExecutionCancel } from "@/lib/execution/cancel-execution";
 import { memo, useEffect, useState } from "react";
 import { ArrowUpRight, Check, ChevronRight, Copy, Square } from "lucide-react";
 import { SolarIcon, type SolarIconName } from "@/components/solar-icons";
@@ -511,6 +511,14 @@ export function FunctionStep({
   const kids = tree?.children || [];
   const result = fullResult ?? block.result;
   const view = presentTool(name, block.input, text);
+  // A result bounded for the model: the card shows the head of the tool's
+  // own output and says how long the whole output is.
+  const fullLines = block.full_output?.total_lines;
+  const fullNote = block.full_output && fullResult === undefined
+    ? (fullLines
+      ? text(`${fullLines.toLocaleString()} lines · full output saved`, `共 ${fullLines.toLocaleString()} 行，全文已保存`)
+      : text("Full output saved", "全文已保存"))
+    : undefined;
   const detailStatus = cancelled
     ? "cancelled"
     : running || loadingFull
@@ -539,7 +547,7 @@ export function FunctionStep({
     const store = useSessionStore.getState();
     const messageId = block.message_id;
     const nodeId = block.node_id || block.tool_call_id;
-    if (!block.truncated || fullResult !== undefined
+    if (!(block.truncated || block.full_output) || fullResult !== undefined
         || !sessionId || !messageId || !nodeId) {
       store.showDetail(detail);
       return;
@@ -583,6 +591,7 @@ export function FunctionStep({
         : undefined}
       error={isError || cancelled || unknown}
       running={running || loadingFull}
+      meta={fullNote}
       copyText={JSON.stringify(
         { tool: name, input: block.input, result }, null, 2)}
       detail={detail}
@@ -825,14 +834,7 @@ export function SubAgentStep({ card, expansionId }: { card: ChatMsg; expansionId
     const executionId = attach.execution_id;
     const expectedVersion = attach.status_version;
     if (executionId && typeof expectedVersion === "number") {
-      wsSend({
-        type: "execution.command",
-        action: "execution.cancel",
-        command_id: crypto.randomUUID(),
-        execution_id: executionId,
-        expected_version: expectedVersion,
-        payload: {},
-      } satisfies ExecutionCommand);
+      sendExecutionCancel(sendRuntimeCommand, executionId, expectedVersion);
     }
   }
   const preview = card.content || "";

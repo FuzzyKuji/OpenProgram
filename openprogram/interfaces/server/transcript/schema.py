@@ -24,6 +24,10 @@ class Block(TypedDict, total=False):
     outcome: str
     truncated: bool
     total_bytes: int
+    # A result the agent loop bounded: how long the tool's whole output is
+    # (``total_lines``, ``total_chars``) and how much the card shows
+    # (``shown_chars``); "view full output" reads the saved file.
+    full_output: dict[str, int]
     message_id: str
     node_id: str
     provider_executed: bool

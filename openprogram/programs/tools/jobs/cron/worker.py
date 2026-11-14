@@ -59,6 +59,7 @@ from openprogram.host.backend.local import _invocation
 from openprogram.host import sandbox as _sandbox
 
 from .cron import _load, _resolve_path, _save, _store_lock, _verify_execution_spec, report_refusal
+from openprogram.host._platform.filesystem import replace_file
 
 
 _LOG = logging.getLogger(__name__)
@@ -257,7 +258,7 @@ def _write_json(path: str, value: Any) -> None:
             handle.flush()
             os.fsync(handle.fileno())
         os.chmod(temporary, 0o600)
-        os.replace(temporary, path)
+        replace_file(temporary, path)
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
@@ -407,6 +408,19 @@ def _take_up_finished_run(session_id: str) -> None:
         _LOG.warning("finished run in %s not read back", session_id, exc_info=True)
 
 
+def _end_what_the_run_left(session_id: str) -> None:
+    """The run's process has exited: a turn it left unfinished (it was killed)
+    ends now rather than at the next Worker start."""
+    if not session_id:
+        return
+    try:
+        from openprogram.runtime.scheduler import time_limits
+
+        time_limits.end_runs_of_exited_processes(session_id)
+    except Exception:  # noqa: BLE001 - the next tick looks again
+        _LOG.warning("unfinished run in %s not ended", session_id, exc_info=True)
+
+
 def _relay_delivery_notices(
     proc: Any, notices: Any, *, poll_s: float = 1.0,
     answers: Any = None, window_id: str = "", session_id: str = "",
@@ -459,6 +473,7 @@ def _relay_delivery_notices(
         finally:
             _cleanup_bridged_webtabs(opened_pages)
             _take_up_finished_run(session_id)
+            _end_what_the_run_left(session_id)
 
     thread = threading.Thread(target=_serve, name="cron-job-relay", daemon=True)
     thread.start()
@@ -574,14 +589,19 @@ def _install_browser_bridge(requests: Any) -> Callable[[Any], None]:
     return handle_answer
 
 
-def _conversation_settings(session_id: str) -> tuple[str, bool | None]:
-    """The permission mode and Sandbox switch the conversation has set right now."""
-    from openprogram.runtime.conversation.session_config import (
-        load_session_run_config, permission_from_config, project_defaults, sandbox_override_from_config,
-    )
-    config = load_session_run_config(session_id)
-    mode = permission_from_config(config, default=project_defaults(session_id).get("permission_mode"))
-    return mode, sandbox_override_from_config(config, session_id)
+def _conversation_settings(session_id: str, branch_id: str | None = None) -> tuple[str, bool | None]:
+    """The permission mode and Sandbox switch of the branch a run goes on,
+    as they are now: the task's own branch for a scheduled run (whatever
+    the person selected), else the selected one. Resolved through the one
+    resolver, so an unset value falls back to the project, then the
+    product default, as on every other entry."""
+    from openprogram.runtime.conversation.session_config import resolve_branch_settings
+    from openprogram.state.store.session.branch_config import BranchConfigConflict
+    try:
+        values = resolve_branch_settings(session_id, branch_id).values
+    except BranchConfigConflict:
+        values = resolve_branch_settings(session_id).values
+    return values["permission_mode"], values["sandbox_enabled"]
 
 
 def _task_invocation(spec: dict[str, Any], command: str) -> tuple[Any, bool, Any, bool]:
@@ -636,12 +656,45 @@ def _conversation_archived(session_id: str) -> bool:
     return bool(session and session.get("archived"))
 
 
+def _branch_held(session_id: str, task: dict[str, Any]) -> dict[str, Any] | None:
+    """The server operation holding the task's branch, read from the durable
+    record every process shares (a scheduled run is admitted outside the
+    server, so the server's in-memory slots are not visible here). A task
+    with no branch yet holds nothing anyone could be compacting."""
+    try:
+        from openprogram.runtime.context.session_db import default_db
+        from openprogram.state.store.session.operations import branch_operation_held
+        row = default_db().get_session(session_id) or {}
+        branch_id = next((key for key, ref in (row.get("branch_refs") or {}).items()
+                          if isinstance(ref, dict) and ref.get("scheduled_task_id") == str(task.get("id"))
+                          and ref.get("status") != "aborted"), None)
+        return branch_operation_held(session_id, branch_id, selected=row.get("active_branch_id"))
+    except Exception:  # noqa: BLE001 - an unreadable record does not stop the run
+        _LOG.debug("operation records not read for %s", session_id, exc_info=True)
+        return None
+
+
 def _archived_run_outcome(session_id: str, task: dict[str, Any]) -> dict[str, Any]:
     from openprogram.runtime.scheduler import task_runs
 
     return {"session_id": session_id, "task_id": task["id"], "title": task.get("title") or "",
             "status": task_runs.SKIPPED, "text": "its conversation is archived", "tip": None,
             "execution_id": f"not-started-{uuid.uuid4().hex}"}
+
+
+def _close_pages_if_ended(adapter: Any, execution_id: str) -> None:
+    """A run that ended, however it ended, closes the pages it opened before
+    its process exits: the ending's own close runs on a thread the exit would cut off."""
+    from openprogram.runtime.execution.model import TERMINAL_EXECUTION_STATUSES
+    from openprogram.runtime.scheduler import run_finish
+
+    try:
+        execution = adapter.store.get_execution(execution_id)
+    except Exception:  # noqa: BLE001 - the Worker closes them when it hears of the ending
+        _LOG.warning("ending of run %s not read; its pages are left to the Worker", execution_id, exc_info=True)
+        return
+    if execution is not None and execution.status in TERMINAL_EXECUTION_STATUSES:
+        run_finish.close_run_tabs(execution_id, wait=True)
 
 
 def _run_prompt_turn(
@@ -663,14 +716,6 @@ def _run_prompt_turn(
                     # Nobody would hear this run; the firing still counts as used.
                     print("# skipped: the conversation is archived")  # noqa: T201 - task run log
                     return _archived_run_outcome(spec["session_id"], task)
-                permission_mode, session_sandbox = _conversation_settings(spec["session_id"])
-                # A scheduled turn runs as a turn sent in its conversation
-                # would: that conversation's Sandbox switch, read at each fire.
-                live_policy = _sandbox.resolve_policy(session_enabled=session_sandbox)
-                _sandbox.install_policy_snapshot({
-                    "enabled": live_policy is not None,
-                    **({"policy": _sandbox.policy_to_dict(live_policy)} if live_policy is not None else {}),
-                })
                 job_authority = spec["job_authority"]
                 prompt = spec["prompt"] + event_note(event)
                 memory_refs = spec.get("memory_refs") or []
@@ -691,6 +736,14 @@ def _run_prompt_turn(
 
                 placement = None
                 placed: dict[str, Any] = {}
+                held = _branch_held(spec["session_id"], task) if task is not None else None
+                if held is not None:
+                    # A /compact or a rewind holds this task's branch in the
+                    # server: the run waits for its next firing instead of
+                    # writing under it.
+                    print(f"# skipped: the branch is busy ({held.get('kind') or 'operation'})")  # noqa: T201 - task run log
+                    return {**_archived_run_outcome(spec["session_id"], task),
+                            "text": "its branch was busy"}
                 if task is not None:
                     # The task's own branch, continued; the run starts clean.
                     from openprogram.runtime.scheduler import task_branch
@@ -701,6 +754,18 @@ def _run_prompt_turn(
                               "run_note": task_branch.run_note(spec["session_id"], placement,
                                                                agent_id=spec["agent_id"]),
                               "scheduled_task": task}
+                # The run's own branch decides its permission and Sandbox:
+                # a change on the branch the person has selected does not
+                # loosen (or tighten) a task that runs on another one.
+                permission_mode, session_sandbox = _conversation_settings(
+                    spec["session_id"], getattr(placement, "branch_id", None))
+                # A scheduled turn runs as a turn sent in its conversation
+                # would: its branch's Sandbox switch, read at each fire.
+                live_policy = _sandbox.resolve_policy(session_enabled=session_sandbox)
+                _sandbox.install_policy_snapshot({
+                    "enabled": live_policy is not None,
+                    **({"policy": _sandbox.policy_to_dict(live_policy)} if live_policy is not None else {}),
+                })
                 request = TurnRequest(
                     session_id=spec["session_id"],
                     user_text=prompt,
@@ -726,13 +791,18 @@ def _run_prompt_turn(
                     **({"assistant_message_id": f"{placement.msg_id}_reply"} if placement else {}),
                     config_snapshot_ref=f"scheduler:{spec['session_id']}",
                 )
+                from openprogram.runtime.execution.control import stop_requests
                 from openprogram.runtime.scheduler import time_limits
 
                 end_watch = time_limits.watch(admission.execution_id)
+                # The Worker cannot reach this process's turn; a stop asked for there arrives this way.
+                stop_following = stop_requests.follow(admission.execution_id)
                 try:
                     activated = asyncio.run(adapter.activate(admission))
                 finally:
+                    stop_following()
                     end_watch()
+                    _close_pages_if_ended(adapter, admission.execution_id)
                 if activated is None:
                     print("# not started: paused before its turn began")  # noqa: T201 - task run log
                     return None
@@ -988,7 +1058,7 @@ def _remember_watch(entry_id: str, command: str, output: str) -> None:
         try:
             with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
                 json.dump(states, handle, ensure_ascii=False)
-            os.replace(temporary, path)
+            replace_file(temporary, path)
         finally:
             if os.path.exists(temporary):
                 os.unlink(temporary)

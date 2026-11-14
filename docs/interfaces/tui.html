@@ -17,6 +17,8 @@
 <thead class="sr"><tr><th scope="col">Key</th><th scope="col">Action</th></tr></thead>
 <tbody>
 <tr><th scope="row"><code translate="no">Enter</code></th><td>Send</td></tr>
+<tr><th scope="row"><code translate="no">Enter</code> while generating</th><td>Queue the message above the input; queued messages are sent one per turn when the turn ends or is stopped</td></tr>
+<tr><th scope="row"><code translate="no">↑</code> on an empty prompt with messages queued</th><td>Select one: <code translate="no">Enter</code> or <code translate="no">e</code> edits it, <code translate="no">x</code> removes it, <code translate="no">Esc</code> goes back</td></tr>
 <tr><th scope="row"><code translate="no">Alt+Enter</code></th><td>Newline</td></tr>
 <tr><th scope="row"><code translate="no">?</code> on an empty prompt</th><td>Keyboard shortcut reference</td></tr>
 <tr><th scope="row"><code translate="no">Esc</code></th><td>Clear the input; while generating, abort the turn</td></tr>
@@ -29,10 +31,13 @@
 <tr><th scope="row"><code translate="no">Ctrl+R</code></th><td>Search saved contexts</td></tr>
 <tr><th scope="row"><code translate="no">Shift+Tab</code></th><td>Cycle permission modes: Bypass permissions, Auto, Manual, Plan</td></tr>
 <tr><th scope="row"><code translate="no">Ctrl+K</code></th><td>Command palette, all slash commands</td></tr>
+<tr><th scope="row"><code translate="no">Ctrl+O</code></th><td>Show tool output whole, or fold it again</td></tr>
+<tr><th scope="row"><code translate="no">Ctrl+V</code> (<code translate="no">Alt+V</code> on Windows)</th><td>Attach the image on the clipboard. Pasting or dragging the path of an image or PDF, or sending <code translate="no">@path</code> to one, attaches the file; delete its <code translate="no">[Image #1]</code> placeholder to drop it</td></tr>
 <tr><th scope="row"><code translate="no">PageUp</code> <code translate="no">PageDown</code>, <code translate="no">Ctrl+U</code> <code translate="no">Ctrl+D</code></th><td>Scroll by page, half page</td></tr>
 <tr><th scope="row"><code translate="no">Home</code> <code translate="no">End</code></th><td>Top, bottom</td></tr>
 </tbody>
 </table>
+<p class="note">Change keys in <code translate="no">~/.openprogram/keybindings.json</code>, for example <code translate="no">{"app.toolsExpand": "ctrl+t", "app.commandPalette": "none"}</code>; action names and the keys in force are listed under <code translate="no">?</code>. A mistake in the file is reported in the transcript at start and the rest still applies.</p>
 <h2>Slash commands</h2>
 <table class="stack fixed">
 <thead class="sr"><tr><th scope="col">Command</th><th scope="col">Action</th></tr></thead>

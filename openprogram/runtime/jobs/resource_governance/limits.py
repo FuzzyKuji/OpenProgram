@@ -83,6 +83,7 @@ _RESOURCE_REASON_CODES = (
     "budget.cost_exhausted",
     "budget.runtime_exhausted",
     "budget.idle_exhausted",
+    "budget.tree_cost_exhausted",
     "error.worker_lost",
     "error.accounting_unavailable",
     "error.nonpreemptible_operation",
@@ -193,11 +194,19 @@ class ResolvedResourceLimits:
         }
 
 
+# Width of the process-wide Job pool when OPENPROGRAM_JOB_WORKERS is unset.
+# It must sit above MAX_RUNNING_AGENTS, or that per-conversation default can
+# never be reached (a pool of 4 ran 4 of 6). 8, openclaw's pool width, lets
+# one conversation run its 6 helpers with room for another conversation's
+# work or a scheduled run beside them.
+DEFAULT_JOB_WORKERS = 8
+
+
 def scheduler_capacity() -> int:
     try:
-        return max(1, int(os.environ.get("OPENPROGRAM_JOB_WORKERS") or "4"))
+        return max(1, int(os.environ.get("OPENPROGRAM_JOB_WORKERS") or DEFAULT_JOB_WORKERS))
     except ValueError:
-        return 4
+        return DEFAULT_JOB_WORKERS
 
 
 def _less_or_equal(value: int | str, ceiling: int | str) -> bool:
@@ -213,7 +222,15 @@ def resolve_resource_limits(
     parent: ResourceLimits | Mapping[str, Any] | None = None,
     job: ResourceLimits | Mapping[str, Any] | None = None,
     scheduler_capacity: int | None = None,
+    default_live_limit: int | None = None,
 ) -> ResolvedResourceLimits:
+    """Resolve the limit cascade global > session > parent > job.
+
+    ``default_live_limit`` is how many Jobs one conversation runs at once
+    when nobody configured ``max_live_per_session``
+    (``agent.max_running_agents``, 6, as Codex ``DEFAULT_AGENT_MAX_THREADS``);
+    the rest stay queued. The worker pool still caps it.
+    """
     capacity = scheduler_capacity if scheduler_capacity is not None else globals()["scheduler_capacity"]()
     if isinstance(capacity, bool) or not isinstance(capacity, int) or capacity <= 0:
         raise ResourceLimitError("scheduler capacity must be a positive integer")
@@ -254,11 +271,28 @@ def resolve_resource_limits(
         effective = configured
         effective_source = source
         if name == "max_live_per_session":
+            if (effective is None and default_live_limit
+                    and int(default_live_limit) < capacity):
+                effective = int(default_live_limit)
+                effective_source = "default"
             if effective is None or int(effective) > capacity:
                 effective = capacity
                 effective_source = "scheduler_capacity"
         fields[name] = ResolvedLimit(configured, effective, effective_source)
     return ResolvedResourceLimits(capacity, fields)
+
+
+MAX_RUNNING_AGENTS = 6
+
+
+def running_agents_default() -> int:
+    """``agent.max_running_agents`` (6); 0 leaves only the worker pool."""
+    try:
+        from openprogram.state import config as user_config
+        value = (user_config.read_config().get("agent") or {}).get("max_running_agents")
+        return max(0, int(value)) if value not in (None, "") else MAX_RUNNING_AGENTS
+    except Exception:
+        return MAX_RUNNING_AGENTS
 
 
 def global_resource_limits() -> ResourceLimits:

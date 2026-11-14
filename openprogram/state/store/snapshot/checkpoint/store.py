@@ -20,7 +20,8 @@ from .paths import (
     turn_backup_dir,
     turn_manifest_path,
 )
-from .prompt_checkpoints import record_writer
+from .prompt_checkpoints import current_mutation_sequence, record_writer
+from openprogram.host._platform.filesystem import replace_file
 
 _log = logging.getLogger(__name__)
 
@@ -186,7 +187,7 @@ class CheckpointStore:
             raise MutationJournalError(
                 f"hardlinked file has {target_stat.st_nlink} links",
             )
-        self._note_writer(abs_path, "started")
+        started = self._note_writer(abs_path, "started")
         existing = manifest.load(manifest_path).get("files", {}).get(backup_name)
         if existing and existing.get("status") != "aborted":
             if existing.get("status") == "committed":
@@ -222,6 +223,7 @@ class CheckpointStore:
             recoverability=recoverability,
             unavailable_reason=unavailable_reason,
             project_locator=project_locator,
+            first_sequence=started,
         )
 
     def commit_after_edit(
@@ -284,12 +286,12 @@ class CheckpointStore:
             mutation_sequence=mutation_sequence,
         )
 
-    def _note_writer(self, path: str, stage: str) -> None:
+    def _note_writer(self, path: str, stage: str) -> int | None:
         try:
-            self._next_mutation_sequence(path=path, session=self.session_dir.name, stage=stage)
+            return self._next_mutation_sequence(path=path, session=self.session_dir.name, stage=stage)
         except OSError:
             # Attribution is advisory; it never stops the edit.
-            pass
+            return None
 
     @staticmethod
     def _next_mutation_sequence(
@@ -316,7 +318,7 @@ class CheckpointStore:
                     handle.write(str(value))
                     handle.flush()
                     os.fsync(handle.fileno())
-                os.replace(tmp, counter_path)
+                replace_file(tmp, counter_path)
                 try:
                     self_descriptor = os.open(root, os.O_RDONLY)
                     try:
@@ -1315,6 +1317,32 @@ class CheckpointStore:
                     self._discard_guards(value, path)
         return results
 
+    def restored_writes(self) -> dict[tuple[str, str], int]:
+        """Writes a committed rewind already took back.
+
+        Keys are ``(turn id, path)``; the value is the workspace sequence
+        through which that turn's writes to the path are gone from the file.
+        """
+        restored: dict[tuple[str, str], int] = {}
+        root = session_backup_root(self.session_dir) / "intents"
+        try:
+            paths = sorted(root.glob("*.json"))
+        except OSError:
+            return restored
+        for path in paths:
+            try:
+                value = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if not isinstance(value, dict) or value.get("status") != "committed":
+                continue
+            through = int(value.get("restores_through") or 0)
+            for action in value.get("actions") or []:
+                for turn in action.get("turn_ids") or []:
+                    key = (str(turn), str(action.get("path")))
+                    restored[key] = max(restored.get(key, 0), through)
+        return restored
+
     def recover_history_intents(self) -> list[dict]:
         """Terminalize ordinary history intents left during a crash.
 
@@ -1691,6 +1719,7 @@ class CheckpointStore:
         expected_head_id: str | None,
         target_head_id: str | None,
         actions: list[dict],
+        source_branch_id: str | None = None,
     ) -> str:
         return "sha256:" + hashlib.sha256(
             json.dumps({
@@ -1698,6 +1727,7 @@ class CheckpointStore:
                 "expected_head_id": expected_head_id,
                 "target_head_id": target_head_id,
                 "actions": actions,
+                **({"source_branch_id": source_branch_id} if source_branch_id else {}),
             }, sort_keys=True).encode(),
         ).hexdigest()
 
@@ -1874,7 +1904,10 @@ class CheckpointStore:
 
         def current_file_plan() -> dict:
             if action_planner is not None:
-                return self._validate_custom_history_actions(action_planner())
+                planned = action_planner()
+                if isinstance(planned, dict):
+                    return planned
+                return self._validate_custom_history_actions(planned)
             if custom_actions is not None:
                 return self._validate_custom_history_actions(custom_actions)
             return self.plan_rewind_operation(turn_ids)
@@ -1896,7 +1929,7 @@ class CheckpointStore:
             "actions": plan["actions"],
         }
         preview_plan_hash = self.rewind_plan_hash(
-            turn_ids, expected_head_id, target_head_id, plan["actions"],
+            turn_ids, expected_head_id, target_head_id, plan["actions"], source_branch_id,
         )
         if expected_plan_hash and expected_plan_hash != preview_plan_hash:
             return {
@@ -1961,6 +1994,8 @@ class CheckpointStore:
                 manifest.save(intent_path, intent)
                 return self._rewind_intent_result(intent)
             intent["status"] = "applying"
+            # Every write up to here is one this restore takes back.
+            intent["restores_through"] = current_mutation_sequence()
             manifest.save(intent_path, intent)
             touched: list[dict] = []
             head_moved = False
@@ -2081,7 +2116,7 @@ class CheckpointStore:
                 mode = (entry.get("before") or {}).get("mode")
                 if mode is not None:
                     os.chmod(tmp, int(mode, 8))
-                tmp.replace(destination)
+                replace_file(tmp, destination)
                 restored.append(original)
             except OSError:
                 continue

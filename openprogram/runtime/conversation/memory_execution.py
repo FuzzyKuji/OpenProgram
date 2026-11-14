@@ -94,7 +94,8 @@ def scoped_execution(function):
             except MemoryPolicyError as exc:
                 from openprogram.runtime.conversation.turn_runtime.types import TurnResult
                 return TurnResult(final_text='', user_msg_id=req.user_msg_id or '', assistant_msg_id='',
-                                  failed=True, error=str(exc), error_reason='MEMORY_UNAVAILABLE', error_retryable=False)
+                                  failed=True, error=str(exc), error_reason='unknown', error_retryable=False,
+                                  error_kind='memory_unavailable')
     return run
 
 

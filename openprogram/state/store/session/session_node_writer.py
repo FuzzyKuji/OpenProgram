@@ -69,13 +69,24 @@ class SessionNodeWriter:
         seq = idx.append(node, predecessor=predecessor, caller=caller)
         self.store.spill_large_node(self.session_id, node)
         session_log.write_history(seq, node.role, node.id, node.to_dict())
-        if not caller and self.advance_head and not meta.get("structural"):
-            idx.set_head(node.id)
         activity_at = _time.time()
-        idx.set_meta(updated_at=activity_at)
-        # Persist the activity time even when this node does not advance
-        # HEAD; otherwise the session log and the sidebar registry disagree.
-        self.store._persist_meta(session_log, idx)
+        # A background append must not write its stale page selection back
+        # over a concurrent checkout. Merge only this append's metadata while
+        # holding the same durable lock used by branch/settings changes.
+        with self.store._head_file_lock(session_log):
+            durable = session_log.read_meta()
+            if not caller and self.advance_head and not meta.get("structural"):
+                from .branch_config import advance_branch
+                advance_branch(durable, self.session_id, node.id, idx.nodes_by_id)
+            elif not caller and not meta.get("structural"):
+                from .branch_config import carry_branch
+                carry_branch(durable, predecessor, node.id)
+            durable["updated_at"] = activity_at
+            with idx._persist_lock:
+                with idx._lock:
+                    idx.meta = durable
+                    idx.head_id = durable.get("head_id")
+                session_log.write_meta(durable)
         # Registry too — same as SessionStore.append_message: updated_at
         # is the sidebar's recency-sort key. The webui dispatcher appends
         # through THIS shim, so skipping the registry here left every web
@@ -110,6 +121,7 @@ class SessionNodeWriter:
             g.nodes[frozen.id] = frozen
             if frozen.seq >= g._next_seq:
                 g._next_seq = frozen.seq + 1
+        g.retracted = frozenset(idx.meta.get("rewind_hidden_nodes") or ())
         return g
 
     def update(self, node_id: str, **fields: Any) -> None:

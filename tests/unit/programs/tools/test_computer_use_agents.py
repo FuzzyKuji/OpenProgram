@@ -492,6 +492,48 @@ def test_a_slow_button_is_pressed_once_and_never_clicked_as_well(monkeypatch):
     assert [what for _, what in ax.requests] == ["AXPress"]
 
 
+def _message_cell(monkeypatch, computer, *, press, selected_after_press=False):
+    """Outlook's message list: a cell that lists AXPress, inside a row that takes AXSelected."""
+    attrs = {("cell", "AXParent"): "row", ("row", "AXRole"): "AXRow", ("row", "AXSelected"): False}
+    calls = []
+
+    def perform(element, action):
+        calls.append((element, action))
+        if selected_after_press:
+            attrs[("row", "AXSelected")] = True
+        return press
+
+    def set_(element, name, value):
+        calls.append((element, name, value))
+        attrs[(element, name)] = value
+        return 0
+    monkeypatch.setattr(computer, "_element", lambda state, index: "cell")
+    monkeypatch.setattr(computer, "_node_at", lambda state, index: type("Node", (), {
+        "role": "AXCell", "body": lambda self: 'cell "Sender: ICDM"'})())
+    monkeypatch.setattr(computer, "_actions", lambda element: ["AXPress"])
+    monkeypatch.setattr(computer, "_attr", lambda element, name: attrs.get((element, name)))
+    monkeypatch.setattr(computer, "_settable", lambda element, name: (element, name) == ("row", "AXSelected"))
+    monkeypatch.setattr(computer, "_perform", perform)
+    monkeypatch.setattr(computer, "_set", set_)
+    monkeypatch.setattr(computer, "_background_click", lambda *args: pytest.fail("a row is selected without the mouse"))
+    return calls
+
+
+def test_a_message_in_a_list_is_selected_through_its_row_and_never_with_the_mouse(monkeypatch):
+    """A mouse-down lets the app bring its window over the user's; selecting the row does not."""
+    state = macos.WindowState(pid=7, window_title="Inbox", origin=(0.0, 0.0), size=(800.0, 600.0))
+    # The press is refused and changes nothing: the row is selected instead.
+    computer = macos.MacComputer.__new__(macos.MacComputer)
+    calls = _message_cell(monkeypatch, computer, press=-25205)
+    assert computer._do_click(_App(), 7, state, {"element_index": 3}) == 'selected cell "Sender: ICDM"'
+    assert calls == [("cell", "AXPress"), ("row", "AXSelected", True)]
+    # The press answers with an error and selects the row all the same: nothing more is sent.
+    computer = macos.MacComputer.__new__(macos.MacComputer)
+    calls = _message_cell(monkeypatch, computer, press=-25205, selected_after_press=True)
+    assert computer._do_click(_App(), 7, state, {"element_index": 3}) == 'selected cell "Sender: ICDM"'
+    assert calls == [("cell", "AXPress")]
+
+
 def test_only_a_request_left_unanswered_means_the_app_is_busy(monkeypatch):
     computer, ax, _ = _busy(monkeypatch, busy=3.0)
     assert computer._answers(7) is False and ax.timeouts["app 7"] == macos.ANSWER_TIMEOUT
@@ -579,3 +621,27 @@ def test_a_step_that_was_sent_stays_done_when_its_result_cannot_be_read(desk, mo
     result = app_target.run([("click", {"element_index": 3})], {"app": "Notes"}, "a")
     assert not result.is_error and result.json_data is None
     assert result.text == "Done: did click.\n\nIts state could not be read afterwards: 'Notes' is not running"
+
+
+@pytest.mark.parametrize("prior", [False, True])
+def test_stale_control_returns_fresh_state_without_replaying_steps(prior):
+    from types import SimpleNamespace
+    from openprogram.programs.tools.computer_use.computer_use_agent.desktop.base import StaleElement, Observation
+    calls = []
+    def act(session, action, args):
+        calls.append(action)
+        if action == "click":
+            raise StaleElement("old control gone")
+        return "typed"
+    def state(session, app, **kw):
+        assert kw == {"full": True, "as_diff": False}
+        return Observation("fresh controls", None, app)
+    computer = SimpleNamespace(act=act, get_state=state)
+    turn = SimpleNamespace(acted=False, state=lambda text: text)
+    steps = ([("type", {"text": "hello"})] if prior else []) + [("click", {"element_index": 120}), ("click", {"element_index": 121})]
+    result = app_target._act(computer, steps, "Chrome", "s", True, turn)
+    assert not result.is_error
+    assert "fresh controls" in result.text and "did not run" in result.text
+    assert result.json_data["status"] == "observation_required"
+    assert result.json_data["action_dispatched"] is prior
+    assert calls == (["type", "click"] if prior else ["click"])

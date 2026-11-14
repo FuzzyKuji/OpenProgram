@@ -17,6 +17,20 @@ export type RewindFlow = {
   visible: boolean;
   phase: "ready" | "running" | "slow";
   error: string | null;
+  /** The branch whose turn kept a rewind that restores files from running,
+   *  with the ids a Stop of it needs; the dialog offers to stop it. */
+  blocking?: RewindBlocking | null;
+};
+
+export type RewindBlocking = {
+  branch_id?: string | null;
+  branch_name?: string;
+  execution_id?: string;
+  status_version?: number;
+  op_id?: string;
+  op_kind?: string;
+  reason_code?: string;
+  selected?: boolean;
 };
 
 /** Attachments to put back in the composer; `refillId` marks them as a

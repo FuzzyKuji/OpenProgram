@@ -197,7 +197,7 @@ def test_imported_tool_calls_render_as_text_for_the_model(homes, store, tmp_path
     for node in pair[1].nodes_by_seq:
         graph.nodes[node.id] = node
     ids = [n.id for n in pair[1].nodes_by_seq if n.id != "ROOT"]
-    messages = render_dag_messages(graph, ids, manifest={"aged_before_seq": -1, "spilled": []})
+    messages = render_dag_messages(graph, ids)
     kinds = [type(block).__name__ for m in messages for block in m.content]
     assert "ToolCall" not in kinds
     texts = [getattr(b, "text", "") for m in messages for b in m.content]

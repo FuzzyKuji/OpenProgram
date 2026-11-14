@@ -33,6 +33,7 @@ from openprogram.runtime.permissions import refusal
 from ..image_analyze._encode import detect_raster_mime
 from . import providers as _  # registers builtins  # noqa: F401
 from .registry import GeneratedImage, registry
+from openprogram.host._platform.filesystem import replace_file
 
 
 NAME = "image_generate"
@@ -151,7 +152,7 @@ def _save(img: GeneratedImage, out_dir: Path, stem: str, idx: int) -> Path:
             violation = validate_write_path(target)
             if violation:
                 raise refusal.sandbox("image_generate", violation)
-            os.replace(staging, target)
+            replace_file(staging, target)
     else:
         raise RuntimeError("GeneratedImage had neither bytes nor URL")
     return target

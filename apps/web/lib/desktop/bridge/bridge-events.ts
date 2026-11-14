@@ -139,11 +139,6 @@ export function subscribeAgentPageGlow(bridge: DesktopBridge): () => void {
   return () => { stopResources(); stopControl(); };
 }
 
-/** Kept for older bridge consumers; page interaction never controls execution. */
-export function subscribeBrowserHumanInput(_bridge: DesktopBridge): () => void {
-  return () => {};
-}
-
 export function receiveBrowserResource(bridge: DesktopBridge, data: Record<string, unknown> | undefined) {
   if (!data || typeof data.session_id !== "string") return;
   const scope = typeof data.conversation_session_id === "string" ? data.conversation_session_id : data.session_id;

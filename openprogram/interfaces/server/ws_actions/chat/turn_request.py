@@ -12,7 +12,7 @@ import time
 import uuid
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 from .message_input import _with_recording
 
@@ -89,42 +89,109 @@ class _ChatRequest:
     agent_invocation: dict | None = None
     requested_environment: str | None = None
     project_id: str | None = None
+    # Server-only guard for a draft that materializes during first-send admission.
+    initial_branch_id: str | None = None
     # The attachments the user sent, before recording frames are appended.
     user_attachments: list | None = None
     # A ``/skill`` message's SKILL.md activation block, read by the model
     # only; the typed message stays the visible one.
     skill_name: str | None = None
     skill_activation: str | None = None
+    # A recorded branch that is not the selected one, named by the message's
+    # ``branch_id``: the turn runs there, beside the selected branch.
+    side_branch_id: str | None = None
+    # This turn's own model, effort and permission mode (``turn_*`` keys,
+    # sent by ``openprogram --print``): never saved on the branch.
+    turn_model: str | None = None
+    turn_effort: str | None = None
+    turn_permission_mode: str | None = None
+    # ``openprogram --print --no-web``: no web tool and no provider search
+    # this turn.
+    turn_no_web: bool | None = None
+
+
+@dataclass(frozen=True)
+class TurnOverride:
+    """A setting a ``chat`` frame may override for its turn.
+
+    A frame that leaves the key out, or sends ``None``, changes nothing: the
+    turn runs with the conversation's own value (the CLI and the TUI send
+    only what the person chose; the Web composer sends every setting).
+    ``read`` turns a sent value into the request's value, ``None`` again
+    meaning unchanged. ``sticky`` settings are saved on the branch the
+    message goes to and apply to its later turns too; the others apply to
+    this turn only.
+    """
+
+    attribute: str
+    key: str
+    read: Callable[[Any], Any]
+    sticky: bool
+
+
+def _permission_mode(value: Any) -> Any:
+    from openprogram.runtime.permissions.modes import normalize_permission
+
+    if isinstance(value, str) and value.strip().lower() in ("", "inherit"):
+        return None
+    # An illegal value is treated like no value: the turn inherits.
+    return normalize_permission(value)
+
+
+def _turn_model(value: Any) -> Any:
+    """``provider/id``, else ``None`` (an illegal value changes nothing)."""
+    if not isinstance(value, str):
+        return None
+    provider, sep, model_id = value.strip().partition("/")
+    return f"{provider.strip()}/{model_id.strip()}" if sep and provider.strip() and model_id.strip() else None
+
+
+#: Every per-turn override a ``chat`` frame carries, in one place.
+TURN_OVERRIDES: tuple[TurnOverride, ...] = (
+    TurnOverride("thinking_effort", "thinking_effort", lambda value: value or None, True),
+    TurnOverride("web_search_flag", "web_search", bool, True),
+    TurnOverride("permission_mode", "permission_mode", _permission_mode, True),
+    TurnOverride("sandbox_flag", "sandbox_enabled", lambda value: value, True),
+    # Speed / priority tier from the composer's Fast control ("priority" =
+    # Fast, "default" = standard).
+    TurnOverride("service_tier", "service_tier", lambda value: value or None, True),
+    # The desktop surface the message was sent from.
+    TurnOverride("surface_ref", "surface",
+                 lambda value: value if isinstance(value, dict) else None, False),
+    # A one-shot run's own choices (``openprogram --print --model / --effort
+    # / --permission-mode``): this turn only, whatever the branch has saved.
+    TurnOverride("turn_model", "turn_model", _turn_model, False),
+    TurnOverride("turn_effort", "turn_effort", lambda value: str(value) if value else None, False),
+    TurnOverride("turn_permission_mode", "turn_permission_mode", _permission_mode, False),
+    TurnOverride("turn_no_web", "turn_no_web", lambda value: True if value is True else None, False),
+)
+
+
+def read_turn_overrides(cmd: dict) -> dict[str, Any]:
+    """The request values of :data:`TURN_OVERRIDES` a frame carries, ``None``
+    for each it leaves out."""
+    return {
+        override.attribute: (None if cmd.get(override.key) is None
+                             else override.read(cmd[override.key]))
+        for override in TURN_OVERRIDES
+    }
 
 
 async def _parse_chat_command(ws, cmd: dict) -> _ChatRequest | None:
     """Read the composer's fields. ``None`` means the turn stops here."""
     text = cmd.get("text", "").strip()
     session_id = cmd.get("session_id")
+    from openprogram.runtime.conversation.turn_input import INPUT_TOO_LARGE, input_too_large
+    too_large = input_too_large(text)
+    if too_large:
+        # Refused before anything is written; the composer keeps the text.
+        await _send_chat_error(ws, session_id, INPUT_TOO_LARGE, too_large)
+        return None
     agent_id = cmd.get("agent_id") or None
-    thinking_effort = cmd.get("thinking_effort") or None
     # The Agent's configuration decides the tool set; a turn only narrows
-    # it to a /skill's allowed-tools (below) or overlays web search.
+    # it to a /skill's allowed-tools (later) or overlays web search.
     tools_flag = None
-    web_search_flag = bool(cmd.get("web_search"))
-    from openprogram.runtime.permissions.modes import (
-        normalize_permission as _normalize_permission,
-    )
-    _raw_perm = cmd.get("permission_mode")
-    if _raw_perm is None or (
-        isinstance(_raw_perm, str) and _raw_perm.strip().lower() in ("", "inherit")
-    ):
-        permission_mode = None
-    else:
-        # An illegal value is treated like no value: the turn inherits.
-        permission_mode = _normalize_permission(_raw_perm)
-    sandbox_flag = cmd.get("sandbox_enabled") if "sandbox_enabled" in cmd else None
-    surface_ref = cmd.get("surface") if isinstance(cmd.get("surface"), dict) else None
-    # Per-turn speed / priority tier from the composer's speed pill
-    # ("priority" = Fast, "flex" = cheaper-slower). Rides the message
-    # payload each turn (client remembers via localStorage like the
-    # thinking pill) — no server-side persistence / DB column needed.
-    service_tier = cmd.get("service_tier") or None
+    overrides = read_turn_overrides(cmd)
     response_format = None
     if cmd.get("response_format") is not None:
         from openprogram.models.providers.structured_output import (
@@ -162,13 +229,8 @@ async def _parse_chat_command(ws, cmd: dict) -> _ChatRequest | None:
         text=text,
         session_id=session_id,
         agent_id=agent_id,
-        thinking_effort=thinking_effort,
         tools_flag=tools_flag,
-        web_search_flag=web_search_flag,
-        permission_mode=permission_mode,
-        sandbox_flag=sandbox_flag,
-        surface_ref=surface_ref,
-        service_tier=service_tier,
+        **overrides,
         response_format=response_format,
         attachments=attachments,
         recording_meta=recording_meta,

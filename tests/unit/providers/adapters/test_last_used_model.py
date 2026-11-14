@@ -226,36 +226,45 @@ def test_session_fallback_is_the_last_used_model(cfg_path, monkeypatch):
 
 # --- every switch and every send records the last used model --------------
 
-def test_every_switch_and_send_records_the_last_used_model():
-    """REST /api/model (session and global), /api/agent_settings chat and the
-    ws switch_model (session and global)."""
-    import inspect
+from tests.unit.dag.test_rewind_modes import store
+
+
+@pytest.mark.parametrize("transport", ["rest", "ws"])
+def test_session_switch_persists_picker_and_last_used(transport, store, monkeypatch, cfg_path):
+    import asyncio
+    from fastapi import FastAPI
+    from openprogram.interfaces.server import server
     from openprogram.interfaces.server.routes.execution import runtime as rest
     from openprogram.interfaces.server.ws_actions import runtime as ws
 
-    # Each call site imports the function and calls it (some via to_thread).
-    assert inspect.getsource(rest).count("record_last_used_model") >= 6
-    assert inspect.getsource(ws.handle_switch_model).count("record_last_used_model") >= 4
-
-
-# --- per-session switch pins the picker choice, both entry points --------
-
-def test_session_switch_sets_picker_overrides():
-    """The dispatcher reads the session's model pin from
-    ``provider_override`` / ``model_override``, and restart restore only
-    trusts those keys. Both switch entry points (REST and ws) must set
-    them and persist — a path that only writes ``provider_name`` leaves
-    the session re-resolving through the enabled list on every turn
-    (answers on a different model than the chip shows, and the pin is
-    lost across worker restarts)."""
-    import inspect
-    from openprogram.interfaces.server.routes.execution import runtime as rest
-    from openprogram.interfaces.server.ws_actions import runtime as ws
-
-    for src in (inspect.getsource(rest), inspect.getsource(ws.handle_switch_model)):
-        assert 'conv["provider_override"]' in src
-        assert 'conv["model_override"]' in src
-        assert "_save_session" in src
+    store.create_session("switch-session", "main")
+    branch_id = store.get_session("switch-session")["active_branch_id"]
+    conv = {"id": "switch-session", "provider_name": "openai", "runtime": _FakeRT("old")}
+    monkeypatch.setattr("openprogram.runtime.context.session_db.default_db", lambda: store)
+    monkeypatch.setattr(server, "_sessions", {"switch-session": conv})
+    monkeypatch.setattr(server, "_broadcast", lambda *_: None)
+    monkeypatch.setattr(server, "_get_provider_info", lambda *_: {})
+    monkeypatch.setattr(server, "_get_thinking_config_for_model", lambda *_: {})
+    monkeypatch.setattr(server, "refresh_context_stats", lambda *_: None)
+    monkeypatch.setattr(rest, "emit_ws_frame", lambda *_: None)
+    body = {"session_id": "switch-session", "model": "picked", "provider": "openai",
+            "expected_branch_id": branch_id}
+    if transport == "rest":
+        app = FastAPI(); rest.register(app)
+        endpoint = next(r.endpoint for r in app.routes if r.path == "/api/model" and "POST" in r.methods)
+        assert asyncio.run(endpoint(body)).status_code == 200
+    else:
+        class Socket:
+            frames = []
+            async def send_text(self, frame):
+                self.frames.append(json.loads(frame))
+        socket = Socket()
+        asyncio.run(ws.handle_switch_model(socket, body))
+        assert socket.frames[-1]["type"] == "model_switched"
+    row = store.get_session("switch-session")
+    assert (row["provider_override"], row["model_override"]) == ("openai", "picked")
+    assert (conv["provider_override"], conv["model_override"]) == ("openai", "picked")
+    assert last_used.read_last_used_model() == ("openai", "picked")
 
 
 def test_restored_session_function_run_uses_its_agent_model(monkeypatch):

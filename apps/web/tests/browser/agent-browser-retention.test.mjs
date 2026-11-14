@@ -49,7 +49,6 @@ const { useCenterTabs } = await import("../../lib/tabs/center-tabs-store.ts");
 const { setSocket } = await import("../../lib/runtime-bridge/state.ts");
 const {
   installDesktopMenuHandlers,
-  subscribeBrowserHumanInput,
   ensureWebView,
   destroyStaleWebViews,
   surfaceRefForChat,
@@ -228,13 +227,6 @@ test("dispatch and receipt share one native cue and stale geometry cannot paint"
   removeVisibleWebTabBounds(window.openprogramDesktop, "w:cue");
 });
 
-
-test("page interaction bridge does not subscribe or send pause messages", () => {
-  let subscriptions = 0;
-  const dispose = subscribeBrowserHumanInput({ webTab: { onHumanInput: () => { subscriptions++; } } });
-  assert.equal(subscriptions, 0);
-  dispose();
-});
 
 test("legacy destroy retires local registration once without claiming native confirmation", () => {
   const sent = [], destroyed = [];

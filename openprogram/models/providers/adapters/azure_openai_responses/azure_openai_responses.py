@@ -62,6 +62,8 @@ def stream_azure_openai_responses(
 
             if opts.get("on_payload"):
                 opts["on_payload"](params)
+            from ...recording.capture import RESPONSES, capture_request
+            capture_request(model, params, wire=RESPONSES)
 
             ev_stream.push({"type": "start", "partial": output})
 
@@ -102,7 +104,9 @@ def stream_azure_openai_responses(
             # and openai_responses).
             ev_stream.fail(exc)
 
-    asyncio.ensure_future(_run())
+    # Owned by the stream: closing it (a steer, a stop, the idle bound)
+    # cancels the request instead of leaving it to wait on the socket.
+    ev_stream.attach_producer(asyncio.ensure_future(_run()))
     return ev_stream
 
 
@@ -240,11 +244,17 @@ def _build_params(
 
     reasoning_effort = opts.get("reasoning_effort")
     reasoning_summary = opts.get("reasoning_summary")
-    if getattr(model, "reasoning", False) and (reasoning_effort or reasoning_summary):
-        params["reasoning"] = {
-            "effort": reasoning_effort or "medium",
-            "summary": reasoning_summary or "auto",
-        }
-        params["include"] = ["reasoning.encrypted_content"]
+    if getattr(model, "reasoning", False):
+        if reasoning_effort == "none":
+            params["reasoning"] = {"effort": "none"}
+        elif reasoning_effort or reasoning_summary:
+            params["reasoning"] = {
+                "effort": reasoning_effort or "medium",
+                "summary": reasoning_summary or "auto",
+            }
+        # Azure requests are stored server-side (no ``store: false``), so the
+        # reasoning is asked back only alongside an explicit reasoning field.
+        if "reasoning" in params:
+            params["include"] = ["reasoning.encrypted_content"]
 
     return params

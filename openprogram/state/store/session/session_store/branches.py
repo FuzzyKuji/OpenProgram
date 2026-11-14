@@ -3,6 +3,59 @@ from __future__ import annotations
 from . import shared
 
 
+def _subtree(idx, head_msg_id: str) -> list[str]:
+    """A node and everything under it, by both conversation and call edges."""
+    found: list[str] = [head_msg_id]
+    seen: set[str] = {head_msg_id}
+    stack: list[str] = [head_msg_id]
+    while stack:
+        cur = stack.pop()
+        for cid in [*idx.children_by_predecessor.get(cur, []), *idx.children_by_caller.get(cur, [])]:
+            if cid not in seen:
+                seen.add(cid)
+                found.append(cid)
+                stack.append(cid)
+    return found
+
+
+def _record_tip(meta: dict, nodes: dict, head: str) -> str:
+    """The tip whose record a write addressed to ``head`` belongs to.
+
+    A writer names the tip it saw: the client renames the tip on its
+    screen, a turn's background namer the reply it finished. The
+    branch's record moves with every message the branch adds
+    (``branch_config.follow_line`` / ``carry_branch``), so by the time
+    the write lands ``head`` may be a tip the branch has moved past.
+    Such a ``head`` — the message a recorded branch's latest turn
+    extended, or one of that turn's own user messages — is that
+    branch's, and the write goes to its record at its tip now. A
+    ``head`` that has a record, ends a recorded branch, is not written
+    yet, or leads to more than one branch is taken as it is.
+    """
+    named = meta.get("branches") or {}
+    refs = meta.get("branch_refs") or {}
+    live = [ref.get("head_id") for ref in refs.values()
+            if isinstance(ref, dict) and ref.get("status") != "aborted"]
+    if head in named or head in live or head not in nodes:
+        return head
+    found = set()
+    for tip in live:
+        node = nodes.get(tip)
+        seen = {tip}
+        while node is not None:
+            prev = shared._node_conv_predecessor(node)
+            if not prev or prev in seen:
+                break
+            if prev == head:
+                found.add(tip)
+                break
+            seen.add(prev)
+            node = nodes.get(prev)
+            if node is None or node.role != shared.ROLE_USER:
+                break
+    return found.pop() if len(found) == 1 else head
+
+
 class BranchesOperations:
     def get_branch(
         self,
@@ -14,7 +67,9 @@ class BranchesOperations:
             return []
         _session_log, idx = pair
         head = head_msg_id or idx.head_id
-        if not head or head not in idx.nodes_by_id:
+        hidden = set(idx.meta.get("rewind_hidden_nodes") or [])
+        retired = set(idx.meta.get("rewind_hidden_heads") or [])
+        if not head or head not in idx.nodes_by_id or head in hidden or head in retired:
             return []
 
         # Pure predecessor-edge walk (dag/overview.md). A
@@ -47,6 +102,7 @@ class BranchesOperations:
             shared._node_to_msg(n, session_id) for n in chain
             if (n.metadata or {}).get("display") != "root"
             and not (n.metadata or {}).get("rewound")
+            and n.id not in hidden
         ]
 
 
@@ -119,8 +175,16 @@ class BranchesOperations:
                 f"set_head: {head_id!r} is a compaction summary — "
                 "a stand-in cannot be the active branch tip"
             )
-        idx.set_head(head_id)
-        self._persist_meta(session_log, idx)
+        from ..branch_config import advance_branch
+        with self._head_file_lock(session_log):
+            meta = session_log.read_meta()
+            advance_branch(meta, session_id, head_id, idx.nodes_by_id)
+            with idx._persist_lock:
+                with idx._lock:
+                    idx.meta = meta
+                    idx.head_id = head_id
+                session_log.write_meta(meta)
+
 
 
     def compare_and_set_head(
@@ -129,10 +193,22 @@ class BranchesOperations:
         expected_head_id: shared.Optional[str],
         new_head_id: shared.Optional[str],
         *,
+        expected_meta: shared.Optional[dict[str, shared.Any]] = None,
         branch_update: shared.Optional[dict[str, shared.Any]] = None,
         meta_update: shared.Optional[dict[str, shared.Any]] = None,
     ) -> bool:
-        """Durable cross-process HEAD CAS, optionally activating a branch ref."""
+        """Durable cross-process HEAD CAS, optionally activating a branch ref.
+
+        Branch records are changed from the record read inside the lock:
+        ``meta_update[BRANCH_CHECKOUT]`` switches branches
+        (``rewind_view.apply_checkout``) and
+        ``meta_update[BRANCH_RECORD_MOVES]`` (``[[from_tip, to_tip], ...]``)
+        moves name records to a branch's new tip. Whole ``branches`` /
+        ``branch_refs`` / ``active_branch_id`` values in ``meta_update``
+        are ignored.
+        """
+        from ..branch_config import move_branch_record, park_record
+        from ..rewind_view import BRANCH_CHECKOUT, BRANCH_RECORD_MOVES, apply_checkout
         with self._session_lock(session_id):
             pair = self._open(session_id)
             if pair is None:
@@ -148,7 +224,22 @@ class BranchesOperations:
                     durable = session_log.read_meta()
                     if durable.get("head_id") != expected_head_id:
                         return False
+                    if expected_meta and any(durable.get(key) != value for key, value in expected_meta.items()):
+                        return False
                     updated = dict(durable)
+                    meta_update = dict(meta_update or {})
+                    checkout = meta_update.pop(BRANCH_CHECKOUT, None)
+                    moves = meta_update.pop(BRANCH_RECORD_MOVES, None) or []
+                    # Branch records change only through the merges below,
+                    # on the records read here inside the lock. A whole map
+                    # in the update is a copy read earlier (an intent
+                    # journaled before this rule) and would put back what
+                    # was written since; it is not applied.
+                    for key in ("branches", "branch_refs", "active_branch_id"):
+                        meta_update.pop(key, None)
+                    if checkout is not None:
+                        apply_checkout(updated, session_id, checkout.get("target"),
+                                       checkout.get("branch_id"), idx.nodes_by_id)
                     updated["head_id"] = new_head_id
                     updated["head_version"] = int(
                         durable.get("head_version") or 0
@@ -168,12 +259,13 @@ class BranchesOperations:
                                 durable.get("writer_epoch") or 0
                             ))
                             refs[source_id] = source
+                            park_record(updated, refs, source_id)
                         if target_id and not branch_update.get("preserve_target"):
                             target = dict(refs.get(target_id) or {})
                             target.update({
                                 "branch_id": target_id,
                                 "head_id": new_head_id,
-                                "parent_branch_id": source_id,
+                                **({"parent_branch_id": source_id} if source_id != target_id else {}),
                                 "head_version": updated["head_version"],
                                 "writer_epoch": int(
                                     durable.get("writer_epoch") or 0
@@ -193,6 +285,10 @@ class BranchesOperations:
                         updated["writer_epoch"] = int(
                             durable.get("writer_epoch") or 0
                         ) + 1
+                    owner = updated.get("active_branch_id")
+                    for move in moves:
+                        if isinstance(move, (list, tuple)) and len(move) == 2:
+                            move_branch_record(updated, move[0], move[1], owner=owner)
                     if meta_update:
                         updated.update(meta_update)
                     session_log.write_meta(updated)
@@ -200,6 +296,9 @@ class BranchesOperations:
                         with idx._lock:
                             idx.head_id = new_head_id
                             idx.meta = updated
+                    if updated.get("agent_id") != durable.get("agent_id"):
+                        self._update_index_entry(session_id, agent_id=updated.get("agent_id"))
+                        self._schedule_index_flush()
                     return True
                 finally:
                     pass
@@ -245,6 +344,8 @@ class BranchesOperations:
         # A branch tip is a conv node (no caller) with no conv-child.
         tips: list[dict[str, shared.Any]] = []
         named = (idx.meta.get("branches") or {})
+        hidden = set(idx.meta.get("rewind_hidden_nodes") or [])
+        hidden_heads = set(idx.meta.get("rewind_hidden_heads") or [])
 
         def _top_program_run(node: shared.Call) -> bool:
             """A caller-less Program is a conversation-layer action."""
@@ -257,6 +358,8 @@ class BranchesOperations:
 
         def _conversation_node(child: shared.Call) -> bool:
             """Whether a node participates in the predecessor conversation."""
+            if child.id in hidden:
+                return False
             md = child.metadata or {}
             if md.get("structural"):
                 return False
@@ -289,13 +392,17 @@ class BranchesOperations:
             child = idx.nodes_by_id.get(kid_id)
             return child is not None and _conversation_node(child)
 
+        from ..branch_config import branch_record
+        retained_tips = {ref.get("head_id") for ref in (idx.meta.get("branch_refs") or {}).values()
+                         if ref.get("status") != "aborted"}
         merged = self.merged_heads(session_id)
         # The conversation's head is a branch end even while a background
         # branch (a scheduled task's) leaves from it.
         head = idx.head_id
+        carried_on: set[str] = set()
 
         for node in idx.all_nodes():
-            if not _conversation_node(node):
+            if not _conversation_node(node) or node.id in hidden_heads:
                 continue
             kids = idx.children_by_predecessor.get(node.id, [])
             def _opens_task_branch(kid_id: str) -> bool:
@@ -307,7 +414,9 @@ class BranchesOperations:
             side_only = node.id == head and all(
                 idx.nodes_by_id[k].role == shared.ROLE_USER for k in continued)
             if continued and not side_only:
-                continue
+                carried_on.add(node.id)
+                if node.id not in retained_tips:
+                    continue
             # Heads that a merge consumed don't surface as standalone
             # branches anymore — their content lives on the merge tip.
             if node.id in merged:
@@ -325,6 +434,27 @@ class BranchesOperations:
                 "updated_at": (label or {}).get("updated_at") if isinstance(label, dict) else node.created_at,
                 "archived": bool(label.get("archived")) if isinstance(label, dict) else False,
             })
+        refs = idx.meta.get("branch_refs") or {}
+        active_id = idx.meta.get("active_branch_id")
+        referenced = {ref.get("head_id") for ref in refs.values() if ref.get("status") != "aborted"}
+        tips = [tip for tip in tips if tip["head_msg_id"] not in referenced]
+        # A conversation with one recorded branch has no sibling to tell apart:
+        # a record the line has since carried on past is only behind, not a tip.
+        only_line = len(referenced) == 1
+        for branch_id, ref in refs.items():
+            tip = ref.get("head_id")
+            if ref.get("status") == "aborted" or tip in hidden or tip in hidden_heads or tip not in idx.nodes_by_id:
+                continue
+            if tip in merged or (only_line and tip in carried_on):
+                continue
+            # Selected or not, the name is the branch's record (its tip's).
+            label = branch_record(idx.meta, branch_id)
+            config = ref.get("config") if isinstance(ref.get("config"), dict) else {}
+            agent_id = idx.meta.get("agent_id") if branch_id == active_id else config.get("agent_id")
+            tips.append({"head_msg_id": tip, "branch_id": branch_id, "name": label.get("name"),
+                         "created_at": label.get("created_at"), "updated_at": label.get("updated_at"),
+                         "archived": bool(label.get("archived")),
+                         **({"agent_id": agent_id} if agent_id else {})})
         # Compaction no longer clones the kept tail (§8): a summary node
         # splices into the chain and the tail keeps its own ids, so the
         # branch tips need no translation. A summary node that ends up a
@@ -348,21 +478,148 @@ class BranchesOperations:
         (``auto_named`` / ``name_locked`` / ``name_gen_count`` / ``turns``;
         see docs/design/runtime/branch-naming.md). Unspecified existing
         fields are preserved — callers that only touch the name must not
-        wipe the lock, the counters, or the archive flag."""
-        pair = self._open(session_id, create_if_missing=True)
+        wipe the lock, the counters, or the archive flag. An automatic
+        name (``auto_named``) follows a turn that was written, so it
+        never opens a record for a message that is not there (a branch
+        deleted while its name was being made)."""
+        pair = self._open(session_id)
         if pair is None:
             return
-        session_log, idx = pair
+        _session_log, idx = pair
+        auto = bool(fields.get("auto_named"))
 
-        def _mutate(entry: dict) -> None:
+        def _mutate(entry: dict):
+            if auto and entry.get("name_locked"):
+                # Read on the record inside the lock: a name the person
+                # gave while the label was being made wins.
+                return False
             now = shared.time.time()
             entry["name"] = name
             entry.setdefault("created_at", now)
             entry["updated_at"] = now
             entry.update(fields)
 
-        idx.update_branch_entry(head_msg_id, _mutate)
-        self._persist_meta(session_log, idx)
+        self._merge_branch_entry(session_id, head_msg_id, _mutate,
+                                 create=not auto or head_msg_id in idx.nodes_by_id)
+
+
+    def name_spawned_branch(self, session_id: str, tip: str, label: str) -> bool:
+        """Give a spawned task's branch its label as its name (the Spawn
+        tier of branch-naming). ``tip`` may be the reply the run has not
+        written yet; the record waits there for it. A branch that already
+        has a name (renamed, or named automatically) keeps it."""
+        def _mutate(entry: dict):
+            if entry.get("name"):
+                return False
+            now = shared.time.time()
+            entry["name"] = label
+            entry.setdefault("created_at", now)
+            entry["updated_at"] = now
+
+        return self._merge_branch_entry(session_id, tip, _mutate) is not None
+
+
+    def _merge_branch_entry(self, session_id: str, head_msg_id: str, mutate, *,
+                            create: bool = True) -> shared.Optional[dict]:
+        """Merge one branch record on disk under the session write lock.
+
+        ``mutate(entry)`` sets only the fields its writer owns, on the
+        record as it is on disk inside the lock — never on a copy read
+        earlier — so two writers never drop each other's fields. An
+        archived record stays archived whatever a later write says, and
+        with ``create`` false a missing record stays missing. Returns the
+        merged record, or None when nothing was written.
+        """
+        pair = self._open(session_id)
+        if pair is None:
+            return None
+        session_log, idx = pair
+
+        def _apply(meta: dict):
+            branches = dict(meta.get("branches") or {})
+            tip = _record_tip(meta, idx.nodes_by_id, head_msg_id)
+            current = branches.get(tip)
+            if not isinstance(current, dict) and not create:
+                return False, None
+            entry = dict(current) if isinstance(current, dict) else {}
+            archived = {k: entry[k] for k in ("archived", "archived_at", "archived_reason")
+                        if k in entry} if entry.get("archived") else {}
+            if mutate(entry) is False:
+                return False, None
+            entry.update(archived)
+            branches[tip] = entry
+            meta["branches"] = branches
+            return True, dict(entry)
+
+        return self._update_meta(session_log, idx, _apply)
+
+
+    def reserve_task_branch(
+        self,
+        session_id: str,
+        *,
+        task_id: str,
+        msg_id: str,
+        agent_id: shared.Optional[str],
+        label: shared.Any = None,
+    ) -> shared.Optional[str]:
+        """Give a scheduled task's run its branch record (``reserve_task_branch``)."""
+        pair = self._open(session_id)
+        if pair is None:
+            return None
+        session_log, idx = pair
+        from ..branch_config import reserve_task_branch
+        with self._head_file_lock(session_log):
+            meta = session_log.read_meta()
+            branch_id = reserve_task_branch(meta, session_id, task_id=task_id, msg_id=msg_id,
+                                            agent_id=agent_id, label=label)
+            with idx._persist_lock:
+                with idx._lock:
+                    idx.meta = meta
+                    idx.head_id = meta.get("head_id")
+                session_log.write_meta(meta)
+        return branch_id
+
+
+    def point_branch(self, session_id: str, branch_id: str, *,
+                     expected_head: shared.Optional[str], head: str) -> bool:
+        """Move an unselected branch's record onto a message just written
+        under its tip (``branch_config.point_branch``); the head stays."""
+        pair = self._open(session_id)
+        if pair is None:
+            return False
+        session_log, idx = pair
+        from ..branch_config import point_branch
+        with self._head_file_lock(session_log):
+            meta = session_log.read_meta()
+            if not point_branch(meta, branch_id, expected_head=expected_head, head=head):
+                return False
+            with idx._persist_lock:
+                with idx._lock:
+                    idx.meta = meta
+                    idx.head_id = meta.get("head_id")
+                session_log.write_meta(meta)
+        return True
+
+
+    def update_branch_fields(self, session_id: str, branch_id: str, **fields: shared.Any) -> bool:
+        """Record facts about a branch's runs on its record
+        (``branch_config.set_branch_fields``), selected or not."""
+        pair = self._open(session_id)
+        if pair is None:
+            return False
+        session_log, idx = pair
+        from ..branch_config import set_branch_fields
+        with self._head_file_lock(session_log):
+            meta = session_log.read_meta()
+            if not set_branch_fields(meta, branch_id, fields):
+                return False
+            with idx._persist_lock:
+                with idx._lock:
+                    idx.meta = meta
+                    idx.head_id = meta.get("head_id")
+                session_log.write_meta(meta)
+        return True
 
 
     def branch_entries(self, session_id: str) -> dict[str, dict[str, shared.Any]]:
@@ -393,38 +650,37 @@ class BranchesOperations:
         """Merge ``fields`` into a branch's meta entry without touching
         its name. Used for lifecycle facts that ride the same entry as
         the name (``archived`` / ``archived_at`` / ``archived_reason``
-        — see agent-collaboration.md, archiving)."""
-        pair = self._open(session_id, create_if_missing=True)
-        if pair is None:
-            return
-        session_log, idx = pair
-
+        — see agent-collaboration.md, archiving). The tip may be a reply
+        admitted but not yet written (``close_agent`` on a running
+        agent), so the record is opened even before its message exists.
+        Archiving cannot be undone: a branch archived first keeps its
+        own ``archived_at``."""
         def _mutate(entry: dict) -> None:
             now = shared.time.time()
             entry.update(fields)
             entry.setdefault("created_at", now)
             entry["updated_at"] = now
 
-        idx.update_branch_entry(head_msg_id, _mutate)
-        self._persist_meta(session_log, idx)
+        self._merge_branch_entry(session_id, head_msg_id, _mutate)
 
 
     def bump_branch_turns(self, session_id: str, head_msg_id: str) -> int:
         """Increment a branch's per-branch turn counter and return the
         new value. Used by finalize_turn to decide whether to trigger
         Stage-2 auto-rename (counter, not a message count — see
-        branch-naming.md 第四节)."""
-        pair = self._open(session_id, create_if_missing=True)
+        branch-naming.md 第四节). Returns 0, writing nothing, for a tip
+        that is not a message of the conversation (deleted meanwhile)."""
+        pair = self._open(session_id)
         if pair is None:
             return 0
-        session_log, idx = pair
+        _session_log, idx = pair
 
         def _mutate(entry: dict) -> None:
             entry["turns"] = int(entry.get("turns", 0)) + 1
 
-        merged = idx.update_branch_entry(head_msg_id, _mutate)
-        self._persist_meta(session_log, idx)
-        return int(merged.get("turns", 0))
+        merged = self._merge_branch_entry(session_id, head_msg_id, _mutate,
+                                          create=head_msg_id in idx.nodes_by_id)
+        return int((merged or {}).get("turns", 0))
 
 
     def carry_branch_entry(self, session_id: str, head_msg_id: str) -> bool:
@@ -442,49 +698,57 @@ class BranchesOperations:
         root that opened the branch. A fork point already had another
         conversation child before this turn, so its entry (if any)
         belongs to the line that left it first and is left alone; the
-        fork starts with a fresh entry like any new branch.
+        fork starts with a fresh entry like any new branch. The records
+        are read and moved on disk inside the write lock.
         """
         pair = self._open(session_id)
         if pair is None:
             return False
         session_log, idx = pair
-        named = idx.meta.get("branches") or {}
         node = idx.nodes_by_id.get(head_msg_id)
-        if node is None or head_msg_id in named:
+        if node is None:
             return False
-        source = None
-        seen: set[str] = set()
-        cur = shared._node_conv_predecessor(node)
-        while cur and cur not in seen:
-            seen.add(cur)
-            if cur in named:
-                source = cur
-                break
-            prev = idx.nodes_by_id.get(cur)
-            if prev is None or prev.role != shared.ROLE_USER:
-                break
-            cur = shared._node_conv_predecessor(prev)
-        if source is None:
-            return False
-        conv_kids = [
-            k for k in idx.children_by_predecessor.get(source, [])
-            if (kid := idx.nodes_by_id.get(k)) is not None
-            and kid.role in (shared.ROLE_USER, shared.ROLE_LLM)
-            and (kid.metadata or {}).get("display") != "root"
-            and not ((kid.metadata or {}).get("display") == "runtime"
-                     and kid.role != shared.ROLE_USER)
-            and (kid.metadata or {}).get("function") != "attach"
-        ]
-        if len(conv_kids) > 1:
-            return False
-        with idx._lock:
-            branches = dict(idx.meta.get("branches") or {})
-            if head_msg_id in branches or source not in branches:
-                return False
-            branches[head_msg_id] = branches.pop(source)
-            idx.meta["branches"] = branches
-        self._persist_meta(session_log, idx)
-        return True
+
+        def _apply(meta: dict):
+            named = dict(meta.get("branches") or {})
+            if head_msg_id in named:
+                return False, False
+            source = None
+            seen: set[str] = set()
+            cur = shared._node_conv_predecessor(node)
+            while cur and cur not in seen:
+                seen.add(cur)
+                if cur in named:
+                    source = cur
+                    break
+                prev = idx.nodes_by_id.get(cur)
+                if prev is None or prev.role != shared.ROLE_USER:
+                    break
+                cur = shared._node_conv_predecessor(prev)
+            if source is None:
+                return False, False
+            hidden = set(meta.get("rewind_hidden_nodes") or [])
+            conv_kids = [
+                k for k in idx.children_by_predecessor.get(source, [])
+                if k not in hidden and (kid := idx.nodes_by_id.get(k)) is not None
+                and kid.role in (shared.ROLE_USER, shared.ROLE_LLM)
+                and (kid.metadata or {}).get("display") != "root"
+                and not ((kid.metadata or {}).get("display") == "runtime"
+                         and kid.role != shared.ROLE_USER)
+                and (kid.metadata or {}).get("function") != "attach"
+            ]
+            resumes_rewind = any(
+                edge.get("target_head_id") == source and edge.get("status") == "rewound"
+                and edge.get("target_branch_id") == meta.get("active_branch_id")
+                for edge in meta.get("rewind_edges") or []
+            )
+            if len(conv_kids) > 1 and not resumes_rewind:
+                return False, False
+            named[head_msg_id] = named.pop(source)
+            meta["branches"] = named
+            return True, True
+
+        return self._update_meta(session_log, idx, _apply)
 
 
     def delete_branch_name(self, session_id: str, head_msg_id: str) -> None:
@@ -492,11 +756,82 @@ class BranchesOperations:
         if pair is None:
             return
         session_log, idx = pair
-        branches = dict(idx.meta.get("branches") or {})
-        if branches.pop(head_msg_id, None) is None:
-            return
-        idx.set_meta(branches=branches)
-        self._persist_meta(session_log, idx)
+
+        def _apply(meta: dict):
+            branches = dict(meta.get("branches") or {})
+            if branches.pop(head_msg_id, None) is None:
+                return False, None
+            meta["branches"] = branches
+            return True, None
+
+        self._update_meta(session_log, idx, _apply)
+
+
+    def branch_tail(self, session_id: str, head_msg_id: str) -> dict[str, shared.Any]:
+        """The part of a branch that only this branch holds.
+
+        ``head_msg_id`` names any message on the branch. Its tip is found
+        by following the one conversation child down; its tail starts
+        where, walking up, a message's predecessor has another
+        conversation child (the fork point). Deleting a branch deletes
+        this tail, so the fork point and everything above it, which other
+        branches share, stay. Returns ``{"start", "tip", "fork", "nodes"}``;
+        raises ``ValueError`` when the message is unknown, when several
+        branches continue below it, or when the branch is the
+        conversation's only line (nothing forks from it). ``nodes`` lists
+        every message the delete removes.
+        """
+        pair = self._open(session_id)
+        if pair is None:
+            raise ValueError("Unknown conversation.")
+        _session_log, idx = pair
+        hidden = set(idx.meta.get("rewind_hidden_nodes") or [])
+        node = idx.nodes_by_id.get(head_msg_id)
+        if node is None or head_msg_id in hidden:
+            raise ValueError("That message is not on any branch.")
+
+        def _conv_kids(parent: str) -> list[str]:
+            kids = []
+            for kid_id in idx.children_by_predecessor.get(parent, []):
+                kid = idx.nodes_by_id.get(kid_id)
+                if kid is None or kid_id in hidden or kid.role not in (shared.ROLE_USER, shared.ROLE_LLM):
+                    continue
+                md = kid.metadata or {}
+                if (md.get("display") == "root" or md.get("structural")
+                        or md.get("function") == "attach"
+                        or (md.get("display") == "runtime" and kid.role != shared.ROLE_USER)):
+                    continue
+                kids.append(kid_id)
+            return kids
+
+        tip = head_msg_id
+        seen = {tip}
+        while True:
+            kids = _conv_kids(tip)
+            if not kids:
+                break
+            if len(kids) > 1:
+                raise ValueError("Several branches continue from that message; pick one of their tips.")
+            tip = kids[0]
+            if tip in seen:
+                break
+            seen.add(tip)
+        start = head_msg_id
+        seen = {start}
+        while True:
+            pred = shared._node_conv_predecessor(idx.nodes_by_id[start])
+            pred_node = idx.nodes_by_id.get(pred) if pred else None
+            if pred_node is None:
+                raise ValueError("This is the conversation's only branch; delete the conversation instead.")
+            if len(_conv_kids(pred)) > 1:
+                return {"start": start, "tip": tip, "fork": pred,
+                        "nodes": _subtree(idx, start)}
+            if ((pred_node.metadata or {}).get("display") == "root"
+                    or pred_node.role not in (shared.ROLE_USER, shared.ROLE_LLM)
+                    or pred in seen):
+                raise ValueError("This is the conversation's only branch; delete the conversation instead.")
+            seen.add(pred)
+            start = pred
 
 
     def delete_branch_tail(self, session_id: str, head_msg_id: str) -> int:
@@ -509,22 +844,8 @@ class BranchesOperations:
         # Fork point the doomed subtree hangs off — the head fallback
         # if the session head turns out to live inside the subtree.
         root_pred = shared._node_conv_predecessor(idx.nodes_by_id[head_msg_id])
-        # Collect head + descendants (both conv-children and sub-calls).
-        to_delete: list[str] = [head_msg_id]
-        seen: set[str] = {head_msg_id}
-        stack: list[str] = [head_msg_id]
-        while stack:
-            cur = stack.pop()
-            for cid in idx.children_by_predecessor.get(cur, []):
-                if cid not in seen:
-                    seen.add(cid)
-                    to_delete.append(cid)
-                    stack.append(cid)
-            for cid in idx.children_by_caller.get(cur, []):
-                if cid not in seen:
-                    seen.add(cid)
-                    to_delete.append(cid)
-                    stack.append(cid)
+        to_delete = _subtree(idx, head_msg_id)
+        seen: set[str] = set(to_delete)
 
         session_log.delete_nodes(to_delete)
         # Drop from index. ID set kept so the
@@ -550,17 +871,33 @@ class BranchesOperations:
                         kids.remove(nid)
                         if not kids:
                             del idx.children_by_caller[parent]
-        # Drop named branches for the deleted heads
-        branches = dict(idx.meta.get("branches") or {})
-        for nid in to_delete:
-            branches.pop(nid, None)
-        idx.set_meta(branches=branches)
-        # A head inside the deleted subtree must not survive the
-        # deletion — a dangling head renders the session empty. Fall
-        # back to the fork point the subtree hung off (None = the tail
-        # was the whole session). Callers that pick a smarter new head
-        # (the ws handler moves to another named leaf) overwrite this.
-        if idx.head_id in seen:
-            idx.set_head(root_pred)
-        self._persist_meta(session_log, idx)
+        # Drop named branches for the deleted heads. A branch record whose
+        # tip was deleted is gone with it: kept, it still listed the
+        # branch, pointed at a missing message, and took a message sent
+        # to it. The selected record stays for the caller to move off (a
+        # checkout before the delete). A head inside the deleted subtree
+        # must not survive the deletion — a dangling head renders the
+        # session empty. Fall back to the fork point the subtree hung off
+        # (None = the tail was the whole session). Callers that pick a
+        # smarter new head (the ws handler moves to another named leaf)
+        # overwrite this. All read and written on disk under the lock.
+        def _apply(meta: dict):
+            branches = dict(meta.get("branches") or {})
+            for nid in to_delete:
+                branches.pop(nid, None)
+            meta["branches"] = branches
+            refs = dict(meta.get("branch_refs") or {})
+            active_id = meta.get("active_branch_id")
+            dropped = [key for key, ref in refs.items()
+                       if key != active_id and isinstance(ref, dict) and ref.get("head_id") in seen]
+            for key in dropped:
+                refs.pop(key)
+            if dropped:
+                meta["branch_refs"] = refs
+            if meta.get("head_id") in seen or idx.head_id in seen:
+                meta["head_id"] = root_pred
+            return True, None
+
+        self._update_meta(session_log, idx, _apply,
+                          keys=("branches", "branch_refs", "head_id"))
         return len(to_delete)

@@ -206,10 +206,11 @@ writer=controller</pre>
 <li>读 <code translate="no">current</code>；<code translate="no">generation</code> 不符则释放并失败。</li>
 <li>写 <code translate="no">current.&lt;pid&gt;.tmp</code>，generation + 1，fsync。同样方式把 <code translate="no">current</code> 复制到 <code translate="no">current.prev</code>；结束观察期的写入在那里存已提交的指针，修复不会带回过期的观察期。</li>
 <li>POSIX：rename，fsync 目录。Windows：<code translate="no">MoveFileExW</code> 配 <code translate="no">MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH</code>，访问或共享错误时每 50 毫秒重试，共 20 次。</li>
-<li>释放锁。</li>
+<li>释放锁。锁删不掉不会撤销已完成的移动；它按存在时间过期。</li>
 </ol>
 <dl class="pairs">
-<dt>实现</dt><dd><code translate="no">versions/pointer.py</code>、shell 的 JavaScript、launcher 的 C、<code translate="no">bootstrap/versions.py</code>。不用符号链接。</dd>
+<dt>实现</dt><dd><code translate="no">versions/pointer.py</code>、shell 的 JavaScript、launcher 的 C、<code translate="no">bootstrap/versions.py</code>。不用符号链接，也不用 junction。</dd>
+<dt>切换替换什么</dt><dd>只有这一个文件，且在 worker 停止之后。<code translate="no">versions/</code> 和 <code translate="no">bases/</code> 封存后不再改写，所以进程或扫描程序仍占用的解释器、DLL 不会挡住切换，只会推迟保留清理。</dd>
 <dt>写入方</dt><dd>控制器、launcher 守卫、shell 恢复页、<code translate="no">bootstrap/versions.py</code>、安装器</dd>
 <dt>丢失或无法解析</dt><dd>只重建、不重新播种：先用 <code translate="no">current.prev</code>，否则 <code translate="no">rebuild-pointer</code> 选提交可从 <code translate="no">local</code> 到达的最新版本，<code translate="no">writer=bootstrap</code>。</dd>
 <dt>回退冲突</dt><dd>重读；<code translate="no">version</code> 已不是候选即已完成。到期仍失败则写 <code translate="no">pending-rollback</code>，由 launcher 应用。</dd>
@@ -246,7 +247,7 @@ writer=controller</pre>
 <tr><th scope="row">不启动</th><td>调度器、cron、常驻 ticker、频道、MCP 服务端和客户端、发行版检查、服务安装、更新巡检、空闲会话监视、夜间整理、配置钩子、订阅目录刷新、Programs 监视。由 <code translate="no">runner.py:trial_mode()</code> 决定</td></tr>
 <tr><th scope="row">macOS</th><td><code translate="no">sandbox.sb</code>：只写试运行目录；拒绝读取实时状态，除了 <code translate="no">versions/&lt;id&gt;</code>、<code translate="no">bases/&lt;base&gt;</code>、<code translate="no">trials/&lt;update&gt;</code> 及祖先元数据；网络只到试运行的 worker 端口和假模型端口</td></tr>
 <tr><th scope="row">Linux</th><td>可用时用 bubblewrap，规则相同</td></tr>
-<tr><th scope="row">Windows</th><td>只有临时数据、端口和净化副本；每个结果都说明</td></tr>
+<tr><th scope="row">Windows</th><td>没有系统沙箱：隔离只有临时数据、单独端口和净化副本。试运行期间的进度行和结果都说明这次测试可以碰到电脑上的其他文件。<code translate="no">PATH</code> 是 base 的 Python 加 Windows 系统目录。“launcher 跟随移动后的指针”这项检查跳过。</td></tr>
 </tbody>
 </table>
 <ol>
@@ -347,7 +348,8 @@ writer=controller</pre>
 <h2 id="retention">保留</h2>
 <dl class="pairs">
 <dt>保留</dt><dd><code translate="no">current</code>、<code translate="no">last_good</code>、<code translate="no">previous_good</code>；最近 5 个成功版本；每个更新未结束或排队时的 <code translate="no">controller_version</code> 和 <code translate="no">candidate_version</code>；打开的 shell 加载的版本（<code translate="no">shell.json</code>，pid 存活）；10 分钟内 <code translate="no">boot/&lt;id&gt;.attempts</code> 被触碰的版本；保留版本指向的前端 zip</dd>
-<dt>删除</dt><dd>改名到 <code translate="no">trash/&lt;id&gt;</code> 再删；Windows 上被锁则下次重试。无引用的 base 同样处理。</dd>
+<dt>删除</dt><dd>改名到 <code translate="no">trash/&lt;id&gt;</code> 再删。只读文件（如 Windows 上的 Git 对象）先改为可写再重试。无引用的 base 同样处理。</dd>
+<dt>没删掉的</dt><dd>运行中的进程占用的目录树，或一直被锁的文件。本次清理把它们列在 <code translate="no">Plan.remaining</code> 并写日志，下次再试。</dd>
 <dt>时机</dt><dd><code translate="no">succeeded</code> 后和 worker 启动时，名额被占时不运行。失败候选 7 天后，中止更新的 <code translate="no">work/&lt;task&gt;</code> 14 天后。</dd>
 </dl>
 
@@ -383,6 +385,7 @@ writer=controller</pre>
 </table>
 <dl class="pairs">
 <dt>恢复页</dt><dd><code translate="no">/healthz</code> 失败 120 秒、无切换和迁移、版本不在观察期或没有备选时显示。列出和设置页相同的版本，编号来自 <code translate="no">version-numbers.json</code>，不含从未提交的候选。选择后写 <code translate="no">writer=shell</code>。可重新播种代码，绝不覆盖非空 <code translate="no">repo/</code>。不依赖 Python 和 worker。</dd>
+<dt>停止 worker</dt><dd>在恢复页移动 <code translate="no">current</code> 之前。POSIX：<code translate="no">SIGTERM</code>。Windows：写 worker 会读取的 <code translate="no">worker.stop</code> 请求，等 8 秒让它按顺序退出，然后 <code translate="no">taskkill /T /F</code>。20 秒后 worker 仍在则什么都不改。</dd>
 <dt><code translate="no">shell_compat</code></dt><dd>一个范围：shell 声明 min 和 max，每个新 shell 接受上一个 compat。<code translate="no">spawnWorker</code> 以及恢复和撤销列表按它过滤。</dd>
 <dt>切换期间</dt><dd><code translate="no">appInstallInProgress()</code> 在所有平台读 <code translate="no">switching</code>：pid 存活且在期限内时 shell 等待，不启动也不重启。</dd>
 <dt>随时可用</dt><dd>原生菜单项 “Go back to a previous version”（Windows、Linux 在 File 菜单），不依赖 worker</dd>
@@ -458,8 +461,8 @@ writer=controller</pre>
 <tbody>
 <tr><th scope="row">签名</th><td>Electron、<code translate="no">app.asar</code>（loader、恢复页、node-pty）、launcher、macOS 助手。没有 Developer ID 时 <code translate="no">local_signing.py</code> 给助手稳定身份。<code translate="no">versions/</code> 和 <code translate="no">bases/</code> 的文件不签名、不隔离。</td></tr>
 <tr><th scope="row">种子</th><td><code translate="no">Resources/seed/</code>：<code translate="no">base.tar.zst</code>、<code translate="no">version.tar.zst</code>、<code translate="no">repo.bundle</code>、launcher、助手。<code translate="no">.seeding</code> 最先写、最后删；中断的播种重新开始。非空 <code translate="no">repo/</code> 绝不覆盖。</td></tr>
-<tr><th scope="row">Git</th><td>macOS、Windows 用钉住的 dugite-native；<code translate="no">&lt;base&gt;/git/bin</code> 排在 <code translate="no">PATH</code> 最前</td></tr>
-<tr><th scope="row">Windows</th><td>每用户 NSIS 只装 shell。<code translate="no">prepare-upgrade.ps1</code> 和 <code translate="no">installer.nsh</code> 只停 shell 根目录下的进程。</td></tr>
+<tr><th scope="row">Git</th><td>macOS、Windows 用钉住的 dugite-native；<code translate="no">&lt;base&gt;/git/bin</code> 排在 <code translate="no">PATH</code> 最前，Windows 上是 <code translate="no">&lt;base&gt;\git\cmd</code></td></tr>
+<tr><th scope="row">Windows</th><td>每用户 NSIS 只装 shell。升级时 <code translate="no">prepare-upgrade.ps1</code> 只停 shell 根目录下的进程。卸载时 <code translate="no">remove-background.ps1</code> 还会停止 Worker 并移除它的登录任务；<code translate="no">&lt;root&gt;</code> 和用户数据保留。</td></tr>
 <tr><th scope="row">CLI</th><td><code translate="no">install-release.sh</code>/<code translate="no">.ps1</code> 采用 <code translate="no">&lt;root&gt;</code> 和 <code translate="no">current</code>，迁移 <code translate="no">runtime/cli/releases</code></td></tr>
 <tr><th scope="row">模式判断</th><td><code translate="no">layout.managed()</code> 取代 <code translate="no">OPENPROGRAM_IMMUTABLE_RUNTIME</code>；内嵌模式保留该变量</td></tr>
 </tbody>
@@ -471,8 +474,8 @@ writer=controller</pre>
 <thead class="sr"><tr><th scope="col">状态</th><th scope="col">项</th></tr></thead>
 <tbody>
 <tr><th scope="row">已实现</th><td>状态机和 schema 2、队列、各平台切换控制器和 launcher、心跳、watchdog、保存的对话、subsystems、巡检、全部 <code translate="no">self_update</code> 动作、版本存储、指针、launcher、保留、试运行引擎、通过 <code translate="no">openprogram upgrade</code> 的发行版获取和重放、thin shell 加载器、种子、恢复页、握手、重启、CLI 种子安装器</td></tr>
-<tr><th scope="row">未验证</th><td>Windows，等有 Windows 机器或虚拟机运行</td></tr>
-<tr><th scope="row">未完成</th><td><code translate="no">release.yml</code> 仍发布内嵌 App。真实 base 和种子未构建，也未在真实 Electron 下运行。没有发行清单的签名密钥，因此无法接受官方发行版。macOS 隐私授权门需要人工点击。发行版下载到目录。</td></tr>
+<tr><th scope="row">未验证</th><td>Windows：版本存储的任何部分都没在那里运行过。它的分支通过替身和交叉编译的 launcher 测试。<code translate="no">windows-desktop</code> 在 Windows 上跑 shell 检查；<code translate="no">windows-core</code> 只跑 launcher 测试。</td></tr>
+<tr><th scope="row">未完成</th><td>没有发布过 Windows App 和 Windows 更新文件：唯一一次构建它们的 Release 运行在这一步失败。Linux 的 thin App 和已签名更新文件已发布；还没有在已安装的副本上观察到切换。macOS App 仍内嵌运行时，除非设置 <code translate="no">OPENPROGRAM_RELEASE_MAC_THIN</code>。macOS 隐私授权门需要人工点击。</td></tr>
 <tr><th scope="row">暂时保留</th><td><code translate="no">legacy_app</code>、<code translate="no">delivery/bootstrap.py</code>、<code translate="no">control/supervisor.py</code> 的 App 路径、<code translate="no">repair/owner_repair.py</code>、<code translate="no">owner_terminal.py</code>，直到已发布的 App 都是 thin。<code translate="no">package_protocol.py</code> 留到 <code translate="no">native_checks.py</code> 和 <code translate="no">ui_checks.py</code> 不再读取。</td></tr>
 </tbody>
 </table>

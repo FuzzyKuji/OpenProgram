@@ -33,6 +33,7 @@ import shutil
 import uuid
 from pathlib import Path
 from typing import Callable
+from openprogram.host._platform.filesystem import replace_file
 
 logger = logging.getLogger(__name__)
 
@@ -169,7 +170,7 @@ def _rewrite_catalog(state: Path, log: Callable[..., None],
         temporary = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")
         try:
             temporary.write_text(json.dumps(document, indent=2), encoding="utf-8")
-            os.replace(temporary, target)
+            replace_file(temporary, target)
         finally:
             temporary.unlink(missing_ok=True)
         log("programs migration: pointed %d catalog row(s) at %s", changed, programs_root(state))
@@ -375,7 +376,7 @@ def migrate_source_tree_clones(
             temporary = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")
             try:
                 temporary.write_text(json.dumps(document, indent=2, sort_keys=True), encoding="utf-8")
-                os.replace(temporary, target)
+                replace_file(temporary, target)
             finally:
                 temporary.unlink(missing_ok=True)
     return moves

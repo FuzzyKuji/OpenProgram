@@ -2,7 +2,7 @@
 <meta name="description" content="How DAG branches get a name, from short id to progressive LLM label, and what locks it.">
 <h1>Branch naming</h1>
 
-<p>A branch in the DAG is a named leaf; forking creates no separate object. The trunk has no synthesized <code translate="no">main</code> name and follows the same rules.</p>
+<p>A branch name follows its current conversation endpoint; an explicit fork uses another endpoint. Rewind preserves the current branch identity and name, even when its endpoint temporarily rests on a shared ancestor of an existing sibling. The trunk has no synthesized <code translate="no">main</code> name and follows the same rules.</p>
 
 <h2 id="branch-policy">Who wins</h2>
 
@@ -10,7 +10,7 @@
 <thead><tr><th scope="col">Tier</th><th scope="col">Source</th><th scope="col">Locks</th><th scope="col">Automatic naming may overwrite</th></tr></thead>
 <tbody>
 <tr><th scope="row">Highest</th><td>User rename (<code translate="no">rename_branch</code>, Branches panel, <code translate="no">/branch &lt;name&gt;</code>) or user-requested LLM name (<code translate="no">auto_name_branch</code>, <code translate="no">/branch</code>, TUI <code translate="no">/branch rename</code>)</td><td>Sets <code translate="no">name_locked</code></td><td>No</td></tr>
-<tr><th scope="row">Spawn</th><td>Label of a spawned task</td><td>No</td><td>Only if the write-back passes its checks</td></tr>
+<tr><th scope="row">Spawn</th><td>Label of a spawned task, recorded at admission on the reply the run will write (<code translate="no">&lt;job&gt;_user_reply</code>), so the agent list and Activity name the branch while it runs; written again at the end only if the branch has no name</td><td>No</td><td>Only if the write-back passes its checks</td></tr>
 <tr><th scope="row">Automatic</th><td>Background LLM label at thresholds</td><td>No</td><td>Yes</td></tr>
 <tr><th scope="row">Fallback</th><td>First 8 hex digits of <code translate="no">head_msg_id</code></td><td>No</td><td>Replaced by any stored name</td></tr>
 </tbody>
@@ -22,10 +22,10 @@
 
 <ol class="flow">
 <li><strong><code translate="no">finalize_turn</code></strong><small>Skipped for background turns; their branches are hidden when they end.</small></li>
-<li><strong><code translate="no">carry_branch_entry</code></strong><small>Moves the entry from the tip this turn extended to the new head, so name, lock and counter follow the branch. A fork point stays put; the fork starts fresh.</small></li>
-<li><strong><code translate="no">maybe_auto_name_branch</code></strong><small>Stops if locked or archived. Otherwise <code translate="no">turns</code> + 1.</small></li>
+<li><strong><code translate="no">carry_branch_entry</code></strong><small>A recorded branch's entry has already moved with each message the turn wrote (<code translate="no">follow_line</code> for the selected branch, <code translate="no">carry_branch</code> for another), merged with any entry written at the new tip, so a rename mid-turn keeps the counter. For a line without a branch record, this moves the entry from the tip this turn extended to the new head, so name, lock and counter follow the branch. An ordinary fork point stays put; the fork starts fresh. Continuing after Rewind carries the current entry even when a sibling exists, preserving its name, lock and counter.</small></li>
+<li><strong><code translate="no">maybe_auto_name_branch</code></strong><small>Stops if archived. Otherwise <code translate="no">turns</code> + 1, locked or not; a locked branch gets no automatic label.</small></li>
 <li><strong><code translate="no">turns</code> in 1, 6, 16, 40</strong><small>Background thread: last 6 messages, at most 2000 characters, 2 to 6 words, capped at 40 characters.</small></li>
-<li class="flow-end"><strong>Write back</strong><small>Rereads the entry and discards the label if it is now locked or archived; otherwise stores it and refreshes <code translate="no">branches_list</code>.</small></li>
+<li class="flow-end"><strong>Write back</strong><small>Rereads the entry and discards the label if it is now locked or archived (the lock is checked again on the record inside the write lock); otherwise stores it and refreshes <code translate="no">branches_list</code>.</small></li>
 </ol>
 
 <h2 id="branch-contract">State</h2>
@@ -40,7 +40,7 @@
   }
 }</pre>
 
-<p class="note">In session <code translate="no">meta.json</code>, written by <code translate="no">set_branch_name</code>, which merges so a name-only write keeps the lock and counters.</p>
+<p class="note">In session <code translate="no">meta.json</code>, written by <code translate="no">set_branch_name</code>, which merges so a name-only write keeps the lock and counters. Every writer merges on disk under the session write lock (<a href="../session/storage-consistency.html#branch-records">branch records</a>). A write addressed to a tip the branch has since moved past (the previous reply, or this turn's own message) goes to the branch's record at its tip now.</p>
 
 <table class="stack fixed">
 <thead><tr><th scope="col">Display</th><th scope="col">Shows</th></tr></thead>
@@ -85,7 +85,7 @@
 <h2 id="branch-boundaries">Boundaries</h2>
 
 <ul>
-<li>No second branch entity or naming store.</li>
+<li>Labels remain in session metadata and branch references; no separate naming registry.</li>
 <li>Branch naming changes neither the session title nor the DAG parent edges.</li>
 </ul>
 

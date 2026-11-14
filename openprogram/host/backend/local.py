@@ -1,85 +1,36 @@
 """Local backend — bounded subprocess execution in the host shell.
 
-The agent's ``bash`` tool routes every command through here. On POSIX
-that's ``shell=True`` (the host ``/bin/sh``), exactly as before. On
-Windows ``shell=True`` would invoke ``cmd.exe``, which cannot parse the
-bash syntax the agent is steered toward (``&&``, pipes, ``$(...)``,
-single-quote escaping, heredocs) or run unix coreutils (``rm``/``ls``/
-``grep``/…). So on Windows we run the command through Git Bash when it is
-present, falling back to the built-in Windows PowerShell instead of the much
-less capable ``cmd.exe``. Background shells are created without a console
-window so Desktop tool calls do not flash a terminal on screen.
+The agent's ``bash`` tool routes every command through here, in the shell
+``host._platform.command_shell`` resolves: bash on POSIX (``/bin/sh`` only
+on a host with no bash), Git Bash or PowerShell on Windows, never
+``cmd.exe``, and ``/bin/bash`` under the sandbox. Background shells are
+created without a console window so Desktop tool calls do not flash a
+terminal on screen.
 """
 from __future__ import annotations
 
 import logging
 import os
-import shutil
+import shlex
 import subprocess
-import sys
 from dataclasses import replace
 
 from openprogram.host.backend.base import Backend, RunResult, decode_maybe
 from openprogram.host.backend.process import run_command
 from openprogram.host import sandbox as _sandbox
 from openprogram.host._platform.process_ownership import ProcessTreeOwner, no_window_creation_flags
+from openprogram.host._platform import command_shell
 from openprogram.host._platform.terminal import git_bash_invocation, powershell_invocation
 
 log = logging.getLogger(__name__)
-
-_WIN_BASH_CACHE: str | None | bool = False  # False = not yet probed
-
-
-def _windows_bash() -> str | None:
-    """Path to a POSIX bash on Windows, or None. Prefers Git Bash, which
-    handles Windows cwd/paths natively; deliberately skips the WSL
-    launcher (``C:\\Windows\\System32\\bash.exe``) because it runs in the
-    Linux subsystem with a different filesystem, so a Windows ``cwd``
-    wouldn't map. Cached for the process lifetime."""
-    global _WIN_BASH_CACHE
-    if _WIN_BASH_CACHE is not False:
-        return _WIN_BASH_CACHE  # type: ignore[return-value]
-    candidates = [
-        os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "Git", "bin", "bash.exe"),
-        os.path.join(os.environ.get("ProgramW6432", r"C:\Program Files"), "Git", "bin", "bash.exe"),
-        os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "Git", "bin", "bash.exe"),
-    ]
-    chosen: str | None = None
-    for c in candidates:
-        if c and os.path.isfile(c):
-            chosen = c
-            break
-    if chosen is None:
-        found = shutil.which("bash")
-        # Skip the WSL launcher (System32\bash.exe) — it execs into the
-        # Linux subsystem, where the Windows cwd/paths don't apply.
-        if found and "system32" not in found.lower():
-            chosen = found
-    _WIN_BASH_CACHE = chosen
-    return chosen
-
-
-def _windows_powershell() -> str:
-    """Return the best available non-interactive Windows PowerShell."""
-
-    found = shutil.which("pwsh.exe") or shutil.which("powershell.exe")
-    if found:
-        return found
-    system_root = os.environ.get("SystemRoot", r"C:\Windows")
-    return os.path.join(
-        system_root,
-        "System32",
-        "WindowsPowerShell",
-        "v1.0",
-        "powershell.exe",
-    )
 
 
 def _invocation(command: str, cwd: str | None = None, *,
                 policy: _sandbox.SandboxPolicy | None = None,
                 ) -> tuple[str | list[str], bool, dict | None, bool]:
-    """Return ``(args, shell, env, sandboxed)`` for the host run. POSIX: the command
-    string via the host shell (unchanged). Windows: a real bash via
+    """Return ``(args, shell, env, sandboxed)`` for the host run. POSIX:
+    ``[bash, "-c", command]``, or the command string via ``/bin/sh`` on a
+    host without bash. Windows: a real bash via
     ``[bash, "-c", command]`` (shell=False) when available, else the
     command string via non-interactive Windows PowerShell. ``env`` is None
     when the command runs unsandboxed, i.e. inherits ours.
@@ -97,11 +48,10 @@ def _invocation(command: str, cwd: str | None = None, *,
     if policy is None:
         policy = _sandbox.resolve_policy()
     from openprogram.host.sandbox.recoverable_delete import (
-        TRASH_ENV,
         prepare_child_env,
         sandbox_writable_root,
     )
-    if policy is not None:
+    if command_shell.resolve_shell(policy=policy).sandboxed:
         trash_root = sandbox_writable_root()
         if trash_root:
             prepared_env = prepare_child_env(_sandbox.child_env(policy))
@@ -111,10 +61,11 @@ def _invocation(command: str, cwd: str | None = None, *,
             )
         else:
             prepared_env = _sandbox.child_env(policy)
+        args, shell = _sandbox.wrap_command(command, cwd or os.getcwd(), policy)
+        return (args, shell, prepared_env, True)
+    if policy is not None:
+        # Configured, but resolve_shell found the sandbox cannot run here.
         reason = _sandbox.unavailable_reason()
-        if reason is None:
-            args, shell = _sandbox.wrap_command(command, cwd or os.getcwd(), policy)
-            return (args, shell, prepared_env, True)
         if (policy.network_domains is not None
                 or _sandbox.unavailable_policy() == _sandbox.UNAVAILABLE_POLICY_REFUSE):
             raise _sandbox.SandboxUnavailable(
@@ -124,26 +75,45 @@ def _invocation(command: str, cwd: str | None = None, *,
             )
         log.warning("sandbox requested but unavailable (%s) — running "
                     "the command WITHOUT a sandbox", reason)
-    if sys.platform == "win32":
-        bash = _windows_bash()
-        if bash:
-            prepared_env = prepare_child_env()
-            if prepared_env and prepared_env.get(TRASH_ENV):
-                # MSYS prepends /usr/bin to a Windows PATH while starting
-                # Git Bash, which would otherwise put the real rm/rmdir ahead
-                # of our recoverable-delete shims. Resolve the run-local path
-                # inside MSYS and prepend it again in the shell itself.
-                command = (
-                    'PATH="$(cygpath -u "$OPENPROGRAM_RECOVERABLE_TRASH")'
-                    '/shims/bin:$PATH"; export PATH; ' + command
-                )
-            args, prepared_env = git_bash_invocation(bash, command, prepared_env)
-            return (args, False, prepared_env, False)
-        args, prepared_env = powershell_invocation(
-            _windows_powershell(), command, prepare_child_env(),
-        )
-        return (args, False, prepared_env, False)
-    return (command, True, prepare_child_env(), False)
+    args, shell, prepared_env = host_shell_invocation(command, prepare_child_env())
+    return (args, shell, prepared_env, False)
+
+
+def host_shell_invocation(command: str, env: dict | None = None, *,
+                          profile: command_shell.ShellProfile | None = None,
+                          ) -> tuple[str | list[str], bool, dict | None]:
+    """``(args, shell, env)`` that run ``command`` in the host shell
+    (``command_shell.host_shell``), or in ``profile`` when one is given.
+
+    The one place that turns shell source into a process on the host, so a
+    user's hook runs in the shell the command tool uses; a hook declared for
+    PowerShell passes that profile. ``env`` is the child's whole
+    environment, or None to inherit ours.
+    """
+    from openprogram.host.sandbox.recoverable_delete import TRASH_ENV
+    profile = profile or command_shell.host_shell()
+    if profile.kind == "git-bash":
+        if env and env.get(TRASH_ENV):
+            # MSYS prepends /usr/bin to a Windows PATH while starting the
+            # shell, which would put the real rm/rmdir ahead of the
+            # recoverable-delete shims; the shell puts them first again.
+            # cygpath spells the folder for the bash it sits beside (Cygwin
+            # names drives /cygdrive/c); a bash without one gets the MSYS
+            # spelling.
+            fallback = command_shell.msys_path(env[TRASH_ENV]).rstrip("/")
+            command = (
+                f'PATH="$(cygpath -u "${TRASH_ENV}" 2>/dev/null'
+                f' || printf %s {shlex.quote(fallback)})/shims/bin:$PATH"; export PATH; '
+                + command
+            )
+        args, child_env = git_bash_invocation(profile.path, command, env)
+        return (args, False, child_env)
+    if profile.is_powershell:
+        args, child_env = powershell_invocation(profile.path, command, env)
+        return (args, False, child_env)
+    if profile.kind == "bash":
+        return ([profile.path, "-c", command], False, env)
+    return (command, True, env)
 
 
 class LocalBackend(Backend):

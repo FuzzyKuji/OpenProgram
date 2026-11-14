@@ -721,3 +721,46 @@ def test_a_refused_rename_is_not_retried_off_windows(tmp_path, monkeypatch):
     with pytest.raises(PermissionError):
         builder._move_directory(tmp_path / "staged", tmp_path / "final")
     assert len(calls) == 1
+
+
+def test_a_compiled_dependency_finds_the_rust_toolchain_under_the_real_home(layout, tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    (home / ".rustup").mkdir(parents=True)
+    monkeypatch.setattr(builder.Path, "home", classmethod(lambda cls: home))
+    monkeypatch.delenv("RUSTUP_HOME", raising=False)
+    environment = builder._base_environment(layout)
+    assert environment["RUSTUP_HOME"] == str(home / ".rustup")
+    assert environment["HOME"] != str(home) and "CARGO_HOME" not in environment
+    monkeypatch.setenv("RUSTUP_HOME", "/opt/rustup")
+    assert builder._base_environment(layout)["RUSTUP_HOME"] == "/opt/rustup"
+
+
+def test_windows_workspace_junctions_leave_the_toolchain(tmp_path, monkeypatch):
+    modules = tmp_path / "node_modules"
+    (modules / "@openprogram" / "cli").mkdir(parents=True)
+    (modules / "react").mkdir()
+    removed = []
+    monkeypatch.setattr(builder.os, "name", "nt")
+    monkeypatch.setattr(builder.os.path, "isjunction", lambda entry: Path(entry).name == "cli")
+    monkeypatch.setattr(builder.os, "rmdir", lambda entry: removed.append(Path(entry).name))
+    builder._drop_junctions(tmp_path)
+    assert removed == ["cli"]
+
+
+def test_the_base_takes_a_node_that_runs_on_its_own(tmp_path):
+    root = Path(__file__).resolve().parents[4]
+    script = (root / "scripts/release/build-base.sh").read_text(encoding="utf-8")
+    start, end = script.index("runs_alone() {"), script.index('node_pin="$(')
+    shared, official = tmp_path / "shared", tmp_path / "official"
+    for directory, body in ((shared, 'test -e "$(dirname "$0")/libnode.dylib" || exit 1\necho v24.0.0\n'),
+                            (official, "echo v22.0.0\n")):
+        directory.mkdir()
+        (directory / "node").write_text("#!/bin/sh\n" + body)
+        (directory / "node").chmod(0o755)
+    (shared / "libnode.dylib").write_text("")
+    done = subprocess.run(
+        ["bash", "-c", "set -euo pipefail\n" + script[start:end] + 'printf "%s" "$node_bin"'],
+        env={"PATH": f"{shared}:{official}:/usr/bin:/bin"}, capture_output=True, text=True, timeout=60,
+    )
+    assert done.returncode == 0, done.stderr
+    assert done.stdout == str(official / "node")

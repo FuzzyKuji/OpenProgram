@@ -93,6 +93,38 @@ def _within(root: Path, relative: str) -> Path | None:
     return resolve_within(root, relative)
 
 
+def topic_origins(memory_dir: Path, target: Path) -> dict:
+    """Where a Topic file and each of its paragraphs came from, for the
+    editor's marks: ``origin`` of the file (``outside`` when another tool
+    wrote it, else ``runtime``) and, per paragraph, its ID, first line and origin (``cited``, ``person`` or ``outside``)."""
+    from openprogram.state.memory.management import ownership
+    from openprogram.state.memory.markdown.parser import read_topic_file
+
+    topics = Path(memory_dir) / "topics"
+    try:
+        relative = target.resolve().relative_to(topics.resolve()).as_posix()
+        outside = ownership.contains(ownership.outside_paths(Path(memory_dir)), relative)
+        units, _problem = read_topic_file(target, topics.resolve(), outside=outside)
+    except (OSError, ValueError):
+        return {}
+    seen: set[tuple[str, int]] = set()
+    paragraphs = []
+    for unit in units:
+        if (unit.content, unit.line) in seen:
+            continue
+        seen.add((unit.content, unit.line))
+        paragraphs.append({
+            "memory_id": unit.memory_id,
+            "line": unit.line,
+            "derived": unit.derived_id,
+            "origin": unit.origin,
+        })
+    return {
+        "origin": ownership.OUTSIDE if outside else ownership.RUNTIME,
+        "paragraphs": paragraphs,
+    }
+
+
 def _staged_edit(
     root: Path,
     write: Callable[[Path], None],
@@ -222,10 +254,12 @@ def register(app):
         from openprogram.state.memory.management.config import load_memory_config
         from openprogram.state.memory.management.transaction import TransactionError
 
+        from openprogram.state.memory.policy import owner_edit
+
         try:
             from contextlib import closing
 
-            with closing(MemoryWorkspace(
+            with owner_edit(), closing(MemoryWorkspace(
                 store.ensure(), config=load_memory_config(),
             )) as workspace:
                 result = workspace.update(
@@ -323,7 +357,14 @@ def register(app):
                 target = root / "topics" / relative
                 current = target if target.is_file() else fallback
                 current_text = current.read_text(encoding="utf-8") if current and current.is_file() else ""
-                if "base_content" in payload and payload["base_content"] != current_text:
+                from openprogram.state.memory.management.topic_normalization import holds_no_paragraph
+                # A Topic left with headings only was removed by its save
+                # (``removed`` below); the editor's base is still those
+                # headings, and they and no file are the same state.
+                missing_base = (
+                    current is None or not current.is_file()
+                ) and isinstance(payload.get("base_content"), str) and holds_no_paragraph(payload["base_content"])
+                if "base_content" in payload and payload["base_content"] != current_text and not missing_base:
                     return JSONResponse(content={"error": "This memory changed elsewhere. Your draft is retained; review the latest version before retrying."}, status_code=409)
 
                 def write(stage):
@@ -347,6 +388,8 @@ def register(app):
                 )
                 if not ok:
                     return JSONResponse(content={"error": message}, status_code=400)
+                # What a person saves stays, a Topic with headings only
+                # included: memory keeps a person's file as a file.
                 result = {"ok": True, "content": target.read_text(encoding="utf-8")}
                 if message:
                     result["warning"] = message
@@ -432,10 +475,12 @@ def register(app):
             return JSONResponse(content={"error": "forbidden"}, status_code=403)
         if not target.is_file():
             return JSONResponse(content={"error": "not found"}, status_code=404)
-        return JSONResponse(content={
+        content = {
             "path": path,
-            "content": target.read_text(encoding="utf-8"),
-        })
+            "content": target.read_text(encoding="utf-8", errors="replace"),
+            **topic_origins(store.topics_dir().parent, target),
+        }
+        return JSONResponse(content=content)
 
     @router.put("/api/memory/topics/{path:path}")
     async def save_topic(path: str, request: Request):

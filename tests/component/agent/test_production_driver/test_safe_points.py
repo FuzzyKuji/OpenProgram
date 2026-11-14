@@ -786,7 +786,7 @@ def test_function_suspension_retains_pending_agent_tool_slot(tmp_path, monkeypat
                     {
                         "type": "toolCall",
                         "id": "function-call",
-                        "name": "web_use",
+                        "name": "page_tool",
                         "arguments": {},
                     }
                 ],
@@ -801,7 +801,7 @@ def test_function_suspension_retains_pending_agent_tool_slot(tmp_path, monkeypat
     )
     hook(
         "tool.before",
-        {"tool_call_id": "function-call", "tool_name": "web_use", "arguments": {}},
+        {"tool_call_id": "function-call", "tool_name": "page_tool", "arguments": {}},
     )
     hook("tool.started", {"tool_call_id": "function-call"})
     from openprogram import Agent
@@ -813,7 +813,7 @@ def test_function_suspension_retains_pending_agent_tool_slot(tmp_path, monkeypat
     class RegisteredProgram1Agent(Agent):
         method_options = {
             "run": {
-                "name": "web_use",
+                "name": "page_tool",
                 "as_tool": False,
                 "resumable": True,
                 "tool": True,
@@ -843,7 +843,7 @@ def test_function_suspension_retains_pending_agent_tool_slot(tmp_path, monkeypat
             "tool.suspended",
             {
                 "tool_call_id": "function-call",
-                "tool_name": "web_use",
+                "tool_name": "page_tool",
                 "next_tool_index": 0,
                 "tool_call_ids": ["function-call"],
             },
@@ -878,7 +878,7 @@ def test_function_suspension_retains_pending_agent_tool_slot(tmp_path, monkeypat
     assert (
         resumed_hook(
             "tool.before",
-            {"tool_call_id": "function-call", "tool_name": "web_use", "arguments": {}},
+            {"tool_call_id": "function-call", "tool_name": "page_tool", "arguments": {}},
         )
         is False
     )

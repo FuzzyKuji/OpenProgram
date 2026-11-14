@@ -213,11 +213,13 @@ def _event_kinds(captured: list[dict]) -> list[str]:
     return [event["data"].get("type") for event in captured if event["type"] == "chat_response"]
 
 
-def test_context_overflow_installs_a_summary_and_retries_smaller(tmp_db, captured, collector, monkeypatch) -> None:
+def test_an_overflow_out_of_the_loop_never_reruns_the_turn(tmp_db, captured, collector, monkeypatch) -> None:
+    """The loop retries the request that overflowed (context/compaction.html,
+    "Overflow recovery"); an overflow that still escapes it fails the turn
+    instead of running the whole turn again."""
     engine = _overflow_engine(monkeypatch)
     tmp_db.create_session("c1", "main")
     previous = None
-    # Past the size at which recovery used to drop turns and retry unchanged.
     for turn in range(40):
         tmp_db.append_message("c1", {"id": f"u{turn}", "role": "user", "content": f"request {turn}",
                                      "predecessor": previous})
@@ -231,10 +233,8 @@ def test_context_overflow_installs_a_summary_and_retries_smaller(tmp_db, capture
             on_event=collector,
         )
 
-    assert result.failed is False and result.final_text == "answer after compaction"
-    assert len(sizes) == 2 and sizes[1] < sizes[0]
-    assert "reactive_compact_done" in _event_kinds(captured)
-    assert any(message.get("covers_ids") for message in tmp_db.get_messages("c1"))
+    assert result.failed is True
+    assert len(sizes) == 1
 
 
 def test_context_overflow_with_nothing_to_compact_fails_the_turn(tmp_db, captured, collector, monkeypatch) -> None:
@@ -247,7 +247,6 @@ def test_context_overflow_with_nothing_to_compact_fails_the_turn(tmp_db, capture
         )
 
     assert result.failed is True and len(sizes) == 1
-    assert "reactive_compact_failed" in _event_kinds(captured)
     assert not any(message.get("covers_ids") for message in tmp_db.get_messages("c1"))
 
 
@@ -544,6 +543,8 @@ def test_cancel_keeps_incomplete_iteration_progress(tmp_db, monkeypatch):
     import json
     stopped = threading.Event()
 
+    cut = {"type": "thinking", "text": "Unfinished reasoning", "partial": True, "round_start": True}
+
     def loop(*, on_event, ordered_blocks_out, cancel_event, **kwargs):
         ordered_blocks_out.append({"type": "text", "text": "Earlier iteration"})
         for event in [
@@ -552,6 +553,9 @@ def test_cancel_keeps_incomplete_iteration_progress(tmp_db, monkeypatch):
         ]:
             on_event({"type": "chat_response", "data": {"type": "stream_event", "event": event}})
         cancel_event.set()
+        # The real loop keeps the response it cut as its last, unsigned
+        # blocks (``loop_runner._keep_stopped_response``).
+        ordered_blocks_out.append(dict(cut))
         return "Earlier iteration", {}, []
 
     monkeypatch.setattr(D, "_run_loop_blocking", loop)
@@ -560,7 +564,10 @@ def test_cancel_keeps_incomplete_iteration_progress(tmp_db, monkeypatch):
     ), cancel_event=stopped)
     assert not result.failed
     msg=next(m for m in tmp_db.get_messages("stopped") if m["role"]=="assistant")
-    assert json.loads(msg["extra"])["blocks"][-1] == {"type":"thinking","text":"Unfinished reasoning"}
+    # A Stop stores the loop's blocks: the earlier response and the cut one.
+    assert json.loads(msg["extra"])["blocks"] == [
+        {"type": "text", "text": "Earlier iteration"}, cut,
+    ]
 
 
 def test_failed_turn_preserves_partial_reply_and_error_after_reopen(tmp_db, tmp_path, collector, captured):

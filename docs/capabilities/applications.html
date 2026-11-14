@@ -16,7 +16,7 @@
 <ul>
 <li><strong>Uninstall</strong> asks first and keeps the application's data. <strong>Update from source</strong> shows the source directory and opens the install form filled in; review the source before submitting.</li>
 <li>The install form requires explicit trust for Python backends and for <code translate="no">files.project.write</code>.</li>
-<li>An application inside an installed package is that package's subfolder, such as <code translate="no">auto_research/app</code>. Its call logic is the union of the Agent entries it registers, such as <code translate="no">web_use</code> for <code translate="no">browser</code>.</li>
+<li>An application inside an installed package is that package's subfolder, such as <code translate="no">auto_research/app</code>. Its call logic is the union of the Agent entries it registers.</li>
 <li>An application the Agent cannot call says so in one line: a UI-only application only opens as a window; a package that only exports Python functions for other Programs is a Python library.</li>
 <li>The new tab page refreshes its list when focused and every ten seconds.</li>
 </ul>
@@ -47,7 +47,7 @@
 <table class="stack">
 <thead><tr><th scope="col">Built-in</th><th scope="col">What it does</th><th scope="col">Disabling removes</th></tr></thead>
 <tbody>
-<tr><th scope="row"><code translate="no">browser</code></th><td>Browser service and <code translate="no">web_use</code></td><td>Both</td></tr>
+<tr><th scope="row"><code translate="no">browser</code></th><td>The built-in browser that <code translate="no">computer_use_agent</code> operates</td><td>The browser target; desktop targets keep working</td></tr>
 <tr><th scope="row"><code translate="no">workflow_recording</code></th><td><a href="workflows/recording.html">Workflow recording</a>; its window starts a recording without the composer</td><td>The composer's <strong>Record a workflow</strong> and the routes</td></tr>
 <tr><th scope="row"><code translate="no">office_editor</code> (<strong>ONLYOFFICE</strong>)</th><td>Word, Excel and PowerPoint in the file window; its window starts a blank file in the current project and lists its Office documents</td><td>Those files offer only the original-file download</td></tr>
 <tr><th scope="row"><code translate="no">meeting</code></th><td><a href="meetings.html">Meetings</a>: records a call, transcribes it, summarizes in a new chat</td><td>Meetings</td></tr>
@@ -202,7 +202,7 @@ print(status(job["id"]))</code></pre>
 <tbody>
 <tr><th scope="row">Name</th><td><code translate="no">&lt;id&gt;__&lt;operation&gt;</code>, other characters than letters, digits, <code translate="no">_</code> and <code translate="no">-</code> replaced by <code translate="no">_</code>: <code translate="no">local_notes__summarize</code></td></tr>
 <tr><th scope="row">Input</th><td>The operation input as <code translate="no">input</code>, plus <code translate="no">project_id</code> for project scope. Waits for the run and returns it. A run waiting on a question returns its id, for <code translate="no">status</code>, <code translate="no">answer</code> or <code translate="no">cancel</code>.</td></tr>
-<tr><th scope="row">Exposure</th><td>Need approval, like <code translate="no">resource</code>. Deferred: the model sees names and loads a schema with <code translate="no">tool_search</code>. While the application is open for a conversation they are resident there.</td></tr>
+<tr><th scope="row">Exposure</th><td>Need approval, like <code translate="no">resource</code>. Deferred: the model sees names and loads a schema with <code translate="no">tool_search</code>. Opening the application for a conversation loads nothing: the catalog notes it is open and the model loads its entries by name.</td></tr>
 <tr><th scope="row"><code translate="no">agent: false</code></th><td>No entry</td></tr>
 </tbody>
 </table>

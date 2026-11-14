@@ -2,8 +2,11 @@
 
 A rewind that moves the conversation records an edge in the session meta.
 Undo and Redo move HEAD along that edge by compare-and-set and touch messages
-only; files stay as they are. The next turn's system prompt carries one note
-saying how the conversation and the files relate.
+only; files stay as they are. The conversation's next turn carries one note
+beside its message saying how the conversation and the files relate: it is
+taken onto that turn's message when the message is stored
+(``turn_runtime.prep``), so a turn that fails and is sent again still
+carries it, and later requests render it from there.
 """
 from __future__ import annotations
 
@@ -17,6 +20,11 @@ _log = logging.getLogger(__name__)
 MAX_EDGES = 50
 
 NOTES = {
+    "branch_kept_files": (
+        "The user selected another conversation version. All versions share the current "
+        "workspace; files were not restored. Read current files before editing and do not "
+        "repeat changes merely because they are missing from this conversation history."
+    ),
     "conversation_only": (
         "The user rewound this conversation to an earlier message and left the "
         "files alone, so edits from the removed messages may still be on disk. "
@@ -113,8 +121,17 @@ def rewind_meta_updates(
     return forward, rollback
 
 
+def _on_active_branch(edge: dict, session: dict) -> bool:
+    active = session.get("active_branch_id")
+    owners = {edge.get("source_branch_id"), edge.get("target_branch_id")} - {None}
+    return not active or not owners or active in owners
+
+
 def take_rewind_note(session_id: str) -> str:
-    """The note for the turn starting now; marks unsent rewinds as sent."""
+    """The note for the turn whose message is being stored now, or "".
+
+    Marks unsent rewinds as sent: the note is on that message from here on.
+    """
     try:
         from openprogram.state.store.session.session_store import default_store
 
@@ -123,7 +140,8 @@ def take_rewind_note(session_id: str) -> str:
         note = session.get("pending_rewind_note") or {}
         code_note = bool(session.get("pending_code_note"))
         edges = session.get("rewind_edges") or []
-        unsent = any(not edge.get("sent") and edge.get("status") == "rewound" for edge in edges)
+        unsent = any(not edge.get("sent") and edge.get("status") == "rewound"
+                     and _on_active_branch(edge, session) for edge in edges)
         if not note and not code_note and not unsent:
             return ""
         store.update_session(
@@ -131,7 +149,7 @@ def take_rewind_note(session_id: str) -> str:
             pending_rewind_note={},
             pending_code_note=False,
             rewind_edges=[
-                {**edge, "sent": True} if edge.get("status") == "rewound" else edge
+                {**edge, "sent": True} if edge.get("status") == "rewound" and _on_active_branch(edge, session) else edge
                 for edge in edges
             ],
         )
@@ -139,7 +157,10 @@ def take_rewind_note(session_id: str) -> str:
         if code_note and note.get("kind") != "undo_kept_files":
             kinds.append("code_only")
         texts = [NOTES[str(kind)] for kind in kinds if str(kind) in NOTES]
-        return "".join(f"\n\n{text}" for text in texts)
+        # The rewound history is gone from the next request.
+        from openprogram.models.usage.prefix_fingerprint import expect_break
+        expect_break(session_id, "rewind")
+        return "\n\n".join(texts)
     except Exception:
         _log.warning("rewind note unavailable for session %s", session_id, exc_info=True)
         return ""
@@ -173,7 +194,10 @@ def list_rewind_marks(session_id: str) -> list[dict[str, Any]]:
     chain = set(_chain_ids(index))
     head = index.head_id
     marks: list[dict[str, Any]] = []
-    for edge in (store.get_session(session_id) or {}).get("rewind_edges") or []:
+    session = store.get_session(session_id) or {}
+    for edge in session.get("rewind_edges") or []:
+        if not _on_active_branch(edge, session):
+            continue
         variant = None
         destination = None
         if edge.get("status") == "rewound" and edge.get("target_head_id") in chain:
@@ -250,7 +274,8 @@ def _switch(
     edges = [dict(edge) for edge in session.get("rewind_edges") or []]
     candidates = [
         edge for edge in edges
-        if edge.get("status") == status and (not edge_id or edge.get("id") == edge_id)
+        if edge.get("status") == status and _on_active_branch(edge, session)
+        and (not edge_id or edge.get("id") == edge_id)
     ]
     if not candidates:
         return _refused(session_id, "retired", "This rewind can no longer be switched.")
@@ -261,6 +286,7 @@ def _switch(
     if any(
         row.get("id") != edge.get("id")
         and row.get("status") == "rewound"
+        and _on_active_branch(row, session)
         and not row.get("sent")
         and row.get("target_head_id") == head
         for row in edges
@@ -311,11 +337,13 @@ def _switch(
         }
         if from_branch and to_branch else None
     )
+    from openprogram.state.store.session.rewind_view import view_update
+    visibility = view_update(store, session_id, head, destination)
     try:
         moved = store.compare_and_set_head(
             session_id, head, destination,
             branch_update=branch_update,
-            meta_update={"rewind_edges": updated, "pending_rewind_note": pending_note},
+            meta_update={"rewind_edges": updated, "pending_rewind_note": pending_note, **visibility},
         )
     except ValueError as exc:
         return _refused(session_id, "unreadable", str(exc))

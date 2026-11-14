@@ -97,7 +97,9 @@ def _cancel_hook() -> None:
         raise ExecInterrupt("worker_stopping")
     token = _active_token()
     if token is not None and token.is_cancelled():
-        raise _cancellation.CancelledError(f"Execution stopped by user (conv={token.session_id})")
+        # The reason, not the conversation id: this text can reach the model.
+        from openprogram.runtime.execution.run_control.stop_reasons import current_stop_reason
+        raise _cancellation.CancelledError(f"Execution stopped ({current_stop_reason()})")
 
 
 def check_cancelled() -> None:

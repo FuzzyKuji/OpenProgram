@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from openprogram.runtime.speech_link import TranscriptionError
+from openprogram.host._platform.filesystem import replace_file
 
 ENGINES = ("openai", "groq", "local")
 LANGUAGES = ("auto", "zh", "en", "ja", "ko", "fr", "de", "es")
@@ -176,7 +177,7 @@ def _fetch_model(model: str, target: Path) -> None:
                              f"({written} of {expected} bytes). Try again.")
         if written == 0:
             raise VoiceError(f"The Whisper model {model} download was empty. Try again.")
-        os.replace(partial, target)
+        replace_file(partial, target)
     finally:
         partial.unlink(missing_ok=True)
 

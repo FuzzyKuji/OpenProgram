@@ -1,4 +1,8 @@
 .panel { display: flex; flex-direction: column; min-height: 0; height: 100%; color: var(--text); font-size: var(--right-panel-text-size, var(--fs-sm)); line-height: var(--right-panel-line-height, 1.5); font-family: var(--font-sans); }
+/* A page over the overview. It is the sidebar's own surface, so it covers
+   what it slides over, with a hairline on the edge that leads; use-page-slide.ts
+   writes where it is. */
+.page { position: absolute; inset: 0; z-index: 2; display: flex; flex-direction: column; min-height: 0; background: var(--color-sidebar); box-shadow: -1px 0 0 var(--border); }
 .notice { margin: 0; padding: 0 16px 12px; color: var(--text-secondary); font-size: var(--right-panel-meta-size, var(--fs-sm)); }
 .error { margin: 8px; color: var(--accent-red); font-size: var(--right-panel-meta-size, var(--fs-sm)); }
 /* The view host already leaves 12px under the nav; the first label adds

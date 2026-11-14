@@ -261,7 +261,7 @@ def test_record_sources_keep_agent_labels_and_cite_the_chat(tmp_path, chats):
 
     indexed = next(
         event
-        for event in MemoryBM25Index(root, persist=False).events
+        for event in MemoryBM25Index(root).events
         if event.path == "topics/labelled.md"
     )
     assert indexed.refs == list(unit.source_refs)
@@ -1293,3 +1293,125 @@ def test_delete_record_removes_the_stale_derived_core_view(tmp_path):
 
     assert not (root / "topics/core.md").exists()
     assert not (root / "core.md").exists()
+
+
+def test_a_writer_may_delete_a_block_but_not_one_still_linked(tmp_path):
+    """The writer may remove memory (Git keeps it); what it may not do is
+    leave a link pointing at nothing."""
+    from openprogram.state.memory.management import MemoryWorkspace
+
+    root = _root(tmp_path)
+    (root / "topics/other.md").write_text(LINKING, encoding="utf-8")
+    with closing(MemoryWorkspace(root)) as workspace:
+        baseline = workspace.baseline()
+        (workspace.stage_dir / "topics/note.md").unlink()
+        with pytest.raises(ValueError, match="dangling block link: abc12345"):
+            workspace.commit_edits(*baseline)
+        assert workspace.check_edits(baseline) is None  # the stage was reset
+        baseline = workspace.baseline()
+        (workspace.stage_dir / "topics/note.md").unlink()
+        assert "dangling block link" in workspace.check_edits(baseline)
+    assert (root / "topics/note.md").is_file()
+
+
+def test_a_person_deletes_a_topic_and_keeps_every_other_block(tmp_path):
+    from openprogram.state.memory.management.transaction import staged_edit
+
+    root = _root(tmp_path)
+    ok, message = staged_edit(
+        root, lambda stage: (stage / "topics/second.md").unlink(),
+        deleting="second.md", record_history=False,
+    )
+    assert ok, message
+    assert not (root / "topics/second.md").exists()
+
+    def drop_note_block(stage):
+        (stage / "topics/second.md").write_text(SECOND, encoding="utf-8")
+        (stage / "topics/note.md").unlink()
+
+    ok, message = staged_edit(root, drop_note_block, record_history=False)
+    assert not ok and "block ID must not be removed: abc12345" in message
+
+
+def test_a_file_changed_beside_a_running_write_is_taken_in(tmp_path):
+    """Another tool writing a file this write never touched is not a
+    conflict: the write installs on top of it and keeps its bytes."""
+    from openprogram.state.memory.management import MemoryWorkspace
+
+    root = _root(tmp_path)
+    outside = NOTE.replace("worth keeping", "edited elsewhere")
+    with closing(MemoryWorkspace(root)) as workspace:
+        baseline = workspace.baseline()
+        (workspace.stage_dir / "topics/second.md").write_text(
+            SECOND.replace("removable", "rewritten"), encoding="utf-8",
+        )
+        (root / "topics/note.md").write_text(outside, encoding="utf-8")
+        (root / "topics/added.md").write_text(
+            LINKING.replace("^fed87654", "^aaa11111").replace("e-3f", "e-6f"),
+            encoding="utf-8",
+        )
+        (root / "index.sqlite").write_bytes(b"a cache a reader rewrote")
+        workspace.commit_edits(*baseline)
+
+    assert (root / "topics/note.md").read_text(encoding="utf-8") == outside
+    assert "rewritten" in (root / "topics/second.md").read_text(encoding="utf-8")
+    assert (root / "topics/added.md").is_file()
+    recent = (root / "recent_events.jsonl").read_text(encoding="utf-8")
+    assert "edited elsewhere" in recent and "aaa11111" in recent
+
+
+def test_a_file_this_write_changed_and_someone_else_did_too_conflicts(tmp_path):
+    from openprogram.state.memory.management import MemoryWorkspace
+    from openprogram.state.memory.management.transaction import TransactionError
+
+    root = _root(tmp_path)
+    outside = SECOND.replace("removable", "edited elsewhere")
+    with closing(MemoryWorkspace(root)) as workspace:
+        baseline = workspace.baseline()
+        (workspace.stage_dir / "topics/second.md").write_text(
+            SECOND.replace("removable", "rewritten"), encoding="utf-8",
+        )
+        (root / "topics/second.md").write_text(outside, encoding="utf-8")
+        with pytest.raises(TransactionError) as caught:
+            workspace.commit_edits(*baseline)
+    assert caught.value.code == "CONCURRENT_UPDATE"
+    assert (root / "topics/second.md").read_text(encoding="utf-8") == outside
+
+
+def test_a_file_written_beside_a_write_that_does_not_parse_is_kept_as_it_is(tmp_path):
+    """An outside tool writing plain Markdown beside a running write is no
+    conflict: its file is taken in as it is, read as memory, and the
+    write's own edit lands."""
+    from openprogram.state.memory.management import MemoryWorkspace
+
+    root = _root(tmp_path)
+    plain = "# Plain\n\nNo ID here.\n"
+    with closing(MemoryWorkspace(root)) as workspace:
+        baseline = workspace.baseline()
+        (workspace.stage_dir / "topics/second.md").write_text(
+            SECOND.replace("removable", "rewritten"), encoding="utf-8",
+        )
+        (root / "topics/plain.md").write_text(plain, encoding="utf-8")
+        workspace.commit_edits(*baseline)
+    assert "rewritten" in (root / "topics/second.md").read_text(encoding="utf-8")
+    assert (root / "topics/plain.md").read_text(encoding="utf-8") == plain
+    assert "No ID here" in (root / "recent_events.jsonl").read_text(encoding="utf-8")
+
+
+def test_an_outside_file_rewritten_beside_a_write_is_kept_as_rewritten(tmp_path):
+    """An outside file changed by its own tool while a write runs goes back
+    as the tool left it, not as the write first saw it."""
+    from openprogram.state.memory.management import MemoryWorkspace
+
+    root = _root(tmp_path)
+    (root / "topics/plain.md").write_text("# Plain\n\nFirst.\n", encoding="utf-8")
+    with closing(MemoryWorkspace(root)) as workspace:
+        assert "plain.md" in workspace.outside
+        baseline = workspace.baseline()
+        (workspace.stage_dir / "topics/second.md").write_text(
+            SECOND.replace("removable", "rewritten"), encoding="utf-8",
+        )
+        (root / "topics/plain.md").write_text("# Plain\n\nSecond.\n", encoding="utf-8")
+        workspace.commit_edits(*baseline)
+    assert "rewritten" in (root / "topics/second.md").read_text(encoding="utf-8")
+    assert (root / "topics/plain.md").read_text(encoding="utf-8") == "# Plain\n\nSecond.\n"

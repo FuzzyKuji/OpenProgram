@@ -8,36 +8,36 @@
 <thead><tr><th scope="col">域</th><th scope="col">是什么</th><th scope="col">工具</th></tr></thead>
 <tbody>
 <tr><th scope="row">计划：todo</th><td>手工维护的计划。编辑不运行任何东西。</td><td><code translate="no">todo_create</code>、<code translate="no">todo_update</code>、<code translate="no">todo_list</code></td></tr>
-<tr><th scope="row">执行：job</th><td>已接纳的记录，有 <code translate="no">execution_id</code>、状态和结果</td><td><code translate="no">list_jobs</code>、<code translate="no">job_output</code>；<code translate="no">execution.cancel</code> 是命令，不是模型工具，没有 <code translate="no">job_stop</code></td></tr>
-<tr><th scope="row">实体：agent</th><td>运行中的对话分支。已存 <code translate="no">AgentSpec</code> 是由 <code translate="no">agent_id</code> 选择的独立配置。</td><td><code translate="no">agent</code>、<code translate="no">list_agents</code>、<code translate="no">archive_agent</code></td></tr>
+<tr><th scope="row">执行：job</th><td>已接纳的记录，有 <code translate="no">execution_id</code>、状态和结果</td><td><code translate="no">read_conversation(execution_id)</code>、<code translate="no">list_agents</code>、<code translate="no">close_agent</code>；<code translate="no">execution.cancel</code> 是界面和 API 的命令</td></tr>
+<tr><th scope="row">实体：agent</th><td>运行中的对话分支。已存 <code translate="no">AgentSpec</code> 是由 <code translate="no">agent</code> 选择的独立配置。</td><td><code translate="no">agent</code>、<code translate="no">list_agents</code>、<code translate="no">close_agent</code></td></tr>
 <tr><th scope="row">通信：message</th><td>继续分支或读取其历史</td><td><code translate="no">send_message</code>、<code translate="no">read_conversation</code></td></tr>
 </tbody>
 </table>
 <p class="note">这些域描述资源，不是互斥的命名空间。取消工作不归档分支，也不删除其配置。</p>
-<p class="note">后台分派返回 <code translate="no">execution_id</code>。<code translate="no">job_output(job_id=…)</code>、<code translate="no">details.job_id</code>、<code translate="no">attach.job_id</code> 保留原名：把执行 ID 传给它们。不加 <code translate="no">task_id</code> 别名。</p>
+<p class="note">后台分派返回 <code translate="no">execution_id</code>。<code translate="no">details.job_id</code>、<code translate="no">attach.job_id</code> 保留原名：把执行 ID 传给它们。不加 <code translate="no">task_id</code> 别名。</p>
 
 <h2 id="four">四种动作</h2>
 <table class="stack">
 <thead><tr><th scope="col">动作</th><th scope="col">调用</th><th scope="col">效果</th><th scope="col">返回</th></tr></thead>
 <tbody>
 <tr><th scope="row">创建</th><td><code translate="no">agent(prompt, description, …)</code></td><td>新分支，以 <code translate="no">description</code> 命名；运行 <code translate="no">prompt</code>；接纳 Job</td><td>前台：等待并返回最终结果。<code translate="no">run_in_background=true</code>：<code translate="no">execution_id</code>。</td></tr>
-<tr><th scope="row">分派</th><td><code translate="no">agent(to="name", prompt=…)</code></td><td>已有分支；接纳 Job；忙时排队</td><td><code translate="no">execution_id</code></td></tr>
-<tr><th scope="row">消息</th><td><code translate="no">send_message(to="name", message=…)</code></td><td>已有分支，不新建；目标读后自行决定</td><td>直接：<code translate="no">delivery_id=job_id</code>。忙：收件箱回执，尚未接纳。</td></tr>
-<tr><th scope="row">查询</th><td><code translate="no">list_agents</code>、<code translate="no">list_jobs</code>、<code translate="no">read_conversation</code>、<code translate="no">todo_list</code></td><td>只读，不启动任何东西</td><td>文本</td></tr>
+<tr><th scope="row">分派</th><td><code translate="no">send_message(to="name", message=…)</code></td><td>已有分支、对话或 Agent；接纳 Job；忙时排队</td><td><code translate="no">execution_id</code></td></tr>
+<tr><th scope="row">等待</th><td><code translate="no">send_message(to="name", notify_when_idle=true)</code></td><td>不投递；目标空闲时发一条通知</td><td>现在的最新回复，或一个观察</td></tr>
+<tr><th scope="row">查询</th><td><code translate="no">list_agents</code>、<code translate="no">read_conversation</code>、<code translate="no">todo_list</code></td><td>只读，不启动任何东西</td><td>文本</td></tr>
 </tbody>
 </table>
 <p class="note">前台创建经 <code translate="no">run_agent_turn</code> 和 <code translate="no">runner.spawn_job(wait=True)</code>：等待既不免除接纳和资源限制，也不去掉执行身份。</p>
 
 <h2 id="power">消息和分派</h2>
 <table class="stack">
-<thead><tr><th scope="col">保证</th><th scope="col"><code translate="no">send_message</code></th><th scope="col"><code translate="no">agent()</code>、<code translate="no">agent(to=)</code></th></tr></thead>
+<thead><tr><th scope="col">保证</th><th scope="col"><code translate="no">send_message</code></th><th scope="col"><code translate="no">agent()</code></th></tr></thead>
 <tbody>
 <tr><th scope="row">谁可发起</th><td>已启用的发送方，发往可解析且未归档的分支</td><td>已启用的调用方；输出归属和控制权限约束产生的 <code translate="no">execution_id</code></td></tr>
-<tr><th scope="row">执行 ID</th><td>直接投递时有；回执背后的轮次仍需接纳</td><td>总有；前台返回结果</td></tr>
+<tr><th scope="row">执行 ID</th><td>总有，排队或直接投递都一样</td><td>总有；前台返回结果</td></tr>
 <tr><th scope="row">结果</th><td colspan="2">后台工作结束时自动告知发送方（见下）。显式 <code translate="no">send_message</code> 回复可选。终态：结果、错误或取消。</td></tr>
 <tr><th scope="row">取消</th><td>取消不能撤回已记录的消息；其已接纳的执行遵循规范权限。回执不是执行 ID。</td><td><code translate="no">execution.cancel</code> 带 <code translate="no">execution_id</code> 和 <code translate="no">expected_version</code>：排队的撤回，运行的进入取消</td></tr>
 <tr><th scope="row">级联</th><td colspan="2">遵循执行父子关系：停止任务会停止它派生的所有任务</td></tr>
-<tr><th scope="row">他人的任务</th><td>知道投递或执行 ID 不授予控制</td><td><code translate="no">job_output</code> 允许目标执行会话、调用方会话或符合条件的祖先。控制另行校验所有者、项目、会话、动作和预期版本。</td></tr>
+<tr><th scope="row">他人的任务</th><td>知道执行 ID 不授予控制</td><td><code translate="no">read_conversation</code> 和 <code translate="no">close_agent</code> 允许目标执行会话、调用方会话或符合条件的祖先。控制另行校验所有者、项目、会话、动作和预期版本。</td></tr>
 <tr><th scope="row">并发</th><td>回执表示已投递或排队，不表示完成</td><td>忙碌目标排队，不被打断</td></tr>
 </tbody>
 </table>
@@ -46,7 +46,7 @@
 <summary>自动完成通知</summary>
 <ul>
 <li>所有结束 job 的路径都经过 <code translate="no">_update_attach_card</code>：更新卡片，完成 <code translate="no">archive_when_done</code>，然后 <code translate="no">notices.queue(job)</code>。</li>
-<li>后台 Agent、<code translate="no">agent(to=…)</code> 或 <code translate="no">send_message</code> 结束时，在发送方对话启动一轮。发送方已用 <code translate="no">job_output</code> 读过结果时不再通知。</li>
+<li>后台 Agent 完成、失败或被停止，或 <code translate="no">send_message</code> 的回复到达时，在发送方对话启动一个通知轮次，结果形状统一。发送方用 <code translate="no">close_agent</code> 关闭的 Agent 不再通知。</li>
 <li>轮次进行中的对话在前台轮次结束后收到；其间完成的都合在一条通知里。待发通知在 <code translate="no">&lt;caller-session-dir&gt;/notices.json</code>，重启不丢。</li>
 <li>通知落在投递会话的 HEAD 并推进它，结果形成一条串行链。派生的报告通过 attach 指针进入上下文；投递到已有分支的回复内联在通知里。</li>
 <li>不带消息的 <code translate="no">send_message(to=…, notify_when_idle=true)</code> 走同一队列，目标空闲后报告其最新回复。</li>
@@ -57,12 +57,12 @@
 <table class="stack">
 <thead><tr><th scope="col">设置，默认 0 表示不限</th><th scope="col">计数</th><th scope="col">超出时</th></tr></thead>
 <tbody>
-<tr><th scope="row"><code translate="no">agent.max_spawn_depth</code></th><td>新分支的代数。只有创建计数。1：worker 不能派生；2：再多一代。</td><td>拒绝该创建并说明原因（"自己完成"）。消息预算有余时分派和消息仍可用。</td></tr>
-<tr><th scope="row"><code translate="no">agent.max_messages</code></th><td>整条链上的创建、<code translate="no">send_message</code> 和 <code translate="no">agent(to=…)</code>，含 A、B 互发</td><td>拒绝新投递。<code translate="no">job_output</code> 和取消不受影响。</td></tr>
+<tr><th scope="row"><code translate="no">agent.max_spawn_depth</code></th><td>新分支的代数，默认 1。只有创建计数。1：worker 不能派生；2：再多一代。</td><td>拒绝该创建并说明原因（"自己完成"）。跳数和消息预算有余时消息仍可用。</td></tr>
+<tr><th scope="row"><code translate="no">agent.max_messages</code></th><td>整条链上的创建和 <code translate="no">send_message</code>，含 A、B 互发</td><td>拒绝新投递。<code translate="no">read_conversation</code> 和 <code translate="no">close_agent</code> 不受影响。</td></tr>
 <tr><th scope="row"><code translate="no">agent.max_spawn_fanout</code></th><td>每（会话，轮次）创建的 Agent 数。派生把计数传给子 Agent，父的不变，所以链计数器数不到兄弟。</td><td>拒绝该调用，工具保留：工具列表在轮次开始时冻结。</td></tr>
 </tbody>
 </table>
-<pre translate="no"><code>openprogram config set agent.max_spawn_depth 1
+<pre translate="no"><code>openprogram config set agent.max_spawn_depth 2
 openprogram config set agent.max_messages 8
 openprogram config set agent.max_spawn_fanout 8</code></pre>
 <p class="note">立即生效，存于 <code translate="no">~/.openprogram/config.json</code> 的 <code translate="no">agent</code> 部分，也在设置 → Agent。</p>
@@ -77,7 +77,7 @@ openprogram config set agent.max_spawn_fanout 8</code></pre>
 <table class="grid">
 <thead><tr><th scope="col">对已归档分支的调用</th><th scope="col">结果</th></tr></thead>
 <tbody>
-<tr><th scope="row"><code translate="no">send_message(to=…)</code>、<code translate="no">agent(to=…)</code></th><td class="deny">被共享地址解析器拒绝，发生在解析到分支顶端之后</td></tr>
+<tr><th scope="row"><code translate="no">send_message(to=…)</code></th><td class="deny">被共享地址解析器拒绝，发生在解析到分支顶端之后</td></tr>
 <tr><th scope="row"><code translate="no">list_agents</code> 默认视图</th><td>不列出</td></tr>
 <tr><th scope="row"><code translate="no">list_agents(scope="archived")</code></th><td>列出</td></tr>
 <tr><th scope="row"><code translate="no">read_conversation(…)</code></th><td>完整转录</td></tr>
@@ -91,7 +91,7 @@ openprogram config set agent.max_spawn_fanout 8</code></pre>
 <ol>
 <li><code translate="no">todo_create(subject=…)</code>，用 <code translate="no">blocked_by</code> 标依赖。</li>
 <li>对每项 <code translate="no">agent(prompt, description, run_in_background=true)</code>，立即返回 <code translate="no">execution_id</code>。</li>
-<li><code translate="no">list_jobs()</code> 看状态；<code translate="no">job_output(job_id=…)</code> 取输出；从界面或命令面取消。</li>
+<li><code translate="no">list_agents()</code> 看运行中的工作；<code translate="no">read_conversation(execution_id)</code> 取输出；用 <code translate="no">close_agent</code> 或界面停止。</li>
 <li>完成通知到达调用方。</li>
 <li><code translate="no">todo_update(todo_id, status="completed")</code>。</li>
 </ol>
@@ -100,7 +100,7 @@ openprogram config set agent.max_spawn_fanout 8</code></pre>
 <summary>复用已有 Agent</summary>
 <ol>
 <li><code translate="no">list_agents(scope="all")</code>：按会话分组，带名称、可用的 <code translate="no">to="SID:HEAD"</code>、轮数、大致字数和末尾预览。</li>
-<li>询问或通知用 <code translate="no">send_message(to="name", message=…)</code>；必须完成工作并返回结果时用 <code translate="no">agent(to="name", prompt=…)</code>。</li>
+<li>询问、通知或交给它工作都用 <code translate="no">send_message(to="name", message=…)</code>；它的回复以通知返回。</li>
 <li>忙碌目标排队，不打断、不丢失，当前轮结束后运行。</li>
 </ol>
 </details>
@@ -119,10 +119,10 @@ openprogram config set agent.max_spawn_fanout 8</code></pre>
 <thead class="sr"><tr><th scope="col">接口</th><th scope="col">约定</th></tr></thead>
 <tbody>
 <tr><th scope="row"><code translate="no">agent</code></th><td>创建并运行分支，或用 <code translate="no">to</code> 分派。创建已存 AgentSpec 是另一操作。</td></tr>
-<tr><th scope="row"><code translate="no">list_jobs</code></th><td>当前会话的 job，带状态和资源视图</td></tr>
-<tr><th scope="row"><code translate="no">job_output(job_id, block, timeout)</code></th><td>读取或等待。<code translate="no">block=true</code>；超时单位毫秒，默认 30000，最大 600000</td></tr>
+<tr><th scope="row"><code translate="no">read_conversation(execution_id)</code></th><td>不等待，返回状态，结束后还返回回复</td></tr>
+<tr><th scope="row"><code translate="no">close_agent(target)</code></th><td>停止本会话的执行及其后代，并归档其分支</td></tr>
 <tr><th scope="row"><code translate="no">execution.cancel</code></th><td>Web 界面通过控制端点提交执行 ID、预期状态版本和命令 ID</td></tr>
-<tr><th scope="row"><code translate="no">list_agents</code>、<code translate="no">archive_agent</code></th><td>只管对话分支，不管 AgentSpec 注册表</td></tr>
+<tr><th scope="row"><code translate="no">list_agents</code></th><td>对话分支和运行中的工作，不管 AgentSpec 注册表</td></tr>
 </tbody>
 </table>
 <p class="note"><a href="agent-collab-comparison.zh.html">对比</a>只是设计背景；外部工具名不是别名。</p>
@@ -145,7 +145,7 @@ openprogram config set agent.max_spawn_fanout 8</code></pre>
 <thead class="sr"><tr><th scope="col">状态</th><th scope="col">内容</th></tr></thead>
 <tbody>
 <tr><th scope="row">已验证</th><td>工具清单、标识兼容、Job 接纳、消息投递和回执、attach 字段、手动和 <code translate="no">archive_when_done</code> 归档、自动完成通知、消息预算耗尽后读取输出</td></tr>
-<tr><th scope="row">未解决</th><td><code translate="no">archive_agent</code> 没有创建者检查：任何带此工具的本地会话都能归档其他分支。<code translate="no">read_conversation</code> 没有目标级所有者或项目 ACL。完整 AttachCard 的跨会话打开只导航到 T 而不选 H，执行条则检出 T 和 H；两者应打开同一分支，并在目标不可用时显示状态而不移动卡片。</td></tr>
+<tr><th scope="row">未解决</th><td>用 <code translate="no">close_agent</code> 归档地址没有创建者检查：任何带此工具的本地会话都能归档其他分支。<code translate="no">read_conversation</code> 没有目标级所有者或项目 ACL。完整 AttachCard 的跨会话打开只导航到 T 而不选 H，执行条则检出 T 和 H；两者应打开同一分支，并在目标不可用时显示状态而不移动卡片。</td></tr>
 </tbody>
 </table>
 <details>

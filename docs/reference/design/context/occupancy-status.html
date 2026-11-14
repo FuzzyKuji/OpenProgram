@@ -40,8 +40,8 @@
 <thead class="sr"><tr><th scope="col">State</th><th scope="col">Display</th></tr></thead>
 <tbody>
 <tr><th scope="row">Normal</th><td>Neutral track, arc coloured by ratio. No suggestion border or state. Click opens the panel</td></tr>
-<tr><th scope="row">Compacting</th><td>From <code translate="no">compaction_started</code> to finished or failed: ring busy, panel button disabled</td></tr>
-<tr><th scope="row">Compact conversation</th><td>Panel row sends <code translate="no">{action:"compact", session_id}</code>, the WebSocket path of <code translate="no">/compact</code>. Disabled with no session, while compacting, or when recently compacted</td></tr>
+<tr><th scope="row">Compacting</th><td>While the branch's running task is a <code translate="no">compact</code> operation or a turn in its compaction phase (<code translate="no">isCompacting</code>, from <code translate="no">compaction_started</code> to finished or failed): ring busy, panel button disabled</td></tr>
+<tr><th scope="row">Compact conversation</th><td>Panel row sends <code translate="no">{action:"compact", session_id}</code>, the WebSocket path of <code translate="no">/compact</code>. Disabled with no session or while compacting. Right after a compaction it stays enabled; the server answers nothing to compact</td></tr>
 </tbody>
 </table>
 
@@ -50,8 +50,8 @@
 <table class="stack fixed">
 <thead class="sr"><tr><th scope="col">Event</th><th scope="col">Text</th></tr></thead>
 <tbody>
-<tr><th scope="row">Started</th><td>Compacting context…</td></tr>
-<tr><th scope="row">Finished</th><td>Context compacted: covered N older messages. On the transcript's event slot: Context compacted here: covered N messages, estimated X → Y tokens</td></tr>
+<tr><th scope="row">Started</th><td>No message: the run indicator shows "Compacting context…"</td></tr>
+<tr><th scope="row">Finished</th><td>Context compacted: covered N older messages. On the transcript's event slot: Context compacted here: covered N messages, estimated X → Y tokens. Shown only on a branch that holds the whole covered segment; a branch forked inside it was never compacted</td></tr>
 <tr><th scope="row">Failed</th><td>Context compaction failed[: error]</td></tr>
 <tr><th scope="row">Finished with <code translate="no">no_op</code></th><td>Context unchanged; no smaller summary was applied.</td></tr>
 </tbody>

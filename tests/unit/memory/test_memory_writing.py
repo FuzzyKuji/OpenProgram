@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import atexit
 import json
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -226,7 +226,13 @@ def test_the_organizer_may_cite_no_new_message(tmp_path, monkeypatch):
         lambda *args, **kwargs: captured.append(kwargs) or [],
     )
     (tmp_path / "topics").mkdir(parents=True)
-    (tmp_path / "topics/note.md").write_text("# Note\n", encoding="utf-8")
+    # A never-recorded file is ours, and the organizer's to rewrite, only
+    # when every paragraph cites; anything else came from outside.
+    (tmp_path / "topics/note.md").write_text(
+        "# Note\n\nA fact.[^e-1f4c7a2b90] ^abc12345\n\n"
+        "[^e-1f4c7a2b90]: Time: `2026-01-01`; Sources: [D1:1](/s/s1#d1-1)\n",
+        encoding="utf-8",
+    )
     api.organize_topics(tmp_path, agent=object())
 
     assert captured[0]["allowed_new_source_refs"] == set()
@@ -632,9 +638,11 @@ def test_a_retryable_failure_leaves_it_for_the_next_poll(watched):
     assert n_done == 0
     assert "idle1" not in processed, "unmarked, so the next poll retries"
     ended = [p for name, p in events if name == "memory.ingest_ended"]
-    assert ended == [{
+    assert len(ended) == 1
+    assert ended[0]["attempt"] == 1 and ended[0]["next_attempt_at"] > 0
+    assert {k: ended[0][k] for k in ("ok", "retryable", "reason")} == {
         "ok": False, "retryable": True, "reason": "model unreachable",
-    }]
+    }
 
 
 def test_an_unclassified_incomplete_write_is_not_retried(watched):
@@ -776,12 +784,12 @@ def test_the_watcher_can_find_where_to_keep_its_state(memory_root):
     once in production. Calling it is the test."""
     from openprogram.state.memory import session_watcher, store
 
-    path = session_watcher._processed_path()
+    path = session_watcher._state_path()
 
     assert path.parent == store.state_dir()
     assert path.parent.parent == memory_root
     assert path.parent.is_dir(), "the runtime directory is created on demand"
-    assert path.name == "session-end.json"
+    assert path.name == "ingest-state.json"
 
 
 def test_the_watchers_state_survives_a_memory_write(
@@ -852,7 +860,7 @@ def test_a_partial_state_write_never_lands(tmp_path, monkeypatch):
     from openprogram.state.memory import session_watcher
 
     session_watcher._save_processed({"a": 1.0})
-    good = session_watcher._processed_path().read_text(encoding="utf-8")
+    good = session_watcher._state_path().read_text(encoding="utf-8")
 
     class Interrupted(OSError):
         pass
@@ -876,10 +884,10 @@ def test_a_partial_state_write_never_lands(tmp_path, monkeypatch):
     monkeypatch.undo()
     monkeypatch.setattr(paths, "get_state_dir", lambda: tmp_path / "state")
 
-    assert session_watcher._processed_path().read_text(encoding="utf-8") == good
+    assert session_watcher._state_path().read_text(encoding="utf-8") == good
     assert session_watcher._load_processed() == {"a": 1.0}
     assert list(
-        session_watcher._processed_path().parent.glob("session-end-*.tmp")
+        session_watcher._state_path().parent.glob("ingest-state-*.tmp")
     ) == []
 
 
@@ -891,7 +899,7 @@ def test_a_corrupt_state_file_is_reported_not_silently_emptied(
     monkeypatch.setattr(paths, "get_state_dir", lambda: tmp_path / "state")
     from openprogram.state.memory import session_watcher
 
-    path = session_watcher._processed_path()
+    path = session_watcher._state_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text('{"a": 1.0', encoding="utf-8")
     with pytest.raises(session_watcher.WatcherStateError):
@@ -995,14 +1003,374 @@ def test_two_watcher_processes_do_not_run_the_same_pass(tmp_path, monkeypatch):
         pass
 
 
-def test_retryable_and_terminal_outcomes_persist_differently(watched):
+def test_retryable_and_terminal_outcomes_persist_differently(
+    watched, monkeypatch,
+):
+    from openprogram.state.memory import session_watcher
     from openprogram.state.memory.backend import WriteFailure
 
+    # No backoff, so the second poll offers the session at once.
+    monkeypatch.setattr(session_watcher, "RETRY_BASE_DELAY", 0)
+    monkeypatch.setattr(session_watcher, "SESSION_RETRY_SPACING", 0)
     run, _events = watched
     _n, processed = run(WriteFailure("model unreachable", retryable=True))
     assert processed == {}
     _n, processed = run(WriteFailure("batch refused", retryable=False))
     assert processed == {"idle1": 1.0}
+    assert session_watcher.load_retries() == {}
+
+
+def test_a_failure_in_the_conversation_is_tried_three_times_an_hour_apart(
+    watched, monkeypatch, tmp_path,
+):
+    """The same input failing, poll after poll: three tries an hour apart,
+    then nothing until the conversation moves on. The writer status says
+    so."""
+    from openprogram.state.memory import session_watcher, store
+    from openprogram.state.memory.backend import (
+        MemoryWriteFailureCode, WriteFailure,
+    )
+    from openprogram.state.memory.runtime import writer_status
+
+    clock = [100_000.0]
+    monkeypatch.setattr(session_watcher.time, "time", lambda: clock[0])
+    monkeypatch.setattr(store, "root", lambda: tmp_path / "memory")
+    run, events = watched
+    failure = WriteFailure(
+        "the writer's edits were refused", retryable=True,
+        reason_code=MemoryWriteFailureCode.INVALID_TOPIC_FORMAT,
+    )
+
+    def offered() -> int:
+        return sum(1 for name, _ in events if name == "memory.ingest_started")
+
+    for attempt in range(1, session_watcher.SESSION_MAX_ATTEMPTS + 1):
+        run(failure)
+        assert offered() == attempt
+        entry = session_watcher.load_retries()["idle1"]
+        if attempt == session_watcher.SESSION_MAX_ATTEMPTS:
+            break
+        assert entry["next_at"] - clock[0] == 3600
+        clock[0] += 3599
+        run(failure)
+        assert offered() == attempt, "not offered before its wait is over"
+        clock[0] += 1
+
+    # Stopped: no later poll pays for the same failure again.
+    clock[0] += 10 * 86400
+    _n, processed = run(failure)
+    assert offered() == session_watcher.SESSION_MAX_ATTEMPTS
+    assert "idle1" not in processed, "kept apart from what was written"
+    last = [p for name, p in events if name == "memory.ingest_ended"][-1]
+    assert last["retryable"] is False and last["next_attempt_at"] is None
+
+    shown = writer_status.status(tmp_path / "memory")
+    assert shown["last_failure"]["retryable"] is False
+    assert shown["retries"]["stopped"] == 1
+    assert shown["retries"]["max_identical_failures"] == 3
+    assert shown["retries"]["reason_codes"] == ["INVALID_TOPIC_FORMAT"]
+
+    # Another conversation writing successfully changes nothing for it.
+    writer_status.record_success(tmp_path / "memory")
+    clock[0] += 10 * 86400
+    run(failure)
+    assert offered() == session_watcher.SESSION_MAX_ATTEMPTS
+
+    # A new message in the conversation starts over.
+    db_sessions = [{"id": "idle1", "updated_at": 2.0}]
+    from openprogram.runtime.context import session_db
+
+    monkeypatch.setattr(
+        session_db.default_db(), "list_sessions", lambda **_kw: db_sessions,
+    )
+    run(failure)
+    assert offered() == session_watcher.SESSION_MAX_ATTEMPTS + 1
+    assert session_watcher.load_retries()["idle1"]["attempts"] == 1
+
+
+@pytest.fixture
+def clocked(watched, monkeypatch, tmp_path):
+    """``watched`` with a clock the test moves, and the personal memory
+    at ``tmp_path / "memory"``. Returns ``(run, offered, clock, fail)``:
+    ``fail(code, text)`` builds a retryable failure, and ``wait()`` is
+    the number of seconds until the session's next offer."""
+    from openprogram.state.memory import session_watcher, store
+    from openprogram.state.memory.backend import WriteFailure
+    from openprogram.state.memory.runtime import writer_status
+
+    clock = [100_000.0]
+    monkeypatch.setattr(session_watcher.time, "time", lambda: clock[0])
+    monkeypatch.setattr(
+        writer_status, "_now",
+        lambda: datetime.fromtimestamp(clock[0], timezone.utc).isoformat(),
+    )
+    monkeypatch.setattr(store, "root", lambda: tmp_path / "memory")
+    run, events = watched
+
+    def offered() -> int:
+        return sum(1 for name, _ in events if name == "memory.ingest_started")
+
+    def fail(code, text="failed", retryable=True):
+        return WriteFailure(text, retryable=retryable, reason_code=code)
+
+    return run, offered, clock, fail
+
+
+def _wait(session_id="idle1") -> float:
+    from openprogram.state.memory import session_watcher
+
+    entry = session_watcher.load_retries()[session_id]
+    return entry["next_at"] - entry["last_at"]
+
+
+def test_a_failure_whose_message_changes_still_counts(clocked):
+    """Provider text carries request ids and retry-after seconds, so two
+    failures for one cause rarely read the same. The cause is the code."""
+    from openprogram.state.memory import session_watcher
+    from openprogram.state.memory.backend import MemoryWriteFailureCode
+
+    run, offered, clock, fail = clocked
+    for attempt in range(1, session_watcher.SESSION_MAX_ATTEMPTS + 1):
+        run(fail(
+            MemoryWriteFailureCode.WRITER_NO_PROGRESS,
+            f"no progress (request req_{attempt})",
+        ))
+        assert offered() == attempt
+        entry = session_watcher.load_retries()["idle1"]
+        assert entry["attempts"] == attempt
+        clock[0] = entry["next_at"]
+    assert entry["stopped"] is True
+    assert entry["reason"] == "no progress (request req_3)", "latest text shown"
+
+
+def test_a_transient_failure_waits_longer_but_is_never_given_up_on(clocked):
+    """An outage or a usage limit ends by itself; giving up on an idle
+    conversation, which never changes again, would lose it for good."""
+    from openprogram.state.memory import session_watcher
+    from openprogram.state.memory.backend import MemoryWriteFailureCode
+
+    run, offered, clock, fail = clocked
+    waits = []
+    attempts = 10
+    for attempt in range(1, attempts + 1):
+        run(fail(MemoryWriteFailureCode.MODEL_RATE_LIMIT, f"429 req_{attempt}"))
+        waits.append(_wait())
+        clock[0] += _wait()
+    assert offered() == attempts
+    assert waits[:5] == [300, 600, 1200, 2400, 4800]
+    entry = session_watcher.load_retries()["idle1"]
+    assert entry["stopped"] is False
+    assert _wait() == session_watcher.RETRY_MAX_DELAY
+
+
+def test_a_transient_failure_between_does_not_reset_the_conversation_tries():
+    """A rate limit between two refusals of the same input must not give
+    the conversation a fresh three tries: it would pay a model call every
+    hour for ever."""
+    from openprogram.state.memory import session_watcher
+    from openprogram.state.memory.backend import MemoryWriteFailureCode as Code
+    from openprogram.state.memory.backend import WriteFailure
+
+    entry = None
+    sequence = [
+        Code.COMMIT_REJECTED, Code.MODEL_RATE_LIMIT, Code.COMMIT_REJECTED,
+        Code.MODEL_RATE_LIMIT, Code.MODEL_RATE_LIMIT, Code.COMMIT_REJECTED,
+    ]
+    for step, code in enumerate(sequence):
+        failure = WriteFailure("failed", retryable=True, reason_code=code)
+        entry = session_watcher._retry_after(entry, failure, 1.0, float(step))
+        if step == 4:
+            # Two transient failures in a row: the second waits twice as long.
+            assert entry["backoff"] == 2
+            assert entry["next_at"] - entry["last_at"] == 2 * session_watcher.RETRY_BASE_DELAY
+    assert entry["failures"] == session_watcher.SESSION_MAX_ATTEMPTS
+    assert entry["attempts"] == len(sequence)
+    assert entry["stopped"] is True
+
+
+def test_a_cause_in_the_memory_costs_one_attempt_for_every_conversation(
+    clocked, monkeypatch,
+):
+    """Twenty idle conversations writing to a memory whose committed state
+    the writer cannot start from: one attempt, not twenty, and none again
+    until that memory is edited, the configuration changes, or the
+    process restarts."""
+    from openprogram.runtime.context import session_db
+    from openprogram.state.memory import session_watcher
+    from openprogram.state.memory.backend import MemoryWriteFailureCode
+
+    run, offered, clock, fail = clocked
+    db = session_db.default_db()
+    for i in range(20):
+        db.append_message(f"idle{i}", {"id": "u1", "role": "user", "content": "hi"})
+    monkeypatch.setattr(
+        db, "list_sessions",
+        lambda **_kw: [{"id": f"idle{i}", "updated_at": 1.0} for i in range(20)],
+    )
+    failure = fail(MemoryWriteFailureCode.WRITER_PRECONDITION_FAILED, retryable=False)
+    _n, processed = run(failure)
+    assert offered() == 1
+    assert processed == {}, "nothing is given up on for a cause outside it"
+    clock[0] += 30 * 86400
+    run(failure)
+    assert offered() == 1
+    assert session_watcher.load_retries() == {}
+
+    # A restart gives the memory one more try.
+    monkeypatch.setattr(session_watcher, "_BOOT", "another-process")
+    run(failure)
+    assert offered() == 2
+    # So does an edit to it.
+    memory = session_watcher.store.root()
+    (memory / "topics").mkdir(parents=True, exist_ok=True)
+    (memory / "topics" / "edited.md").write_text("# Edited\n", encoding="utf-8")
+    _n, processed = run(None)
+    assert offered() == 22 and len(processed) == 20
+
+
+def test_a_sign_in_failure_is_recorded_once_and_lifts_on_a_new_sign_in(
+    clocked, monkeypatch, tmp_path,
+):
+    from openprogram.runtime.context import session_db
+    from openprogram.state.memory import session_watcher
+    from openprogram.state.memory.backend import MemoryWriteFailureCode
+
+    run, offered, clock, fail = clocked
+    db = session_db.default_db()
+    for i in range(5):
+        db.append_message(f"idle{i}", {"id": "u1", "role": "user", "content": "hi"})
+    monkeypatch.setattr(
+        db, "list_sessions",
+        lambda **_kw: [{"id": f"idle{i}", "updated_at": 1.0} for i in range(5)],
+    )
+    failure = fail(MemoryWriteFailureCode.MODEL_AUTHENTICATION, retryable=False)
+    run(failure)
+    run(failure)
+    assert offered() == 1
+    state = session_watcher.load_state()
+    assert list(state["credentials"]) == ["writer"]
+    assert state["sessions"] == {} and state["processed"] == {}
+
+    from openprogram.state.paths import get_state_dir
+
+    login = get_state_dir() / "auth" / "openai-codex" / "default.json"
+    login.parent.mkdir(parents=True, exist_ok=True)
+    login.write_text("{}", encoding="utf-8")
+    _n, processed = run(None)
+    assert offered() == 6 and len(processed) == 5
+    assert session_watcher.load_state()["credentials"] == {}
+
+
+def test_the_files_the_state_replaced_are_read_once_then_removed(
+    tmp_path, monkeypatch,
+):
+    import openprogram.state.paths as paths
+
+    monkeypatch.setattr(paths, "get_state_dir", lambda: tmp_path / "state")
+    from openprogram.state.memory import session_watcher
+
+    directory = session_watcher._state_path().parent
+    (directory / "session-end.json").write_text('{"a": 1.0}', encoding="utf-8")
+    (directory / "session-end-retries.json").write_text(json.dumps({
+        "b": {"updated_at": 2.0, "attempts": 6, "next_at": 9.0,
+              "reason_code": "INVALID_TOPIC_FORMAT", "stopped": True},
+        "c": {"updated_at": 3.0, "attempts": 2, "next_at": 9.0,
+              "reason_code": "MODEL_TIMEOUT", "stopped": False},
+        "d": {"updated_at": 4.0, "attempts": 6, "next_at": 9.0,
+              "reason_code": "MODEL_AUTHENTICATION", "stopped": True},
+        "e": {"updated_at": 5.0, "attempts": 6, "next_at": 9.0,
+              "reason_code": "GIT_COMMIT_FAILED", "stopped": True},
+    }), encoding="utf-8")
+    state = session_watcher.load_state()
+    assert state["processed"] == {"a": 1.0}
+    # The old stop rule does not carry over: a conversation cause keeps one
+    # try, and a sign-in or memory cause is offered again to land in its
+    # own scope.
+    b = state["sessions"]["b"]
+    assert b["stopped"] is False
+    assert b["failures"] == session_watcher.SESSION_MAX_ATTEMPTS - 1
+    c = state["sessions"]["c"]
+    assert c["stopped"] is False and c["failures"] == 0 and c["backoff"] == 2
+    assert "d" not in state["sessions"] and "e" not in state["sessions"]
+    assert state["credentials"] == {} and state["workspaces"] == {}
+    assert not (directory / "session-end.json").exists()
+    assert not (directory / "session-end-retries.json").exists()
+    assert session_watcher.load_state() == state
+
+
+def test_a_deleted_conversation_leaves_no_retry_state(clocked, monkeypatch):
+    from openprogram.runtime.context import session_db
+    from openprogram.state.memory import session_watcher
+    from openprogram.state.memory.backend import MemoryWriteFailureCode
+
+    run, _offered, _clock, fail = clocked
+    run(fail(MemoryWriteFailureCode.INVALID_TOPIC_FORMAT))
+    assert "idle1" in session_watcher.load_retries()
+    monkeypatch.setattr(
+        session_db.default_db(), "list_sessions", lambda **_kw: [],
+    )
+    run(None)
+    assert session_watcher.load_retries() == {}
+
+
+def test_a_project_conversations_retries_show_in_its_projects_status(
+    clocked, monkeypatch, tmp_path,
+):
+    """The watcher records a failure, its retries and its stop in the
+    memory the conversation writes to, which is what that memory's status
+    reads; the personal memory is not told about another one's trouble."""
+    from openprogram.state.memory import project_layer, session_watcher
+    from openprogram.state.memory.backend import MemoryWriteFailureCode
+    from openprogram.state.memory.runtime import writer_status
+
+    project = tmp_path / "project-memory"
+    monkeypatch.setattr(
+        project_layer, "write_root",
+        lambda session_id=None: project if session_id == "idle1" else None,
+    )
+    run, _offered, clock, fail = clocked
+    for _ in range(session_watcher.SESSION_MAX_ATTEMPTS):
+        run(fail(MemoryWriteFailureCode.INVALID_TOPIC_FORMAT))
+        clock[0] += _wait()
+
+    shown = writer_status.status(project)
+    assert shown["retries"]["stopped"] == 1
+    assert shown["last_failure"] == {
+        "at": shown["last_failure"]["at"],
+        "reason_code": "INVALID_TOPIC_FORMAT",
+        "retryable": False,
+    }
+    personal = writer_status.status(tmp_path / "memory")
+    assert "retries" not in personal
+    assert personal["last_failure"] is None
+
+
+def test_one_cause_that_stops_several_conversations_is_announced_once(
+    tmp_path, monkeypatch,
+):
+    import openprogram.runtime.events as events
+    from openprogram.state.memory.runtime import writer_status
+
+    frames = []
+    monkeypatch.setattr(events, "emit_ws_frame", frames.append)
+    root = tmp_path / "memory"
+    code = "INVALID_TOPIC_FORMAT"
+    # Session A retries, then stops; B, a little behind, does the same.
+    writer_status.record_failure(root, code, retryable=True)
+    writer_status.record_failure(root, code, retryable=False)
+    writer_status.record_failure(root, code, retryable=True)
+    shown = writer_status.status(root)["last_failure"]
+    assert shown["retryable"] is False, "still stopped for this cause"
+    writer_status.record_failure(root, code, retryable=False)
+
+    assert [frame["data"]["reason_code"] for frame in frames] == [code]
+
+    # After a success the cause is news again.
+    writer_status.record_success(root)
+    writer_status.record_failure(root, code, retryable=True)
+    assert writer_status.status(root)["last_failure"]["retryable"] is True
+    writer_status.record_failure(root, code, retryable=False)
+    assert len(frames) == 2
 
 
 def test_structure_marks_topic_files_that_need_splitting():

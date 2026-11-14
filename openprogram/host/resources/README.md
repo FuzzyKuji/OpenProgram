@@ -4,6 +4,7 @@
 
 ## Files in this directory
 
+- **`background_browser.py`** — The browser the runtime starts itself, with no window, when no App window can open a page
 - **`desktop_link.py`** — The link between the core and the desktop windows a client keeps open
 - **`native_window.py`** — The native app window an Agent operates, for the conversation's preview
 - **`registry.py`** — Capability validation and dispatch; providers retain execution authority

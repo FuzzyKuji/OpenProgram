@@ -31,6 +31,11 @@ def server(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     db = SessionDB(tmp_path / "sessions.sqlite")
     monkeypatch.setattr("openprogram.runtime.context.session_db.default_db",
                         lambda: db)
+    # A last used model recorded by another test would pin every new
+    # conversation here; each test starts from its own config.
+    (tmp_path / "state").mkdir()
+    from openprogram.state import paths
+    monkeypatch.setattr(paths, "get_state_dir", lambda: tmp_path / "state")
 
     # Reset webui module state. We don't reimport — we just clear the
     # in-process structures so each test sees a clean slate.
@@ -201,12 +206,20 @@ def test_append_msg_invalidates_existing_cache(server) -> None:
     assert [m["id"] for m in srv._get_messages("c1")] == ["m1", "m2"]
 
 
-def test_set_active_head_syncs_db_memory_and_cache(server) -> None:
+@pytest.mark.parametrize("last_used", [False, True], ids=["fresh", "last_used_model"])
+def test_set_active_head_syncs_db_memory_and_cache(server, last_used) -> None:
     """_set_active_head is the unified branch-switch primitive used by
     retry / edit / sibling-checkout. It must update SessionDB,
     in-memory conv["head_id"], and invalidate the cache atomically
-    enough that the next reader sees a coherent view."""
+    enough that the next reader sees a coherent view.
+
+    With a last used model recorded (any install that has sent a message),
+    the new conversation still pins no model (it follows its Agent); the
+    switch must succeed there too."""
     srv, db = server
+    if last_used:
+        from openprogram.models.providers.catalog.last_used import record_last_used_model
+        record_last_used_model("openai-codex", "gpt-5")
     conv = srv._get_or_create_session("c1", agent_id="main")
     srv._append_msg(conv, {"id": "m1", "role": "user", "content": "x",
                             "timestamp": 1.0})
@@ -214,14 +227,33 @@ def test_set_active_head_syncs_db_memory_and_cache(server) -> None:
                             "timestamp": 2.0})
     srv._get_messages("c1")  # warm cache
 
-    srv._set_active_head("c1", "m1")    # rewind to m1
+    assert srv._set_active_head("c1", "m1") is True    # rewind to m1
 
+    if last_used:
+        assert db.get_session("c1").get("model_override") is None
+        assert db.get_session("c1")["agent_id"] == "main"
     # SessionDB
     assert db.get_session("c1")["head_id"] == "m1"
     # In-memory mirror
     assert conv["head_id"] == "m1"
     # Cache fresh + branch correct
     assert [m["id"] for m in srv._get_messages("c1")] == ["m1"]
+
+
+def test_set_active_head_on_a_record_without_agent(server) -> None:
+    """A session whose first record came from a settings write (a draft's
+    model pick) has no stored ``agent_id``; switching its head still works."""
+    srv, db = server
+    db.update_session("c2", provider_override="openai-codex", model_override="gpt-5")
+    db.append_message("c2", {"id": "m1", "role": "user", "content": "x",
+                              "timestamp": 1.0, "predecessor": None})
+    db.append_message("c2", {"id": "m2", "role": "assistant", "content": "y",
+                              "timestamp": 2.0, "predecessor": "m1"})
+    db.set_head("c2", "m2")
+    assert db.read_disk_meta("c2").get("agent_id") is None
+
+    assert srv._set_active_head("c2", "m1") is True
+    assert db.get_session("c2")["head_id"] == "m1"
 
 
 def test_set_active_head_to_none_clears(server) -> None:

@@ -35,6 +35,7 @@ import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Optional
+from openprogram.host._platform.filesystem import replace_file
 
 
 class AgentNotFound(KeyError):
@@ -336,6 +337,74 @@ def _stored_avatar(raw: object) -> dict[str, str]:
         return {}
 
 
+DELEGATION_VALUES = ("", "on", "off")
+ISOLATION_VALUES = ("", "worktree", "none")
+
+
+def _choice(raw: object, allowed: tuple[str, ...], key: str) -> str:
+    value = "" if raw is None else raw
+    if not isinstance(value, str) or value not in allowed:
+        raise ValueError(f"{key} must be one of " + ", ".join(repr(v) for v in allowed))
+    return value
+
+
+def validate_permissions(raw: object) -> dict[str, Any]:
+    """An Agent's ``permissions`` block, keeping only the keys it sets.
+
+    Each key can only narrow what the agent that starts this one allows
+    (``runtime/permissions/delegation.py``): ``mode`` (a permission mode),
+    ``allow``/``deny``/``ask`` (rule strings), ``additional_directories``
+    (folders) and ``sandbox`` (true turns it on). An empty block, the
+    default, narrows nothing.
+    """
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise ValueError("permissions must be an object")
+    from openprogram.runtime.permissions.delegation import OWN_KEYS
+    from openprogram.runtime.permissions.modes import normalize_permission
+    unknown = set(raw) - set(OWN_KEYS)
+    if unknown:
+        raise ValueError("permissions has unknown keys: " + ", ".join(sorted(unknown)))
+    out: dict[str, Any] = {}
+    if raw.get("mode") not in (None, ""):
+        mode = normalize_permission(raw["mode"])
+        if mode is None:
+            raise ValueError("permissions.mode must be one of plan, ask, acceptEdits, auto, bypass")
+        out["mode"] = mode
+    for key in ("allow", "deny", "ask", "additional_directories"):
+        if key not in raw or raw[key] is None:
+            continue
+        value = raw[key]
+        if not isinstance(value, list) or not all(isinstance(item, str) and item.strip() for item in value):
+            raise ValueError(f"permissions.{key} must be a list of strings")
+        out[key] = list(dict.fromkeys(item.strip() for item in value))
+    if raw.get("sandbox") is not None:
+        if not isinstance(raw["sandbox"], bool):
+            raise ValueError("permissions.sandbox must be true or false")
+        out["sandbox"] = raw["sandbox"]
+    return out
+
+
+# The fields that make up the agent tool's roster of Agents.
+_ROSTER_FIELDS = ("name", "description", "delegation", "tools")
+
+
+def _roster_changed(before: "AgentSpec | None", after: "AgentSpec | None") -> None:
+    """The agent tool's description lists Agents by name and description, so
+    an edit to those changes every conversation's prompt prefix once; say
+    so, so the cache report counts it as intended."""
+    if before is not None and after is not None and all(
+        getattr(before, f) == getattr(after, f) for f in _ROSTER_FIELDS
+    ):
+        return
+    try:
+        from openprogram.models.usage.prefix_fingerprint import expect_break_everywhere
+        expect_break_everywhere("agent_roster")
+    except Exception:
+        pass
+
+
 @dataclass
 class AgentSpec:
     """One agent record. Serialises round-trip to ``agent.json``."""
@@ -390,6 +459,16 @@ class AgentSpec:
     # How the interface pictures this Agent; empty means the picture derived
     # from its id. See validate_avatar.
     avatar: dict[str, str] = field(default_factory=dict)
+    # Whether other agents may start it with agent(agent=…): "on", "off",
+    # or "" for the default (see agent_registry/delegation.py). Listed
+    # Agents appear in the agent tool's description.
+    delegation: str = ""
+    # The isolation it gets when another agent starts it: "worktree",
+    # "none", or "" for the default rule (agent_registry/delegation.py).
+    isolation: str = ""
+    # What it may do when another agent starts it, narrowing that agent's
+    # permission (validate_permissions); empty narrows nothing.
+    permissions: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         out = asdict(self)
@@ -416,6 +495,9 @@ class AgentSpec:
             always_on=validate_always_on(raw.get("always_on") or {}),
             hold_outbound=raw.get("hold_outbound") is True,
             avatar=_stored_avatar(raw.get("avatar")),
+            delegation=_choice(raw.get("delegation"), DELEGATION_VALUES, "delegation"),
+            isolation=_choice(raw.get("isolation"), ISOLATION_VALUES, "isolation"),
+            permissions=validate_permissions(raw.get("permissions")),
             default=bool(raw.get("default") or False),
             model=AgentModelRef(
                 provider=str(model.get("provider") or ""),
@@ -570,7 +652,7 @@ def _write_json(path: Path, data: dict[str, Any]) -> None:
         ) as stream:
             tmp = Path(stream.name)
             json.dump(data, stream, indent=2, sort_keys=True)
-        os.replace(tmp, path)
+        replace_file(tmp, path)
     finally:
         if tmp is not None:
             tmp.unlink(missing_ok=True)
@@ -712,6 +794,7 @@ def create(
         agent_dir(agent_id).mkdir(parents=True, exist_ok=True)
         sessions_dir(agent_id)
         _write_agent(spec)
+        _roster_changed(None, spec)
 
         order = list(idx.get("order") or [])
         if agent_id not in order:
@@ -824,6 +907,9 @@ def merge_patch(spec: AgentSpec, patch: dict[str, Any], *, replace_tool_policy: 
         # One picture replaces another whole: a character keeps nothing
         # of the uploaded image it replaced.
         raw["avatar"] = validate_avatar(patch["avatar"])
+    if "permissions" in patch:
+        # The block is replaced whole, so a key left out stops narrowing.
+        raw["permissions"] = validate_permissions(patch["permissions"])
     raw["id"] = spec.id  # can't rename via update
     return AgentSpec.from_dict(raw)
 
@@ -863,6 +949,7 @@ def update(
         new_spec = merge_patch(spec, patch, replace_tool_policy=replace_tool_policy)
         new_spec.memory_policy_epoch = spec.memory_policy_epoch + (new_spec.memory != spec.memory)
         _write_agent(new_spec)
+        _roster_changed(spec, new_spec)
         return new_spec
 
 
@@ -877,6 +964,7 @@ def delete(agent_id: str) -> None:
         folder = agent_dir(agent_id)
         if folder.exists():
             shutil.rmtree(folder, ignore_errors=True)
+        _roster_changed(spec, None)
         idx = _read_index()
         order = [a for a in (idx.get("order") or []) if a != agent_id]
         idx["order"] = order

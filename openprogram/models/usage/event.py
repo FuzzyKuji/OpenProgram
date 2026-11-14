@@ -86,6 +86,14 @@ class UsageEvent(BaseModel):
     first_token_ms: Optional[int] = None
     first_text_ms: Optional[int] = None
 
+    # prompt cache: the request's prefix hash and, when its cached prefix
+    # broke, the first unit that differed, why, and the announced cause
+    # that explains it (models/usage/prefix_fingerprint.py)
+    prefix_hash: Optional[str] = None
+    break_at: Optional[int] = None
+    break_cause: Optional[str] = None
+    expected: Optional[str] = None
+
     # provenance
     token_source: str = "provider_usage"  # provider_usage | anthropic_count_api | estimate
     schema_version: int = SCHEMA_VERSION

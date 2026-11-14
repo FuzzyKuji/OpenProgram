@@ -371,7 +371,7 @@ function Test-WorkerHealth {
 
     # Windows PowerShell 5.1 does not escape double quotes in a native argument,
     # so the Python here has to stay free of them.
-    Invoke-Native $Python -I -B -c @'
+    Invoke-Native $Python -I -B -X utf8 -c @'
 import json
 import sys
 import time
@@ -544,12 +544,12 @@ function Invoke-WorkerProbe {
         Remove-Item Env:OPENPROGRAM_STATE_DIR -ErrorAction SilentlyContinue
         $env:OPENPROGRAM_WEB_PORT = [string]$ProbePort
         $env:PLAYWRIGHT_BROWSERS_PATH = $PlaywrightPath
-        Invoke-Native $PythonBin -I -B -m openprogram worker start
+        Invoke-Native $PythonBin -I -B -X utf8 -m openprogram worker start
         Test-WorkerHealth $PythonBin $ProbePort
-        Invoke-Native $PythonBin -I -B -m openprogram worker stop
+        Invoke-Native $PythonBin -I -B -X utf8 -m openprogram worker stop
     } finally {
         try {
-            & $PythonBin -I -B -m openprogram worker stop *> $null
+            & $PythonBin -I -B -X utf8 -m openprogram worker stop *> $null
         } catch {
             Write-Verbose "worker probe was already stopped: $($_.Exception.Message)"
         }
@@ -565,7 +565,7 @@ function Invoke-WorkerProbe {
     }
 }
 
-$Version = if ($env:OPENPROGRAM_VERSION) { $env:OPENPROGRAM_VERSION } else { "1.1.0" }
+$Version = if ($env:OPENPROGRAM_VERSION) { $env:OPENPROGRAM_VERSION } else { "1.2.0" }
 $Repository = if ($env:OPENPROGRAM_REPOSITORY) { $env:OPENPROGRAM_REPOSITORY } else { "FuzzyKuji/OpenProgram" }
 if ($Version -notmatch "^\d+\.\d+\.\d+$") {
     throw "invalid OpenProgram version: $Version"
@@ -772,7 +772,7 @@ function Install-FromSeed {
         Set-Content -LiteralPath (Join-Path $Store ".seeding") -Value $PID -Encoding ascii
         Install-SeedBase $Store $Manifest.base (Join-Path $Seed "base.tar.gz")
         $BasePython = Join-Path $Store "bases\$($Manifest.base)\python\python.exe"
-        Invoke-Native $BasePython -I -B (Join-Path $Seed "bootstrap\install_seed.py") --seed $Seed --root $Store --extract
+        Invoke-Native $BasePython -I -B -X utf8 (Join-Path $Seed "bootstrap\install_seed.py") --seed $Seed --root $Store --extract
         Remove-Item -LiteralPath $DownloadDirectory -Recurse -Force -ErrorAction SilentlyContinue
     } finally {
         Remove-Item -LiteralPath $Work -Recurse -Force -ErrorAction SilentlyContinue
@@ -783,15 +783,55 @@ function Install-FromSeed {
     Write-InstallSummary "OpenProgram $Version installed." (Join-Path $Bin "openprogram.cmd") $Store
 }
 
-$SeedName = "OpenProgram-$Version-seed-windows-$Arch.tar.gz"
 $SeedReleaseUrl = "https://github.com/$Repository/releases/download/v$Version"
+
+function Test-ReleaseFile {
+    param([Parameter(Mandatory = $true)][string]$Name)
+
+    $Curl = (Get-Command curl.exe -ErrorAction SilentlyContinue).Source
+    if (-not $Curl) {
+        return $false
+    }
+    $Probe = & $Curl --disable --proto "=https" --tlsv1.2 --silent --location --head --connect-timeout 15 --output NUL --write-out "%{http_code}" "$SeedReleaseUrl/$Name"
+    return $Probe -eq "200"
+}
+
+# Which package this computer installs. A release without a Windows on Arm
+# package still installs there: Windows 11 on Arm (build 22000 and later) runs
+# the x64 one under emulation. Windows 10 on Arm cannot, so it keeps the Arm
+# name and the installer says that package is missing.
+function Select-PackageArchitecture {
+    param(
+        [Parameter(Mandatory = $true)][string]$Native,
+        [Parameter(Mandatory = $true)][int]$WindowsBuild,
+        [Parameter(Mandatory = $true)][string]$ReleaseVersion,
+        [Parameter(Mandatory = $true)][scriptblock]$HasFile
+    )
+
+    if ($Native -ne "arm64" -or $WindowsBuild -lt 22000) {
+        return $Native
+    }
+    foreach ($Candidate in @("arm64", "x86_64")) {
+        foreach ($Name in @("seed-windows-$Candidate.tar.gz", "runtime-windows-$Candidate.zip")) {
+            if (& $HasFile "OpenProgram-$ReleaseVersion-$Name") {
+                return $Candidate
+            }
+        }
+    }
+    return $Native
+}
+
+if (-not $env:OPENPROGRAM_SEED_ARCHIVE -and -not $env:OPENPROGRAM_RUNTIME_ARCHIVE) {
+    $Selected = Select-PackageArchitecture $Arch ([Environment]::OSVersion.Version.Build) $Version ${function:Test-ReleaseFile}
+    if ($Selected -ne $Arch) {
+        Write-Host "OpenProgram $Version has no Windows on Arm package. Installing the x64 one, which Windows 11 on Arm runs under emulation."
+        $Arch = $Selected
+    }
+}
+$SeedName = "OpenProgram-$Version-seed-windows-$Arch.tar.gz"
 $HasSeed = [bool]$env:OPENPROGRAM_SEED_ARCHIVE
 if (-not $HasSeed -and -not $env:OPENPROGRAM_RUNTIME_ARCHIVE) {
-    $Curl = (Get-Command curl.exe -ErrorAction SilentlyContinue).Source
-    if ($Curl) {
-        $Probe = & $Curl --disable --proto "=https" --tlsv1.2 --silent --location --head --connect-timeout 15 --output NUL --write-out "%{http_code}" "$SeedReleaseUrl/$SeedName"
-        $HasSeed = $Probe -eq "200"
-    }
+    $HasSeed = Test-ReleaseFile $SeedName
 }
 if ($HasSeed) {
     Install-FromSeed $StateRoot $SeedName $SeedReleaseUrl
@@ -885,8 +925,8 @@ if (-not $PythonBin.StartsWith($ReleasePrefix, [StringComparison]::OrdinalIgnore
 if (-not (Test-Path -LiteralPath $PythonBin -PathType Leaf)) {
     throw "managed Python is missing: $PythonBin"
 }
-Invoke-Native $PythonBin -I (Join-Path $CandidateRoot "bin\verify-product-runtime.py") $CandidateRoot
-Invoke-Native $PythonBin -I -m openprogram --version
+Invoke-Native $PythonBin -I -X utf8 (Join-Path $CandidateRoot "bin\verify-product-runtime.py") $CandidateRoot
+Invoke-Native $PythonBin -I -X utf8 -m openprogram --version
 
 Invoke-WorkerProbe $PythonBin (Join-Path $CandidateRoot "assets\playwright")
 
@@ -910,7 +950,7 @@ chcp 65001 >nul
 set "PLAYWRIGHT_BROWSERS_PATH=$CmdPlaywright"
 set "OPENPROGRAM_IMMUTABLE_RUNTIME=1"
 if exist "$CmdGit\git.exe" set "PATH=$CmdGit;%PATH%"
-"$CmdPython" -I -B -m openprogram %*
+"$CmdPython" -I -B -X utf8 -m openprogram %*
 set "_OPENPROGRAM_EXIT=%ERRORLEVEL%"
 chcp %_OPENPROGRAM_CODEPAGE% >nul
 exit /b %_OPENPROGRAM_EXIT%

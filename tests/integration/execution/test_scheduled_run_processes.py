@@ -6,6 +6,8 @@ import subprocess
 import sys
 import time
 
+import pytest
+
 _FAKE_MODEL = r'''
 from openprogram.runtime.conversation import turn_runtime as loop
 from tests.component.channels.test_channels_dispatch_inbound import _stub_model, make_delta_stream
@@ -29,6 +31,57 @@ loop._run_loop_blocking = _turn
 loop._resolve_model = lambda profile, override=None: _stub_model()
 loop._load_agent_profile = lambda agent_id: {"id": agent_id, "system_prompt": "", "tools": []}
 '''
+
+_RUN_MODEL = r"""
+import asyncio, os, threading, time
+from pathlib import Path
+from openprogram.programs.applications.browser import tabs
+from openprogram.runtime.conversation import turn_runtime as loop
+from tests.component.channels.test_channels_dispatch_inbound import _stub_model, make_delta_stream
+from tests.component.providers.scripted_provider import ScriptedProvider, ScriptedText, ScriptedToolCall
+
+FOLDER = Path(os.environ["RUN_FOLDER"])
+_run = loop._run_loop_blocking
+_scripted = ScriptedProvider()
+_scripted.add_response(ScriptedToolCall(name="bash", id="call_1", arguments={
+    "command": f"echo > '{FOLDER}/started'; sleep 60; echo > '{FOLDER}/slept'", "description": "wait"}))
+_scripted.add_response(ScriptedText("done"))
+
+
+def _waiting_model():
+    async def stream(model, context, options):
+        (FOLDER / "started").write_text("")
+        await asyncio.sleep(120)
+        yield None
+    return stream
+
+
+def _turn(*, req, history, on_event, cancel_event, **_):
+    from openprogram.runtime.execution.run_control import get_current_execution_id
+    (FOLDER / "execution").write_text(get_current_execution_id() or "")
+    stream = {"wait in a tool": _scripted.stream_simple, "wait for the model": _waiting_model()}.get(req.user_text)
+    return _run(req=req, history=history, on_event=on_event, cancel_event=cancel_event,
+                stream_fn=stream or make_delta_stream(["the screen is clear"]))
+
+
+def _close_now(execution_id):
+    with (FOLDER / "closed").open("a") as handle:
+        handle.write(execution_id + "\n")
+
+
+def _close_later(execution_id):
+    def close():
+        time.sleep(2)
+        _close_now("later:" + execution_id)
+    threading.Thread(target=close, daemon=True).start()
+
+
+loop._run_loop_blocking = _turn
+loop._resolve_model = lambda profile, override=None: _stub_model()
+loop._load_agent_profile = lambda agent_id: {"id": agent_id, "system_prompt": "", "tools": ["bash"]}
+# The browser application's tab closing, observed: the App is not part of these processes.
+tabs.close_run_tabs, tabs.close_run_tabs_soon = _close_now, _close_later
+"""
 
 _PROGRAM = r'''
 import asyncio, json, multiprocessing, os, sys, threading, time
@@ -368,11 +421,127 @@ def worker_dies(folder):
     os._exit(0)
 
 
+def start_a_task(folder, prompt, origin=None, loaded=False):
+    """The Worker fires a task the way its tick does; returns the run's process.
+
+    ``loaded``: the Worker already holds the run's conversation, as it does the
+    chat a task was set in, or a task's own conversation after an earlier run."""
+    import run_model  # noqa: F401
+    from openprogram.programs.tools.jobs.cron import cron, worker
+    from openprogram.runtime.conversation import process_runner
+    from openprogram.runtime.execution import default_store
+    from openprogram.runtime.jobs import get_runner
+    from openprogram.runtime.permissions.authority import local_owner_authority
+
+    get_runner()
+    process_runner._link_registration_modules = lambda: ["run_model"]
+    spec = cron._build_execution_spec(kind="prompt", body=prompt, cwd=str(folder), entry_id="hourly",
+                                      authority=local_owner_authority(), origin=origin)
+    entry = {"id": "hourly", "title": "Hourly", "cron": "0 * * * *", "prompt": prompt, "execution": spec}
+    cron._save(cron._resolve_path(), [entry])
+    if loaded:
+        default_store().tables.ensure_session(spec["session_id"])
+    return worker._spawn(entry, str(Path(folder) / "logs")), spec["session_id"]
+
+
+def wait_for(test, seconds=60):
+    deadline = time.monotonic() + seconds
+    while not test() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    return test()
+
+
+def running_execution(folder):
+    """The run's execution, learnt from the run itself: the Worker reads nothing in for it."""
+    from openprogram.runtime.execution import default_store
+    assert wait_for(lambda: (Path(folder) / "started").exists()), "the run never reached its wait"
+    return default_store(), (Path(folder) / "execution").read_text()
+
+
+def relay_done():
+    relay = next((t for t in threading.enumerate() if t.name == "cron-job-relay"), None)
+    if relay is not None:
+        relay.join(30)
+
+
+def closed(folder):
+    path = Path(folder) / "closed"
+    return path.read_text().split() if path.exists() else []
+
+
+def stop_from_the_worker(folder):
+    """The user stops a scheduled run in the App while its tool runs."""
+    from openprogram.runtime.execution.run_control import cancel_execution
+    from openprogram.runtime.scheduler import task_runs
+
+    lock = worker_lock()
+    process, _ = start_a_task(folder, sys.argv[3], loaded=sys.argv[4] == "loaded")
+    store, execution_id = running_execution(folder)
+    asked = time.monotonic()
+    answer = cancel_execution(execution_id)
+    process.join(30)
+    took = time.monotonic() - asked
+    alive = process.is_alive()
+    if alive:
+        process.terminate()
+        process.join(10)
+    relay_done()
+    record = store.get_execution(execution_id)
+    print(json.dumps({
+        "answer": answer["status"], "alive": alive, "seconds": took, "exitcode": process.exitcode,
+        "status": record.status.value, "slept": (Path(folder) / "slept").exists(),
+        "closed": closed(folder), "execution_id": execution_id, "runs": task_runs.recent("hourly"),
+    }))
+    lock.release()
+
+
+def kill_the_process(folder):
+    """The run's process is killed; the Worker goes on."""
+    from openprogram.runtime.scheduler import task_runs
+
+    lock = worker_lock()
+    process, session_id = start_a_task(folder, "wait for the model", loaded=sys.argv[3] == "loaded")
+    store, execution_id = running_execution(folder)
+    os.kill(process.pid, 9)
+    process.join(30)
+    relay_done()
+    wait_for(lambda: closed(folder), 10)
+    record = store.get_execution(execution_id)
+    print(json.dumps({
+        "status": record.status.value, "reason": record.reason_code, "owner": dict(record.owner_lease),
+        "closed": closed(folder), "execution_id": execution_id,
+        "runs": [(run["status"], run["text"]) for run in task_runs.recent("hourly")],
+        "unfinished": [row.status.value for row in store.list_nonterminal(session_id=session_id)],
+    }))
+    lock.release()
+
+
+def report_in_its_own_conversation(folder):
+    """A task set outside any chat reports into the conversation its runs make."""
+    from openprogram.runtime.context.session_db import default_db
+
+    lock = worker_lock()
+    process, session_id = start_a_task(folder, "check")
+    process.join(90)
+    relay_done()
+    db = default_db()
+    posted = wait_for(lambda: [row for row in db.get_branch(session_id) if row.get("always_on_report")], 30)
+    print(json.dumps({
+        "session_id": session_id, "head": (db.get_session(session_id) or {}).get("head_id"),
+        "main_line": [(row["role"], row.get("content")) for row in db.get_branch(session_id)],
+        "posted": [row["content"] for row in posted or []],
+    }), flush=True)
+    lock.release()
+    os._exit(0)
+
+
 if __name__ == "__main__":
     {"sub_agent": sub_agent, "worker_dies": worker_dies, "restart_leaves_turn": restart_leaves_turn,
      "new_worker_follows_a_surviving_turn": new_worker_follows_a_surviving_turn,
      "leave_written_over": leave_written_over, "recover_written_over": recover_written_over,
-     "worker_continues_a_scheduled_run": worker_continues_a_scheduled_run}[sys.argv[1]](sys.argv[2])
+     "worker_continues_a_scheduled_run": worker_continues_a_scheduled_run,
+     "stop_from_the_worker": stop_from_the_worker, "kill_the_process": kill_the_process,
+     "report_in_its_own_conversation": report_in_its_own_conversation}[sys.argv[1]](sys.argv[2])
 '''
 
 
@@ -381,12 +550,13 @@ def _run(tmp_path, stage, *arguments):
     folder.mkdir(exist_ok=True)
     (tmp_path / "home").mkdir(exist_ok=True)
     (tmp_path / "fake_model.py").write_text(_FAKE_MODEL)
+    (tmp_path / "run_model.py").write_text(_RUN_MODEL)
     program = tmp_path / "program.py"
     program.write_text(_PROGRAM)
     root = Path(__file__).resolve().parents[3]
     finished = subprocess.run(
         [sys.executable, str(program), stage, str(folder), *arguments], text=True, capture_output=True, timeout=180,
-        env={**os.environ, "HOME": str(tmp_path / "home"), "OPENPROGRAM_PROFILE": "",
+        env={**os.environ, "HOME": str(tmp_path / "home"), "OPENPROGRAM_PROFILE": "", "RUN_FOLDER": str(folder),
              "PYTHONPATH": os.pathsep.join((str(root), str(tmp_path)))},
     )
     assert finished.returncode == 0, finished.stdout + finished.stderr
@@ -444,3 +614,31 @@ def test_a_run_waiting_on_the_worker_ends_when_the_worker_is_gone(tmp_path):
     while not ended.exists() and time.monotonic() < deadline:
         time.sleep(0.05)
     assert ended.read_text() == "WorkerUnavailable: the Worker that started this scheduled run has stopped"
+
+
+@pytest.mark.parametrize("held", ["loaded", "not loaded"])
+@pytest.mark.parametrize("wait", ["wait in a tool", "wait for the model"])
+def test_a_stop_asked_in_the_worker_ends_a_run_in_its_own_process(tmp_path, wait, held):
+    report = _run(tmp_path, "stop_from_the_worker", wait, held)
+    assert report["answer"] == "cancelling" and not report["alive"] and report["exitcode"] == 0
+    assert report["seconds"] < 10, report
+    assert report["status"] == "cancelled" and not report["slept"]
+    # Its pages closed before the process exited, not on a thread the exit could cut off.
+    assert report["closed"][:1] == [report["execution_id"]]
+    # A run the user stopped is no news and no failure.
+    assert report["runs"] == []
+
+
+@pytest.mark.parametrize("held", ["loaded", "not loaded"])
+def test_a_killed_run_process_is_ended_by_the_worker_at_once(tmp_path, held):
+    report = _run(tmp_path, "kill_the_process", held)
+    assert report["status"] == "interrupted" and report["owner"] == {} and report["unfinished"] == []
+    assert report["closed"] == [f"later:{report['execution_id']}"]
+    assert report["runs"] == [["failed", "the run was interrupted and could not continue"]]
+
+
+def test_a_task_set_outside_a_chat_reports_into_its_own_conversation(tmp_path):
+    report = _run(tmp_path, "report_in_its_own_conversation")
+    assert report["session_id"] == "cron-hourly"
+    assert report["posted"] == ["the screen is clear"]
+    assert report["main_line"] == [["assistant", "the screen is clear"]]

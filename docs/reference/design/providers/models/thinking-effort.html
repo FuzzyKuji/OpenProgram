@@ -25,10 +25,18 @@
 <h2 id="data-flow">From picker to request</h2>
 <ol>
 <li><code translate="no">get_thinking_config_for_model</code> (<code translate="no">interfaces/server/thinking_effort.py</code>) builds the options from the model's <code translate="no">thinking_levels</code>.</li>
-<li><code translate="no">_normalize_thinking</code> (<code translate="no">runtime/conversation/session_config.py</code>) checks the choice against <code translate="no">VALID_THINKING</code>; it is stored per session.</li>
-<li><code translate="no">reasoning_from_config</code> hands it to the turn as <code translate="no">SimpleStreamOptions.reasoning</code>.</li>
+<li><code translate="no">_normalize_thinking</code> (<code translate="no">runtime/conversation/session_config.py</code>) checks the choice against <code translate="no">VALID_THINKING</code>; it is stored per conversation branch. New branches inherit once; switching restores that branch’s choice.</li>
+<li><code translate="no">reasoning_from_config</code> hands it to the turn as <code translate="no">SimpleStreamOptions.reasoning</code>, kept inside the model's levels by <code translate="no">normalize_reasoning_level</code> (below).</li>
 <li>The provider's <code translate="no">stream_simple()</code> calls <code translate="no">translate_reasoning(provider, model, level)</code> and writes the answer into its request field, for example <code translate="no">{"output_config": {"effort": "high"}}</code>.</li>
 </ol>
+
+<h2 id="missing-level">A level the model lacks</h2>
+<p>A level saved for another model, or asked for with <code translate="no">--effort</code>, may not be in the model's <code translate="no">thinking_levels</code>. <code translate="no">normalize_reasoning_level</code> (<code translate="no">thinking_spec.py</code>) sends the nearest one it has:</p>
+<ul>
+<li>the next stronger level, else the next weaker: <code translate="no">minimal</code> on a model that starts at <code translate="no">low</code> sends <code translate="no">low</code>;</li>
+<li>a name outside the ladder: the model's default.</li>
+</ul>
+<p class="note">Follows Pi's <code translate="no">clampThinkingLevel</code>. Falling back to the default could turn the lightest effort into a middle one; <code translate="no">translate_reasoning</code> already maps Anthropic's <code translate="no">minimal</code> to <code translate="no">low</code> the same way.</p>
 
 <h2 id="deriving-levels">Which levels a model shows</h2>
 <p><code translate="no">list_models_for_provider()</code> in <code translate="no">models/listing/listing.py</code> takes the first that answers. The picker and <code translate="no">list_enabled_models</code> read through it.</p>
@@ -50,6 +58,7 @@
 <thead class="sr"><tr><th scope="col">Case</th><th scope="col">Answer</th></tr></thead>
 <tbody>
 <tr><th scope="row"><code translate="no">wire_format</code> missing or <code translate="no">none</code></th><td><code translate="no">None</code></td></tr>
+<tr><th scope="row">Level <code translate="no">off</code> (or <code translate="no">none</code>)</th><td>the override's <code translate="no">off</code> (<code translate="no">null</code>: <code translate="no">None</code>), else its map's, else the provider map's: <code translate="no">none</code> on OpenAI Responses, so thinking off sends <code translate="no">effort: "none"</code> as Pi and Codex do, instead of leaving the server at its default effort. Models older than <code translate="no">none</code> (o-series, gpt-5 to gpt-5-pro) map it to <code translate="no">null</code>. <code translate="no">off</code> is never a picker level</td></tr>
 <tr><th scope="row">Model override with an empty map</th><td><code translate="no">None</code>: reasons, but no effort parameter is sent</td></tr>
 <tr><th scope="row">Level in the override's map</th><td>that value</td></tr>
 <tr><th scope="row">Provider map's value for the level is in the override's values</th><td>that value, so Anthropic's <code translate="no">minimal</code> becomes <code translate="no">low</code></td></tr>

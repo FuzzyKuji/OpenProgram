@@ -44,6 +44,7 @@ import urllib.request
 
 from openprogram.host.security import safe_http
 from openprogram.host.security.url_policy import URLPolicyError
+from openprogram.host._platform import filesystem
 
 
 HTTP_TIMEOUT = 5.0
@@ -542,6 +543,6 @@ def download_release_file(url: str, target: Path, *, size: int, progress: bool =
         if actual != size:
             part.unlink(missing_ok=True)
             raise DownloadFailed(f"{name} is {actual} bytes, and the signed manifest says {size}", permanent=True)
-        os.replace(part, target)
+        filesystem.replace_file(part, target)
         return
     raise DownloadFailed(f"{name} could not be downloaded: {problem}")

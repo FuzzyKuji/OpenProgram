@@ -46,7 +46,7 @@
 <tr><th scope="row">Build</th><td><code translate="no">scripts/release/build-desktop-shell.sh</code>: electron-builder with the release configuration minus the runtime, so the Electron pinned in <code translate="no">apps/desktop/package.json</code> runs here first</td></tr>
 <tr><th scope="row">Signing</th><td><code translate="no">local-macos-signing.py sign --development</code>, the local identity; signs the outer App alone</td></tr>
 <tr><th scope="row">Install</th><td>Built next to the stable App, never into it. The bundle is swapped while the App is closed and reopened if it was open, in front only when the user was in it.</td></tr>
-<tr><th scope="row">Browser tool</th><td><code translate="no">programs/applications/browser/chrome.py</code> picks the debugging port by profile, so the development agent never drives the stable App's tabs</td></tr>
+<tr><th scope="row">Browser tool</th><td><code translate="no">programs/applications/browser/app_endpoint.py</code> picks the debugging port by profile, so the development agent never drives the stable App's tabs</td></tr>
 </tbody>
 </table>
 </details>

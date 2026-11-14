@@ -18,7 +18,7 @@
 <tr><th scope="row">System prompt</th><td>最新记录的完整系统提示词</td><td>先算全量，再减去 Skills、常驻 Memory 和延迟目录</td></tr>
 <tr><th scope="row">Skills、Memory</th><td>注入系统提示词的索引和常驻块</td><td>属于系统提示词的组成部分，不再重复计入总量</td></tr>
 <tr><th scope="row">System tools、MCP tools</th><td>本轮冻结工具集的供应商 schema</td><td>由 <code translate="no">_mcp_server</code> 决定归入哪一类</td></tr>
-<tr><th scope="row">Deferred tools</th><td>系统提示词中的工具名目录</td><td>只计实际发送的名称，不计完整描述或 schema</td></tr>
+<tr><th scope="row">Deferred tools</th><td>工具名目录：对话自己的回合放在用户消息旁，自带提示词的调用写在那份提示词里</td><td>只计实际发送的名称，不计完整描述或 schema</td></tr>
 <tr><th scope="row">Other context（估算）</th><td><code translate="no">provider total - classified estimate</code></td><td>未持久化图片、供应商包装开销、临时界面提示词。显示出来，不隐藏</td></tr>
 </tbody>
 </table>
@@ -38,6 +38,7 @@ free = max(0, window - displayed_used)</code></pre>
 <li>切换模型后立即使用其上下文窗口，并以新估算替换旧实测；下一次请求完成后使用新实测。</li>
 <li>App 和 Web 读取同一个 <code translate="no">/api/sessions/{id}/context</code>，不各自估算。</li>
 </ul>
+<p class="note">尚未调整：<code translate="no">session_stats.py</code> 仍从系统提示词一行里减去目录，而目录移到消息旁后，对话自己的回合在那里已经不带它（<a href="../function/deferred-tools.zh.html#catalog">延迟工具</a>）。</p>
 
 <details>
 <summary>代码位置</summary>

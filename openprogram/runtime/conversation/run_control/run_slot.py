@@ -1,6 +1,9 @@
 """The conversation run slot, as a port the hosting server fills.
 
-One conversation runs one turn at a time. The web server owns that slot
+The selected branch of a conversation runs one turn at a time. (A turn on
+a recorded branch that is not selected takes that branch's own slot in the
+server and runs beside it; nothing the runtime starts on its own does.)
+The web server owns the selected branch's slot
 (its run reservation, the running task it shows and the guard every chat
 entry point takes), so a turn the runtime starts on its own, such as a
 reminder wake or a handed-over message, must take the same slot or it runs
@@ -21,6 +24,8 @@ class RunSlotPort(Protocol):
                  status_version: int, runner: Any) -> bool: ...
 
     def finish(self, session_id: str, owner: str, *, execution_id: str) -> None: ...
+
+    def finishing(self, session_id: str, owner: str) -> None: ...
 
     def release(self, session_id: str, owner: str) -> None: ...
 
@@ -63,7 +68,25 @@ def release(session_id: str, owner: str) -> None:
         _port.release(session_id, owner)
 
 
+def finishing(session_id: str, owner: str) -> None:
+    """The turn ``owner`` is about to send its terminal frame.
+
+    Called just before that frame goes out, so nobody can see "the turn is
+    over" while the slot still answers "busy" without the slot knowing it
+    is only finishing up: the next message on the branch waits the short
+    finish-up out instead of being refused. Never raises."""
+    mark = getattr(_port, "finishing", None)
+    if mark is None:
+        return
+    try:
+        mark(session_id, owner)
+    except Exception:
+        # A missed mark only brings back the refusal it prevents.
+        import logging
+        logging.getLogger(__name__).debug("finishing mark failed", exc_info=True)
+
+
 __all__ = [
-    "RunSlotBusy", "RunSlotPort", "activate", "finish", "register_run_slot",
+    "RunSlotBusy", "RunSlotPort", "activate", "finish", "finishing", "register_run_slot",
     "release", "reserve",
 ]

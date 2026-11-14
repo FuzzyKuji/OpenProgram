@@ -8,6 +8,36 @@ from openprogram.host._platform import process_ownership
 from openprogram.host._platform import terminal
 
 
+def _oem_codec() -> str:
+    """Codec of the code page Windows console tools write to a pipe in."""
+
+    return "oem"
+
+
+def console_text(data: bytes | str | None) -> str:
+    """Decode what a Windows console tool wrote to a pipe.
+
+    netstat, schtasks and Windows PowerShell write in their console's code
+    page. Started with ``no_window_creation_flags()`` they get a console of
+    their own, whose code page is the OEM one (cp936 on a Chinese system).
+    Python's text mode decodes with the ANSI code page, or strictly as UTF-8
+    under ``-X utf8``, and a strict decode that fails loses the whole output.
+    So callers capture bytes and decode here, never raising. Guessing UTF-8
+    first is not safe: many two-byte cp936 characters are valid UTF-8.
+    """
+
+    if data is None:
+        return ""
+    if isinstance(data, str):
+        return data
+    if _sys.platform == "win32":
+        try:
+            return data.decode(_oem_codec(), "replace")
+        except LookupError:
+            pass
+    return data.decode("utf-8", "replace")
+
+
 def kill_process_tree(pid: int) -> bool:
     """Force-kill ``pid`` and every descendant. Best-effort, non-raising.
 
@@ -141,7 +171,8 @@ def process_command_line(pid: int) -> str:
                 .strip()
             )
     except OSError:
-        pass
+        if _sys.platform.startswith("linux"):
+            return ""  # gone or not ours; ps would read the same /proc
     try:
         result = _subprocess.run(
             ["ps", "-p", str(pid), "-o", "command="],
@@ -164,7 +195,6 @@ def pids_on_port(port: int) -> list[int]:
                 ["netstat", "-ano", "-p", "TCP"],
                 check=False,
                 capture_output=True,
-                text=True,
                 timeout=3,
                 creationflags=process_ownership.no_window_creation_flags(),
             )
@@ -172,7 +202,7 @@ def pids_on_port(port: int) -> list[int]:
             return []
         pids: list[int] = []
         needle = f":{port}"
-        for line in (result.stdout or "").splitlines():
+        for line in console_text(result.stdout).splitlines():
             parts = line.split()
             if len(parts) < 5 or parts[3].upper() != "LISTENING":
                 continue
@@ -279,112 +309,6 @@ def _linux_proc_pids_on_port(
     return sorted(owners)
 
 
-def process_ids_by_name(names) -> list[int]:
-    """Return Windows PIDs whose executable basename is in ``names``."""
-
-    if _sys.platform != "win32":
-        return []
-    safe_names = sorted(
-        {
-            name.lower()
-            for name in names
-            if name and all(char.isalnum() or char in "._-" for char in name)
-        }
-    )
-    if not safe_names:
-        return []
-    query = " OR ".join(f"Name = '{name}'" for name in safe_names)
-    output = terminal._windows_powershell(
-        "Get-CimInstance Win32_Process -Filter \""
-        + query
-        + '\"|ForEach-Object{[Console]::Out.WriteLine($_.ProcessId)}'
-    )
-    pids: list[int] = []
-    for line in output.splitlines():
-        try:
-            pids.append(int(line.strip()))
-        except ValueError:
-            continue
-    return pids
-
-
-def kill_processes_matching(names, command_line_fragment: str) -> None:
-    """Best-effort force-kill named processes whose command line matches.
-
-    Windows enumerates processes through CIM and terminates the matching
-    process trees with ``taskkill``. POSIX enumerates process IDs and performs
-    a literal command-line substring match.  Do not route the fragment through
-    ``pkill -f``: pkill interprets it as a regular expression (so paths can
-    match unintended processes) and its own invocation may match the pattern.
-    Keeping both implementations here prevents product commands from growing
-    platform branches of their own.
-    """
-
-    if not command_line_fragment:
-        return
-    if _sys.platform == "win32":
-        normalized_fragment = command_line_fragment.replace("\\", "/").lower()
-        for pid in process_ids_by_name(names):
-            command_line = process_command_line(pid).replace("\\", "/").lower()
-            if normalized_fragment not in command_line:
-                continue
-            try:
-                _subprocess.run(
-                    ["taskkill", "/F", "/T", "/PID", str(pid)],
-                    check=False,
-                    stdout=_subprocess.DEVNULL,
-                    stderr=_subprocess.DEVNULL,
-                    timeout=10,
-                    creationflags=process_ownership.no_window_creation_flags(),
-                )
-            except (FileNotFoundError, _subprocess.TimeoutExpired, OSError):
-                pass
-        return
-
-    fragment = command_line_fragment
-    for pid, command_line in _posix_process_command_lines().items():
-        if pid == _os.getpid():
-            continue
-        if fragment not in command_line:
-            continue
-        kill_process_tree(pid)
-
-
-def _posix_process_command_lines() -> dict[int, str]:
-    """Best-effort POSIX process snapshot for literal command matching."""
-
-    if _sys.platform.startswith("linux"):
-        import glob
-
-        pids = {
-            int(_os.path.basename(path))
-            for path in glob.iglob("/proc/[0-9]*")
-            if _os.path.basename(path).isdigit()
-        }
-        return {
-            pid: command
-            for pid in sorted(pids)
-            if (command := process_command_line(pid))
-        }
-    try:
-        result = _subprocess.run(
-            ["ps", "-axo", "pid=,command="],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=3,
-        )
-    except (OSError, _subprocess.TimeoutExpired):
-        return {}
-    values: dict[int, str] = {}
-    for line in result.stdout.splitlines():
-        parts = line.strip().split(None, 1)
-        if not parts or not parts[0].isdigit():
-            continue
-        values[int(parts[0])] = parts[1] if len(parts) > 1 else ""
-    return values
-
-
 def process_start_token(pid: int) -> str | None:
     """Return a creation-time identity, independent of executable spelling."""
     if pid <= 0:
@@ -415,7 +339,7 @@ def process_start_token(pid: int) -> str | None:
         from pathlib import Path
         try:
             # comm may contain spaces and parentheses; fields begin after its last ')'.
-            fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[-1].split()
+            fields = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8").rsplit(")", 1)[-1].split()
             return f"proc:{fields[19]}"
         except (OSError, IndexError, UnicodeError):
             return None
@@ -456,7 +380,7 @@ def process_alive(pid: int) -> bool:
     if _sys.platform.startswith("linux"):
         from pathlib import Path
         try:
-            fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[-1].split()
+            fields = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8").rsplit(")", 1)[-1].split()
             if fields and fields[0] == "Z":
                 return False
         except OSError:

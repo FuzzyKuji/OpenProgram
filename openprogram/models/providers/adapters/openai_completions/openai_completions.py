@@ -51,6 +51,12 @@ from ...types import (
     UserMessage,
 )
 from ...utils.cancelable_stream import iter_until_cancelled
+from ...utils.stream_idle import (
+    StreamIdleTimeout,
+    event_idle_timeout_s,
+    idle_bounded,
+    idle_bounded_open,
+)
 from ...utils.errors import classify_error
 from ...utils.json_parse import parse_partial_json
 from ...utils.stream_retry import PROVIDER_STREAM_MAX_ATTEMPTS, stream_backoff_seconds
@@ -465,6 +471,9 @@ async def stream_simple(
             return True
         return False
 
+    from ...recording.capture import COMPLETIONS, capture_request
+    capture_request(model, params, wire=COMPLETIONS)
+
     yield EventStart(type="start", partial=partial)
 
     try:
@@ -477,9 +486,25 @@ async def stream_simple(
         network_wait: dict[str, float] | None = None
         while True:
             try:
-                async with await client.chat.completions.create(**params) as stream:
+                # Response headers or a chunk that never come end the
+                # attempt as a retryable StreamIdleTimeout, retried below.
+                idle_s = event_idle_timeout_s()
+                async with await idle_bounded_open(
+                    client.chat.completions.create(**params), idle_s,
+                    label=model.provider,
+                ) as stream:
+                    # Per-minute headroom (``x-ratelimit-*``) the reply carries.
+                    from openprogram.models.usage.quota import observe_headers
+                    observe_headers(
+                        model.provider, _client_api_key,
+                        getattr(getattr(stream, "response", None), "headers", None),
+                        account=_cred_id,
+                    )
                     # <=250ms cancel poll — do not wait for the next token.
-                    async for chunk in iter_until_cancelled(stream, _stop):
+                    async for chunk in idle_bounded(
+                        iter_until_cancelled(stream, _stop), idle_s,
+                        label=f"{model.provider} chunk",
+                    ):
                         actual_tier = getattr(chunk, "service_tier", None) or actual_tier
                         # Process usage from chunks
                         if chunk.usage:
@@ -629,7 +654,7 @@ async def stream_simple(
                     if recovery is not None:
                         recovery.refund("transport", transport_reserved)
                 break
-            except _openai.APIError as e:
+            except (_openai.APIError, StreamIdleTimeout) as e:
                 _, retryable = classify_error(
                     e, http_status=getattr(e, "status_code", None),
                 )

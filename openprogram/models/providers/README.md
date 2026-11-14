@@ -21,7 +21,7 @@ here hold only model, auth and wire code.
 
 - **`adapters/`** — Per-provider adapters: one directory per provider, each with a ``provider.json``
 - **`catalog/`** — Which providers and models exist and are enabled
-- **`recording/`** — Record provider calls to a JSONL recording file and replay them offline
+- **`recording/`** — Record, replay and capture provider requests
 - **`schema/`** — Tool-schema normalization across providers
 - **`settings/`** — How a provider call is configured
 - **`shared/`** — Shared helpers used by multiple provider stream implementations

@@ -50,8 +50,13 @@ def record_tool_snapshot(
     store: Any,
     session_id: str | None,
     tools: list[Any],
+    epoch: Optional[dict] = None,
 ) -> Optional[str]:
     """Record priced loaded/deferred rows after the turn toolset is frozen.
+
+    ``epoch`` is the record of the request's tool epoch
+    (``agent.loop.tool_epoch``), kept with the rows so a restarted Worker
+    sends the same array for the rest of the epoch.
 
     Only into a conversation that exists: internal model calls (titles,
     say) carry a Runtime's ``op-…`` cache id, and writing there created
@@ -72,7 +77,10 @@ def record_tool_snapshot(
                 "deferred": bool(estimate.get("deferred")),
                 "server": str(getattr(tool, "_mcp_server", None) or ""),
             })
-        payload = json.dumps({"tools": rows}, ensure_ascii=False, sort_keys=True)
+        value: dict[str, Any] = {"tools": rows}
+        if epoch:
+            value["epoch"] = epoch
+        payload = json.dumps(value, ensure_ascii=False, sort_keys=True)
         anchor_head_id = _active_head_id(store, session_id)
         previous = latest_recorded_tool_snapshot(
             store, session_id, anchor_head_id,

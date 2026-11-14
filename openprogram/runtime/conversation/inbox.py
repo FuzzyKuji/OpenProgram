@@ -97,7 +97,7 @@ def _load(path) -> list[dict[str, Any]]:
 
 def _write(path, entries: list[dict[str, Any]]) -> None:
     payload = {"version": 1, "entries": entries}
-    path.write_text(json.dumps(payload, ensure_ascii=False, default=str, indent=2))
+    path.write_text(json.dumps(payload, ensure_ascii=False, default=str, indent=2), encoding="utf-8")
 
 
 def pending_count(session_id: str) -> int:
@@ -125,6 +125,7 @@ def enqueue(
     scope: str = "session",
     sender_name: str = "",
     label: str = "",
+    dedup: bool = True,
 ) -> str:
     """Queue a message for a busy target session.
 
@@ -151,6 +152,11 @@ def enqueue(
 
     Returns ``"queued"`` or ``"duplicate"`` (identical message from the
     same sender session already queued within DEDUP_WINDOW_SECS).
+
+    A tracked-job entry is idempotent by ``job_id``: queuing the same Job
+    again leaves the one entry and answers ``"queued"``. Job recovery
+    relies on that to recreate an entry a crash lost (jobs/handoff.py),
+    and passes ``dedup=False`` because the Job was admitted already.
     """
     path = _inbox_path(target_session_id)
     if path is None:
@@ -158,7 +164,9 @@ def enqueue(
     with _session_lock(target_session_id):
         entries = _load(path)
         now = time.time()
-        for e in entries:
+        if job_id and any(e.get("job_id") == job_id for e in entries):
+            return "queued"
+        for e in entries if dedup else ():
             if (
                 e.get("sender_session_id") == sender_session_id
                 and e.get("message") == message
@@ -439,17 +447,15 @@ def _deliver(session_id: str, entry: dict[str, Any]) -> None:
         job_header,
     )
 
-    # Continue from the branch's CURRENT head: the turn that made the
-    # target busy has advanced it, and the queued message logically
-    # follows that turn. The head recorded at enqueue time is the
-    # fallback when the session head is unreadable.
-    # A branch-scoped entry (same-session send) continues its own
-    # branch, never the session's main head.
-    if entry.get("scope") == "branch":
+    # Continue the branch the message was addressed to, from its CURRENT
+    # tip: the turn that made the target busy has advanced it, and the
+    # queued message logically follows that turn. Whichever branch is
+    # selected in the target session meanwhile does not matter. Only an
+    # entry with no recorded branch falls back to the session head.
+    if entry.get("target_head_id"):
         head = _branch_tip(session_id, entry.get("target_head_id"))
     else:
-        head = (default_db().get_session(session_id) or {}).get("head_id") \
-            or entry.get("target_head_id")
+        head = (default_db().get_session(session_id) or {}).get("head_id")
     message = str(entry.get("message") or "")
     tid = entry.get("job_id")
     tracked_job = bool(entry.get("tracked_job", bool(tid)))

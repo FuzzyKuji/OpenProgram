@@ -35,6 +35,7 @@ LOGGED_TABLES = {
     "execution_inputs": ("execution_id",),
     "execution_agent_turn_inputs": ("execution_id",),
     "execution_waits": ("wait_id",),
+    "execution_stop_marks": ("session_id", "client_request_id"),
     "execution_resource_intents": ("intent_id",),
     "execution_audit_events": ("sequence",),
     "execution_state_blobs": ("execution_id", "ref"),
@@ -81,7 +82,7 @@ def _decode(value: Any) -> Any:
 def _append_line(path: Path, value: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     data = (json.dumps(value, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
-    descriptor = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+    descriptor = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o600)
     try:
         os.write(descriptor, data)
     finally:
@@ -95,6 +96,11 @@ def _line_execution(line: dict) -> Any:
         return values.get("execution_id") or values.get("job_id")
     table = TABLES.get(line.get("t"))
     return line["gone"][0] if table is not None and table.key[0] in {"execution_id", "job_id"} else None
+
+
+def _line_run(line: dict) -> Any:
+    values = line.get("r")
+    return values.get("run_id") if values is not None else (line.get("gone") or [None])[0]
 
 
 def _read_lines(path: Path) -> Iterator[dict]:
@@ -173,6 +179,10 @@ class RunLogFiles:
         except OSError:
             return []
 
+    def session_gone(self, session_id: str) -> bool:
+        """Whether the session's log no longer exists, so nothing of it can be unfinished."""
+        return not self._session_path(session_id).exists()
+
 
 class SessionRunLog(RunLogFiles):
     """The profile's run log: every session's rows live in its own log."""
@@ -202,6 +212,12 @@ class SessionRunLog(RunLogFiles):
 
     def read(self, session_id: str) -> Iterable[list[dict]]:
         return self._sessions().read_run_rows(session_id)
+
+    def session_gone(self, session_id: str) -> bool:
+        """A deleted conversation: its record of the deletion outlives its log."""
+        from openprogram.state.store.session.placement import is_deleted
+
+        return is_deleted(self._sessions().root_path, session_id)
 
 
 class RowConflict(Exception):
@@ -318,11 +334,16 @@ class RunTables:
         self._undo: list[tuple[str, tuple, dict | None]] = []
         self._changed: dict[tuple[str, tuple], dict | None] = {}
         self._loaded: set[str] = set()
+        # The size is taken first: a line added while reading is read next time.
+        self._index_read_at = self._index_size()
         self._index = log.read_index()
         with self.lock:
             self._fold_batches(log.read_global())
             for session_id in log.active_sessions():
                 self.ensure_session(session_id)
+                # A marker whose session was deleted names nothing to resume.
+                if log.session_gone(session_id):
+                    self.forget_session(session_id)
 
     def require_transaction(self) -> None:
         if not self._in_transaction:
@@ -486,21 +507,56 @@ class RunTables:
             self._fold_batches(batches)
 
     def ensure_execution(self, execution_id: str) -> None:
-        session_id = self._index.get(execution_id)
-        if session_id is not None and session_id not in self._loaded:
+        """Bring an execution into memory, wherever it was written.
+
+        A scheduled run's own process creates its execution in a session this
+        process may have loaded already, so a lookup that misses reads what
+        that process added (:meth:`take_up_other_process_turns`)."""
+        with self.lock:
+            if (execution_id,) in self.stored["executions"]:
+                return
+        session_id = self._index.get(execution_id) or self._read_newer_index().get(execution_id)
+        if session_id is None:
+            return
+        if session_id not in self._loaded:
             self.ensure_session(session_id)
+        else:
+            self.take_up_other_process_turns(session_id)
+
+    def _read_newer_index(self) -> dict[str, str]:
+        """The index again, when another process has added to it since it was read."""
+        size = self._index_size()
+        if size != self._index_read_at:
+            self._index = {**self._index, **self.log.read_index()}
+            self._index_read_at = size
+        return self._index
+
+    def _index_size(self) -> int:
+        try:
+            return self.log.index_path.stat().st_size
+        except OSError:
+            return 0
 
     def forget_session(self, session_id: str) -> None:
-        """Drop a session's rows from memory; its log still has them."""
+        """Drop a session's rows from memory; its log still has them.
+
+        A deleted session has no log left, and whatever was unfinished in it
+        went with it, so its marker goes too.
+        """
         with self.lock:
             self._delete_session_rows(session_id)
             self._loaded.discard(session_id)
+            if self.log.session_gone(session_id):
+                self.log.set_active(session_id, False)
 
     def take_up_other_process_turns(self, session_id: str) -> None:
         """Read what another process wrote for its turns here since this process loaded them.
 
         A log is read once, so a turn that was running in a scheduled run's own
-        process when its session was loaded would look unfinished from then on.
+        process when its session was loaded would look unfinished from then on,
+        and a turn that process started after the load would not be seen at all.
+        Both are read in: the unfinished turns another process holds, and every
+        execution and run the log has that this process does not.
         """
         from ..process_owner import owned_by_another_process
 
@@ -514,11 +570,21 @@ class RunTables:
                 if row["status"] not in ended
                 and owned_by_another_process(json.loads(row["owner_lease_json"] or "{}"))
             }
-            if theirs:
+            # Rows this process wrote are in memory already; what is missing was written elsewhere.
+            unseen = {line["r"]["execution_id"] for rows in batches for line in rows
+                      if line.get("t") == "executions" and line.get("r")
+                      and (line["r"]["execution_id"],) not in self.stored["executions"]}
+            new_runs = {line["r"]["run_id"] for rows in batches for line in rows
+                        if line.get("t") == "runs" and line.get("r")
+                        and (line["r"]["run_id"],) not in self.stored["runs"]}
+            if theirs or unseen or new_runs:
                 for rows in batches:
                     for line in rows:
-                        if _line_execution(line) in theirs:
+                        if (_line_execution(line) in theirs | unseen
+                                or (line.get("t") == "runs" and _line_run(line) in new_runs)):
                             self._apply(line)
+            for execution_id in unseen:
+                self._index.setdefault(execution_id, session_id)
             self._update_active({session_id})
 
     def recorded_ending(self, session_id: str, execution_id: str) -> dict | None:
@@ -664,7 +730,9 @@ class RunTables:
         for session_id in sessions:
             running = any(row["status"] not in ended
                           for row in self.matching("executions", {"session_id": session_id}, None))
-            self.log.set_active(session_id, running or self._owes_a_restart_answer(session_id))
+            active = running or self._owes_a_restart_answer(session_id)
+            # Another process may still hold rows of a session deleted here.
+            self.log.set_active(session_id, active and not self.log.session_gone(session_id))
 
 
 def log_for_path(path: Path) -> RunLogFiles:

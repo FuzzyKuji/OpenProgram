@@ -455,7 +455,8 @@ def test_cross_session_sync_failure_persists_errored_pointer(
         _current_turn_id.reset(turn_token)
         _current_session_id.reset(session_token)
 
-    assert output.startswith("[agent error:")
+    assert output.startswith("<agent ") and 'status="failed"' in output
+    assert "[agent error: head=" in output
     source_pair = store._open("source")
     assert source_pair is not None
     pointer = next(
@@ -583,10 +584,12 @@ def test_running_cross_session_placeholder_is_not_expanded_into_context(
     assert seen[-1]["id"] == pointer_id and seen[-1]["content"] == "(running)"
 
 
-def test_unpublished_accepted_job_recovery_closes_cross_session_source_card(
+def test_unpublished_accepted_job_recovery_publishes_cross_session_spawn(
     cross_session_store,
 ):
-    """Recovery closes a card persisted before its admission was published."""
+    """Recovery finishes a hand-off whose card was persisted before its
+    admission was published: the submitter is gone, so the Job is published
+    and runs, and the source card stays open for its result."""
     from openprogram.runtime.conversation.sub_agent_run import write_attach_placeholder_for_spawn
 
     pointer_id = write_attach_placeholder_for_spawn(
@@ -628,14 +631,14 @@ def test_unpublished_accepted_job_recovery_closes_cross_session_source_card(
 
     recovered = runner.get_job(job.id)
     assert recovered is not None
-    assert recovered.status == JobStatus.ERRORED
+    assert recovered.status == JobStatus.QUEUED
+    assert runner._governor.dispatch_published(job.id)
     source_pair = cross_session_store._open("source")
     assert source_pair is not None
     pointer = source_pair[1].nodes_by_id[pointer_id]
     attach = _attach_payload(pointer)
-    assert attach["status"] == "errored"
+    assert attach["status"] == "running"
     assert attach["session_id"] == "target"
-    assert pointer.output == "deferred inbox intent missing"
 
 
 def test_startup_reconcile_closes_cross_session_legacy_placeholder(

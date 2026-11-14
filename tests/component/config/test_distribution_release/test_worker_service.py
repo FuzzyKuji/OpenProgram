@@ -187,6 +187,19 @@ def test_launchd_worker_preserves_packaged_python_flags(monkeypatch) -> None:
 
 
 
+def test_detached_worker_on_windows_keeps_the_utf8_mode_its_launcher_set() -> None:
+    from openprogram.operations.worker.lifecycle import _detached_worker_command
+
+    flags = SimpleNamespace(isolated=1, dont_write_bytecode=1, utf8_mode=1)
+    assert _detached_worker_command(flags, windows=True)[1:] == [
+        "-I", "-B", "-X", "utf8", "-u", "-m", "openprogram", "worker", "run",
+    ]
+    # Elsewhere the mode follows the locale, and a service file names no option for it.
+    assert "-X" not in _detached_worker_command(flags, windows=False)
+    flags.utf8_mode = 0
+    assert "-X" not in _detached_worker_command(flags, windows=True)
+
+
 def test_detached_worker_preserves_packaged_python_flags() -> None:
     from openprogram.operations.worker.lifecycle import _detached_worker_command
 

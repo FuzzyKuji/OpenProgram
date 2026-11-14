@@ -8,8 +8,7 @@ policy chain (`agent_tools`, `apply_tool_policy`). The package root holds only
 
 `_host/lower_layers.py` fills the ports models and state own for what only a
 Program has (web-search backends and Agent tool names for settings, the Goal
-tool for usage metering and the session graph, the browser's `web_use`
-argument form for tool-call validation); `__init__.py` calls it at import, so
+tool for usage metering and the session graph); `__init__.py` calls it at import, so
 those layers never import Programs.
 
 ## `tools/`
@@ -22,7 +21,8 @@ Most register with `@function` on import; a tool package with
 
 ## `applications/`
 
-The built-in applications are `browser` (the web browser and `web_use`),
+The built-in applications are `browser` (the web browser the Agent operates
+through `computer_use_agent`),
 `workflow_recording` (the demonstration recorder behind the composer's
 **Record a workflow**), `office_editor` (the ONLYOFFICE editor behind Word,
 Excel and PowerPoint documents in the document window) and `meeting` (call

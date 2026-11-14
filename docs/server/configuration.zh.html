@@ -13,7 +13,7 @@
 <tr><th scope="row"><code translate="no">auth/</code></th><td>Provider 凭据存储</td></tr>
 <tr><th scope="row"><code translate="no">skills/</code>、<code translate="no">plugins/</code>、<code translate="no">mcp_servers.json</code></th><td>已安装的 skill 和插件、MCP 服务器</td></tr>
 <tr><th scope="row"><code translate="no">channels/</code></th><td>聊天 channel 状态（Telegram、Discord、微信等）</td></tr>
-<tr><th scope="row"><code translate="no">browser-states/</code>、<code translate="no">chrome-profile/</code></th><td>浏览器工具登录状态、sidecar Chrome profile</td></tr>
+<tr><th scope="row"><code translate="no">browser-states/</code>、<code translate="no">chrome-profile/</code></th><td>早期版本留下的目录，现在没有功能读取，可以删除</td></tr>
 <tr><th scope="row"><code translate="no">worktrees/</code>、<code translate="no">shadow-git/</code></th><td>Git worktree 状态</td></tr>
 <tr><th scope="row"><code translate="no">logs/</code>、<code translate="no">worker.log</code>、<code translate="no">worker.pid</code>、<code translate="no">worker.port</code>、<code translate="no">worker.lock</code></th><td>日志和 worker 运行文件</td></tr>
 <tr><th scope="row"><code translate="no">models/</code>、<code translate="no">cache/</code>、<code translate="no">tool_results/</code>、<code translate="no">usage.db</code></th><td>模型目录缓存、通用缓存、工具结果、用量数据库</td></tr>
@@ -39,7 +39,7 @@
 <tr><th scope="row"><code translate="no">memory.backend</code></th><td><code translate="no">local</code>，或 <code translate="no">none</code>：无提示词记忆、召回、自动写入、整理和记忆线索</td><td>local</td><td>下次启动</td></tr>
 <tr><th scope="row"><code translate="no">memory.writer.model</code></th><td>后台写入用的 <code translate="no">provider/model</code>；为空跟随默认聊天 agent</td><td>空</td><td>立即</td></tr>
 <tr><th scope="row"><code translate="no">tools.disabled.&lt;name&gt;</code></th><td>单个工具开关</td><td>全部启用</td><td>立即</td></tr>
-<tr><th scope="row"><code translate="no">execution.prevent_idle_sleep</code></th><td>macOS：agent 执行期间阻止系统空闲睡眠</td><td>false</td><td>立即</td></tr>
+<tr><th scope="row"><code translate="no">execution.prevent_idle_sleep</code></th><td>agent 执行期间阻止系统空闲睡眠；Linux 需要 <code translate="no">systemd-inhibit</code></td><td>false</td><td>立即</td></tr>
 </tbody>
 </table>
 <p class="note"><code translate="no">config list</code> 还显示只读的 <code translate="no">providers.&lt;name&gt;</code> 行；用 <code translate="no">openprogram providers login</code> 或 Providers 页配置。</p>

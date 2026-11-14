@@ -24,6 +24,7 @@
 <tr><th scope="row">Kept</th><td>The driver keeps each ref's role and name from the snapshots.</td></tr>
 <tr><th scope="row">Lookup</th><td>A ref that no longer resolves is looked up by that role and name, and so is an element named directly by <code translate="no">role</code> and <code translate="no">name</code>.</td></tr>
 <tr><th scope="row">Failure</th><td>If that still finds nothing, the action fails with <code translate="no">element_gone</code> and the page as it is now.</td></tr>
+<tr><th scope="row">User's browser</th><td>In the user's Chrome or Edge a ref goes to Playwright MCP as it is, and <code translate="no">role</code> with <code translate="no">name</code> goes as the locator <code translate="no">getByRole(role, { name, exact: true })</code>, which its <code translate="no">target</code> accepts beside a ref. A locator that matches several elements fails with <code translate="no">ambiguous_element</code>, one that matches none with <code translate="no">element_gone</code>, and an element action that names nothing with <code translate="no">target_required</code> before anything is sent.</td></tr>
 </tbody>
 </table>
 
@@ -74,10 +75,11 @@
 <tbody>
 <tr><th scope="row">Reach</th><td><code translate="no">evaluate</code> reads everything a signed-in page holds, including what snapshots redact.</td></tr>
 <tr><th scope="row">Grant</th><td>It is part of operating its browser: in the built-in browser it runs under the Page grant, and in the user's Chrome or Edge under that browser's grant (<code translate="no">computer_use_agent(browser:chrome)</code>).</td></tr>
-<tr><th scope="row">Mark</th><td><code translate="no">page_script</code> marks a <code translate="no">computer_use_agent</code> browser call with an <code translate="no">evaluate</code> step (single or in <code translate="no">actions</code>), or a <code translate="no">web_use</code> evaluate; the policy uses the mark for one thing, refusing such a call in a turn someone other than the owner started (<code translate="no">IDENTITY_PAGE_SCRIPT</code>: outside MCP clients, agents or schedules someone else set up).</td></tr>
+<tr><th scope="row">Mark</th><td><code translate="no">page_script</code> marks a <code translate="no">computer_use_agent</code> browser call with an <code translate="no">evaluate</code> step (single or in <code translate="no">actions</code>); the policy uses the mark for one thing, refusing such a call in a turn someone other than the owner started (<code translate="no">IDENTITY_PAGE_SCRIPT</code>: outside MCP clients, agents or schedules someone else set up).</td></tr>
 <tr><th scope="row">Code mode</th><td>Code mode's validator applies the same test (<code translate="no">identity.unattended</code>) to an <code translate="no">evaluate</code> step of a code call.</td></tr>
 <tr><th scope="row">Card</th><td>A card that asks about a call with a script shows the arguments untruncated.</td></tr>
 <tr><th scope="row">Redaction</th><td>The result passes the same password redaction.</td></tr>
+<tr><th scope="row">Element</th><td>With <code translate="no">ref</code> (or <code translate="no">role</code> and <code translate="no">name</code>), a function script receives that element as its argument.</td></tr>
 <tr><th scope="row">Forms</th><td>A function script is called; any other script runs as a console runs it, parsed first as an expression, else as statements whose last value is the result, else (with <code translate="no">await</code>) as the body of an async function whose <code translate="no">return</code> is the result, so it runs once; a promise it returns gets 30 s (<code translate="no">SCRIPT_SECONDS</code>).</td></tr>
 <tr><th scope="row">Errors</th><td>A script that throws fails with <code translate="no">script_error</code> and the page's own message.</td></tr>
 <tr><th scope="row">Caps</th><td>Scripts are capped at 8000 characters and results at 20,000.</td></tr>

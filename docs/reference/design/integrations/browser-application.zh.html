@@ -1,5 +1,5 @@
 <title>浏览器应用</title>
-<meta name="description" content="作为应用的内置浏览器：服务、模块和 web_use 运行时。">
+<meta name="description" content="作为应用的内置浏览器：它的模块，以及核心访问它的服务。">
 <h1>浏览器应用</h1>
 
 
@@ -7,145 +7,37 @@
 <table class="stack fixed">
 <thead><tr><th scope="col">模块</th><th scope="col">作用</th></tr></thead>
 <tbody>
-<tr><th scope="row"><code translate="no">__init__.py</code></th><td><code translate="no">PROGRAM_ENTRIES</code>（<code translate="no">web_use</code>）和 <code translate="no">setup</code>：提供服务，注册 L2 上下文段 <code translate="no">pages</code> 和资源 provider <code translate="no">web</code></td></tr>
+<tr><th scope="row"><code translate="no">__init__.py</code></th><td><code translate="no">setup</code>：提供服务，注册 L2 上下文段 <code translate="no">pages</code>。应用不注册任何工具</td></tr>
 <tr><th scope="row"><code translate="no">service.py</code></th><td><code translate="no">BrowserService</code>，即服务的成员（见下）</td></tr>
 <tr><th scope="row"><code translate="no">pages.py</code></th><td><code translate="no">BrowserResourceStore</code>、按对话的 Page 投影、资源控制、人的页面输入</td></tr>
-<tr><th scope="row"><code translate="no">tabs.py</code></th><td><code translate="no">computer_use_agent(target="browser")</code> 的标签页驱动</td></tr>
+<tr><th scope="row"><code translate="no">tabs.py</code></th><td><code translate="no">computer_use_agent(target="browser")</code> 的<a href="browser-tab-driver.zh.html">标签页驱动</a></td></tr>
 <tr><th scope="row"><code translate="no">extension.py</code></th><td>经 Playwright Extension 操作用户的 Chrome 或 Edge</td></tr>
-<tr><th scope="row"><code translate="no">chrome.py</code>、<code translate="no">privacy.py</code></th><td><code translate="no">openprogram browser</code> 维护的 Chrome 引导；隐私过滤</td></tr>
-<tr><th scope="row"><code translate="no">contract.py</code></th><td>agent 和 MCP 共用的 <code translate="no">web_use</code> 参数契约</td></tr>
+<tr><th scope="row"><code translate="no">page_actions.py</code>、<code translate="no">file_inputs.py</code></th><td>上面两者共用的参数解析和页面脚本；一次上传发送的已批准本地文件</td></tr>
+<tr><th scope="row"><code translate="no">app_endpoint.py</code>、<code translate="no">privacy.py</code></th><td>App 的 CDP 端点；密码值脱敏</td></tr>
 <tr><th scope="row"><code translate="no">prompt.py</code></th><td>一次调用的 prompt 里关于已打开 Page 的段落</td></tr>
-<tr><th scope="row"><code translate="no">resource.py</code></th><td>资源 provider <code translate="no">web</code>，以及原生展示命令用的 Page 租约</td></tr>
-<tr><th scope="row"><code translate="no">web_use/</code></th><td><code translate="no">web_use</code> 运行时：页面控制器、会话及其注册表、恢复、精确页面 MCP 后端</td></tr>
-<tr><th scope="row"><code translate="no">engine/</code></th><td>页面控制器驱动的 Playwright 动作引擎</td></tr>
 </tbody>
 </table>
-<p>服务的成员是 <code translate="no">pages</code>、<code translate="no">tabs</code>、<code translate="no">chrome</code>、<code translate="no">extension</code>、<code translate="no">user_browser_names</code>、<code translate="no">web_use_parameters()</code>、<code translate="no">normalize_web_use_arguments()</code>、<code translate="no">execute_direct_web_use(arguments, owner_id=)</code>、<code translate="no">registry()</code>、<code translate="no">release_owner()</code>、<code translate="no">park_owner()</code>、<code translate="no">authorized_page()</code> 和 <code translate="no">browser_of()</code>。</p>
+<p>Agent 只用一个工具操作浏览器：<code translate="no">computer_use_agent(target="browser")</code>。App 的标签页走标签页驱动，用户的 Chrome 或 Edge 走扩展。动作见<a href="browser-tab-actions.zh.html">浏览器标签页动作</a>。</p>
+<p>服务的成员是 <code translate="no">pages</code>、<code translate="no">tabs</code>、<code translate="no">chrome</code>、<code translate="no">extension</code>、<code translate="no">user_browser_names</code>、<code translate="no">open_tab(url)</code>、<code translate="no">authorized_page(arguments, window_id)</code> 和 <code translate="no">browser_of()</code>。</p>
 <table class="stack fixed">
 <thead class="sr"><tr><th scope="col">调用方</th><th scope="col">无服务时</th></tr></thead>
 <tbody>
-<tr><th scope="row">调用提示词</th><td>没有 Pages 部分；该轮没有 <code translate="no">web_use</code></td></tr>
-<tr><th scope="row"><code translate="no">web_use</code> 参数</th><td>校验失败，提示 “the browser is not enabled”</td></tr>
-<tr><th scope="row">MCP</th><td>不列出 <code translate="no">web_use</code> 并拒绝其调用</td></tr>
-<tr><th scope="row"><code translate="no">/api/web-use</code></th><td>返回 <code translate="no">browser_not_enabled</code></td></tr>
-<tr><th scope="row">进程路由</th><td>不列浏览器资源；浏览器控制返回 404</td></tr>
-<tr><th scope="row">Web 标签桥</th><td>跳过 Page 记录</td></tr>
-<tr><th scope="row"><code translate="no">computer_use_agent(target="browser")</code></th><td>报告目标不可用；桌面目标继续工作</td></tr>
+<tr><th scope="row">调用提示词</th><td>没有 Pages 部分；已打开的 Page 不会给该轮加上屏幕工具</td></tr>
+<tr><th scope="row">进程路由</th><td>不列出浏览器资源；浏览器控制返回 404</td></tr>
+<tr><th scope="row">网页标签桥</th><td>跳过 Page 记账</td></tr>
+<tr><th scope="row"><code translate="no">computer_use_agent(target="browser")</code></th><td>报告该目标不可用；桌面目标照常工作</td></tr>
+<tr><th scope="row">程序的网页标签命令</th><td>以 <code translate="no">browser_not_enabled</code> 拒绝</td></tr>
 <tr><th scope="row">权限策略</th><td>看不到用户浏览器</td></tr>
 </tbody>
 </table>
 
-<h2 id="web_use-运行时"><code translate="no">web_use</code> 运行时</h2>
-<p><code translate="no">web_use</code> 是这个应用唯一注册的入口。程序和 MCP 客户端直接调用它；<code translate="no">computer_use_agent</code> 的 <code translate="no">browser</code> 目标则改用<a href="browser-tab-driver.zh.html">标签页驱动</a>。</p>
-<p><strong>名字。</strong> agent 和 MCP 只看到一个工具 <code translate="no">web_use</code>；会话是 <code translate="no">WebUseSessionRegistry</code> 里的 <code translate="no">web_session_id</code>。HTTP 路由是 <code translate="no">/api/web-use</code>；<code translate="no">/api/computer-use</code> 作为隐藏的兼容路由保留，共用同一个处理函数，不出现在 OpenAPI 里，旧的 <code translate="no">computer_session_id</code> 请求字段会被换成新字段。</p>
-
-<h3 id="五个命令">五个命令</h3>
+<h2 id="程序的网页标签">程序的网页标签</h2>
 <table class="stack fixed">
-<thead><tr><th scope="col">命令</th><th scope="col">作用</th></tr></thead>
+<thead class="sr"><tr><th scope="col">项目</th><th scope="col"></th></tr></thead>
 <tbody>
-<tr><th scope="row"><code translate="no">list_pages</code></th><td>列出所有已注册 OpenProgram 窗口的 Page，每个 Page 带一个一次性的 <code translate="no">page_context_token</code></td></tr>
-<tr><th scope="row"><code translate="no">observe</code></th><td>按 token 选中 Page、打开 WebSession，返回有界的文本、ARIA 和元素 ref</td></tr>
-<tr><th scope="row"><code translate="no">act</code></th><td>针对最新的 <code translate="no">expected_frame_id</code> 执行一次 <code translate="no">navigate</code>、<code translate="no">click</code>、<code translate="no">type</code>、<code translate="no">press</code>、<code translate="no">scroll</code>、<code translate="no">hover</code> 或 <code translate="no">select</code></td></tr>
-<tr><th scope="row"><code translate="no">verify</code></th><td>执行运行时断言（<code translate="no">text_contains</code>、<code translate="no">title_contains</code>、<code translate="no">url_contains</code> 等）；模型声称完成永远不会让结果变成 <code translate="no">succeeded</code></td></tr>
-<tr><th scope="row"><code translate="no">close</code></th><td>关闭所观察 Page 的标签页，释放它的 WebSession、Page 绑定和持有的能力</td></tr>
-</tbody>
-</table>
-<pre translate="no" tabindex="0"><code>web_use({ command: "list_pages" })
-web_use({ command: "observe", page_context_token: "pct_…", arguments: { detail: "interactive" } })
-web_use({ command: "act", web_session_id: "cs_…", arguments: { action: "click", expected_frame_id: "f_…", ref: "e1" } })
-web_use({ command: "verify", web_session_id: "cs_…", arguments: { action: "verify", expected_frame_id: "f_…", assertion: "text_contains", value: "Saved" } })
-web_use({ command: "close", web_session_id: "cs_…" })</code></pre>
-
-<h3 id="page-清单">Page 清单</h3>
-<table class="stack fixed">
-<thead class="sr"><tr><th scope="col">项</th><th scope="col"></th></tr></thead>
-<tbody>
-<tr><th scope="row">回复</th><td><code translate="no">list_pages</code> 返回 <code translate="no">windows[]</code>（每个已注册窗口一份快照，含 <code translate="no">window_id</code>、<code translate="no">inventory_revision</code>、<code translate="no">active_tab_entry_id</code>、<code translate="no">focused_page</code> 和 <code translate="no">tab_entries</code>）以及展平的 <code translate="no">pages</code> 列表。</td></tr>
-<tr><th scope="row">标签条目</th><td>tab entry 是顶部标签栏里的一项：<code translate="no">single</code> 含一个 Page，<code translate="no">split</code> 含两个有序 pane（<code translate="no">tab:&lt;tab_id&gt;</code> 与 <code translate="no">group:&lt;CenterTabGroup.id&gt;</code>）。</td></tr>
-<tr><th scope="row">Page</th><td>每个 Page 带 <code translate="no">window_id</code>、<code translate="no">tab_id</code>、<code translate="no">tab_entry_id</code>、<code translate="no">placement</code>、标题、origin、<code translate="no">visible</code>、<code translate="no">focused</code>、可选的 <code translate="no">opener_tab_id</code> 和它的 token。</td></tr>
-<tr><th scope="row">窗格顺序</th><td>pane 顺序跟随实际渲染顺序；左右由实际几何推出，从不是 Page 身份。</td></tr>
-<tr><th scope="row">清单修订号</th><td>分组、重排或调整大小会递增 <code translate="no">inventory_revision</code>，不改变 Page。</td></tr>
-<tr><th scope="row">弹窗</th><td>弹窗成为独立的标签页和 Page，带 <code translate="no">opener_tab_id</code>；它从不重绑 opener 的会话，调用方在下一次 <code translate="no">list_pages</code> 时发现它。</td></tr>
-<tr><th scope="row">无 Desktop 窗口</th><td>没有已注册的 Desktop 窗口时（例如 worker 或 App 重启后），发现过程最多等待 <code translate="no">DESKTOP_RECONNECT_WAIT_SECONDS</code>（20 秒），然后返回 <code translate="no">desktop_unavailable</code> 和 <code translate="no">retry_command=list_pages</code>。</td></tr>
-</tbody>
-</table>
-
-<h3 id="绑定与修订号">绑定与修订号</h3>
-<table class="stack fixed">
-<thead class="sr"><tr><th scope="col">项</th><th scope="col"></th></tr></thead>
-<tbody>
-<tr><th scope="row">Token</th><td>token 绑定调用方 owner、窗口、精确的 CDP target 以及服务端的 page 与 access 修订号；缺失、重放、跨 owner 或 target 已替换的 token 在调用任何后端之前就被拒绝。</td></tr>
-<tr><th scope="row">几何修订号</th><td>每个可见的网页标签页还带一个由 renderer 维护的 <code translate="no">geometry_revision</code>，随它在 App 内的边界或可见性变化（不随焦点变化，也不随 macOS 的层叠、遮挡或最小化变化）。</td></tr>
-<tr><th scope="row">比较</th><td>WebSession 保存这三个修订号，worker 比较 page 与 access，精确的 renderer 在原生激活前比较 geometry；任何不一致都返回 <code translate="no">page_context_stale</code>，不触碰后端。</td></tr>
-<tr><th scope="row">租约</th><td>对同一 Page 的写入持有独占租约；不同 Page 可以并发。</td></tr>
-<tr><th scope="row">后台 Page</th><td>后台 Page 直接解析 target，不切换标签页、不聚焦窗口、不调用 <code translate="no">bringToFront()</code>、不产生 OS 输入。</td></tr>
-<tr><th scope="row">位置</th><td>清单、WebSession 注册表和 renderer WebSocket 注册表运行在 worker 主进程；workflow 子进程经父进程桥访问同一个 WebSession，修订号原样转发。</td></tr>
-</tbody>
-</table>
-
-<h3 id="owner-与清理">Owner 与清理</h3>
-<table class="stack fixed">
-<thead class="sr"><tr><th scope="col">项</th><th scope="col"></th></tr></thead>
-<tbody>
-<tr><th scope="row">Owner</th><td>对话 turn 的 owner 是它的会话和 assistant turn。</td></tr>
-<tr><th scope="row">释放</th><td>正常返回、重试、取消和异常都会释放该 owner 持有的所有 WebSession、Page 租约和绑定，无论模型有没有调用 <code translate="no">close</code>。</td></tr>
-<tr><th scope="row">断开</th><td>owner 的 WebSocket 断开会立即撤销它的所有绑定。</td></tr>
-<tr><th scope="row">close</th><td>显式 <code translate="no">close</code> 先检查 owner 和存活绑定，请 App 关闭标签页，再释放会话；别的 owner 什么也关不掉。</td></tr>
-</tbody>
-</table>
-
-<h3 id="token-与恢复">Token 与恢复</h3>
-<table class="stack fixed">
-<thead class="sr"><tr><th scope="col">项</th><th scope="col"></th></tr></thead>
-<tbody>
-<tr><th scope="row">复用</th><td>带 token 而没有存活 <code translate="no">web_session_id</code> 的 <code translate="no">act</code> 或 <code translate="no">verify</code> 复用该 token 打开过的 WebSession；token 未用过时，运行时先做一次只读 observe，<code translate="no">navigate</code>、<code translate="no">screenshot</code>、<code translate="no">wait</code> 和不带 ref 的 <code translate="no">verify</code> 在这个 frame 上继续，而 ref 或坐标动作返回观察结果和 <code translate="no">action_performed=false</code>。</td></tr>
-<tr><th scope="row">记忆</th><td>注册表在内存里有界地记住已结束 WebSession 的标签页和已过期 token 的标签页。</td></tr>
-<tr><th scope="row">提示</th><td>之后同一 owner 范围里出现的 <code translate="no">page_context_not_found</code>、<code translate="no">page_context_consumed</code> 或 <code translate="no">web_session_not_found</code> 会带上 <code translate="no">recovery_tab_id</code>、<code translate="no">recovery_window_id</code> 和 <code translate="no">recovery_command=observe</code>；agent 工具随后用新 token 观察那个标签页，返回 <code translate="no">recovered_page=true</code>、<code translate="no">previous_action_replayed=false</code>。</td></tr>
-<tr><th scope="row">重放</th><td>不重放任何操作。</td></tr>
-<tr><th scope="row">下一次调用</th><td>每个可恢复的失败都恰好指明下一步调用。</td></tr>
-</tbody>
-</table>
-
-<h3 id="后端">后端</h3>
-<table class="stack fixed">
-<thead class="sr"><tr><th scope="col">项</th><th scope="col"></th></tr></thead>
-<tbody>
-<tr><th scope="row">选择</th><td><code translate="no">observe</code> 从三个后端中选一个，并在该 WebSession 内固定：<code translate="no">playwright_mcp</code>（默认，固定版本的 <code translate="no">@playwright/mcp</code>）、<code translate="no">chrome_devtools_mcp</code>（固定版本的 <code translate="no">chrome-devtools-mcp</code>）或 <code translate="no">open_claude_chrome</code>（OpenProgram 自己的 Electron/CDP 控制器，遵循 Open Claude in Chrome 的工具契约，不运行扩展或 native host）。</td></tr>
-<tr><th scope="row">不匹配</th><td>之后请求别的后端返回 <code translate="no">backend_mismatch</code>；失败、超时和过期 frame 从不回退到另一个后端，因此一个动作最多写一次。</td></tr>
-<tr><th scope="row">进程</th><td>每个官方 MCP 的 WebSession 拥有一个用 <code translate="no">npx --prefer-offline</code> 启动的私有 MCP 进程，绑定到精确 target，禁用标签页选择。</td></tr>
-<tr><th scope="row">重启</th><td>这个进程停止后，下一次 <code translate="no">observe</code> 以只读方式重启它；<code translate="no">act</code> 从不经重启过的进程写入，而是返回 <code translate="no">computer_use_backend_unavailable</code> 和 <code translate="no">observe_required=true</code>。</td></tr>
-<tr><th scope="row">一致性</th><td>三个后端经 <code translate="no">WebUseSessionRegistry.execute()</code> 跑同一张一致性矩阵：结果、frame 失效、reason code 与验证语义都相同。</td></tr>
-</tbody>
-</table>
-
-<h3 id="frame-与失败">Frame 与失败</h3>
-<table class="stack fixed">
-<thead class="sr"><tr><th scope="col">项</th><th scope="col"></th></tr></thead>
-<tbody>
-<tr><th scope="row">写之后</th><td>每次成功写入都会让 frame 失效并设置 <code translate="no">observe_required=true</code>。</td></tr>
-<tr><th scope="row">失败</th><td>缺参数返回 <code translate="no">invalid_arguments</code> 和完整的 <code translate="no">missing_arguments</code>，保留仍有效的观察；旧 frame 返回 <code translate="no">stale_observation</code>；未知动作返回 <code translate="no">unsupported_action</code>；后端错误返回 <code translate="no">backend_action_failed</code>。</td></tr>
-<tr><th scope="row">原因码</th><td>reason code（包括 <code translate="no">page_context_stale</code>、<code translate="no">page_access_disabled</code>、<code translate="no">target_lost</code>、<code translate="no">page_in_use</code>、<code translate="no">ref_not_found</code>、<code translate="no">timeout</code>、<code translate="no">cancelled</code>）由运行时产生，后端文本从不覆盖它们。</td></tr>
-</tbody>
-</table>
-
-<h3 id="成本">成本</h3>
-<table class="stack fixed">
-<thead class="sr"><tr><th scope="col">项</th><th scope="col"></th></tr></thead>
-<tbody>
-<tr><th scope="row">观察</th><td>观察以 DOM 和 ARIA 为先：URL、标题、文本、快照和 ref，不截图。</td></tr>
-<tr><th scope="row">截图</th><td><code translate="no">screenshot</code> 从精确 Page 的 CDP 会话取一张当前视口 PNG，用于 canvas 页面或语义定位失败时。</td></tr>
-<tr><th scope="row">图片生命周期</th><td>图像只进入下一次 provider 请求；工具文本、DAG 和最终结果只保留 <code translate="no">frame_id</code>、视口和 <code translate="no">image_attached</code>，正常返回、provider 错误、超时和取消都会清除图像并撤销坐标权限。</td></tr>
-<tr><th scope="row">不运行</th><td>不运行 OCR、目标检测、裁剪放大、视觉记忆或 workflow 回放。</td></tr>
-<tr><th scope="row">页面内容</th><td>页面内容是不可信数据，不能改变目标或权限。</td></tr>
-</tbody>
-</table>
-
-<h3 id="agent-光标-1">Agent 光标</h3>
-<table class="stack fixed">
-<thead class="sr"><tr><th scope="col">项</th><th scope="col"></th></tr></thead>
-<tbody>
-<tr><th scope="row">光标</th><td>agent 点击期间，三个后端只在精确 Page 里挂一个捕获监听；真实的指针事件会在视口坐标处显示一个无文字、<code translate="no">aria-hidden</code>、<code translate="no">pointer-events: none</code> 的光标和波纹，随后淡出。</td></tr>
-<tr><th scope="row">隔离</th><td>用户点击、其他 Page 和 OS 鼠标不受影响，反馈失败也不会改变点击结果。</td></tr>
+<tr><th scope="row">打开</th><td><code translate="no">framework</code> 接口的 <code translate="no">tabs.openWebTab</code> 调用 <code translate="no">open_tab(url)</code>：标签页在后台为当前对话打开，和浏览器目标的 <code translate="no">open</code> 一样。</td></tr>
+<tr><th scope="row">操作</th><td>对网页标签的原生展示命令用 <code translate="no">arguments.tab</code> 指明标签页，即 <code translate="no">tabs</code> 给出的标签页 id（省略时是对话上次用的标签页）。<code translate="no">authorized_page</code> 按 App 当前的窗口和绑定核对它，再把 App 自己的标签页 id 发给 App。</td></tr>
+<tr><th scope="row">权限</th><td>两者都需要 <code translate="no">computer_use_agent</code> 所需的权限：不能用屏幕工具的轮次，也不能这样接触网页标签。</td></tr>
 </tbody>
 </table>
 
@@ -154,9 +46,8 @@ web_use({ command: "close", web_session_id: "cs_…" })</code></pre>
 <table class="stack fixed">
 <thead class="sr"><tr><th scope="col">状态</th><th scope="col">范围</th></tr></thead>
 <tbody>
-<tr><th scope="row">已实现</th><td>内置浏览器成为应用 <code translate="no">programs/applications/browser/</code>，只经 <code translate="no">browser</code> 服务访问；每个调用方在没有它时的运行都有测试。</td></tr>
-<tr><th scope="row">已实现</th><td><code translate="no">web_use</code> 运行时，含跨窗口 Page 清单、page/access/geometry 修订号、owner 清理、恢复提示、三个后端及其一致性矩阵、单张视口截图的释放流程和 agent 光标。</td></tr>
-<tr><th scope="row">已实现</th><td>可见标签页，以及原生后端上的 <code translate="no">changes_only</code> 观察。</td></tr>
+<tr><th scope="row">已实现</th><td>内置浏览器作为应用 <code translate="no">programs/applications/browser/</code>，只经 <code translate="no">browser</code> 服务访问，每个调用方都有无服务时的测试。</td></tr>
+<tr><th scope="row">已实现</th><td>模型、程序和网页标签命令共用一个浏览器入口：<code translate="no">computer_use_agent(target="browser")</code> 背后的标签页驱动和扩展。</td></tr>
 </tbody>
 </table>
 

@@ -11,9 +11,10 @@ reference frameworks (see ``docs/design/providers/reliability/llm-fault-toleranc
     buffering proxy/VPN. The body read is governed by the SSE idle budget
     (10 min with no byte at all, reset by any byte, keepalives included),
     not a short httpx read.
-  * **Keep a separate, generous "no real data" progress guard** (our extra
-    over OpenClaw — catches a stream that only echoes pings) without a default
-    total-duration ceiling.
+  * **Bound the wait for each event** — the "no real data" guard is the
+    stream idle bound of ``stream_idle.py`` (300 s, as Codex CLI and Claude
+    Code): keepalives do not reset it, so a stream that only echoes pings
+    ends and is retried. There is no default total-duration ceiling.
   * **Optionally scale the budgets up with prompt size** (hermes pattern):
     a 200k-token request legitimately spends longer in prefill / thinking.
 
@@ -25,6 +26,8 @@ from __future__ import annotations
 
 import os
 from typing import Optional
+
+from .stream_idle import event_idle_timeout_s
 
 
 def _f(env: str, default: float) -> float:
@@ -46,8 +49,13 @@ POOL_TIMEOUT_S: float = _f("OPENPROGRAM_HTTPX_POOL_TIMEOUT_S", 30.0)
 # buffering proxy and still notices a dead connection three times sooner than
 # the 30 min this used to be (a turn hung that long before its retry).
 STREAM_IDLE_TIMEOUT_S: float = _f("OPENPROGRAM_SSE_IDLE_TIMEOUT_S", 600.0)
-# "no real data event" (only parsed payloads reset it) — our extra guard.
-STREAM_DATA_STALL_TIMEOUT_S: float = _f("OPENPROGRAM_SSE_DATA_STALL_TIMEOUT_S", 900.0)
+# "no real data event" (only parsed payloads reset it): the stream idle bound
+# every streamed request is read under (stream_idle.py), here for the Codex
+# transport, which applies it inside its own retry loop.
+_event_idle = event_idle_timeout_s()
+STREAM_DATA_STALL_TIMEOUT_S: float = _f(
+    "OPENPROGRAM_SSE_DATA_STALL_TIMEOUT_S", _event_idle if _event_idle > 0 else float("inf"),
+)
 # No default total-duration cap: a healthy stream may keep making progress.
 # Existing HTTP/SSE consumers compare numeric deadlines, so infinity disables
 # only the total clock while leaving connect/read/idle/cancellation intact.

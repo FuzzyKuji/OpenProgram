@@ -52,8 +52,8 @@
 <table class="stack fixed">
 <thead class="sr"><tr><th scope="col">Moment</th><th scope="col">Behaviour</th></tr></thead>
 <tbody>
-<tr><th scope="row">Connect, session or model switch, each turn ack and settle</th><td><code translate="no">loadAgentSettings()</code> reads <code translate="no">GET /api/agent_settings</code>; <code translate="no">chat.fast</code> is recomputed; the composer re-renders, no reload</td></tr>
-<tr><th scope="row">Preference</th><td>Per session and provider/model; Standard overrides agent defaults</td></tr>
+<tr><th scope="row">Connect, session, branch or model switch, each turn ack and settle</th><td><code translate="no">loadAgentSettings()</code> reads <code translate="no">GET /api/agent_settings</code>; <code translate="no">chat.fast</code> is recomputed; the composer re-renders, no reload</td></tr>
+<tr><th scope="row">Preference</th><td>Per conversation branch; dispatch revalidates provider/model support. Standard overrides agent defaults</td></tr>
 <tr><th scope="row">Send</th><td><code translate="no">service_tier: "priority"</code> only when enabled and supported; otherwise <code translate="no">default</code></td></tr>
 <tr><th scope="row">Dispatch</th><td><code translate="no">resolve_service_tier</code> revalidates the actual model</td></tr>
 <tr><th scope="row">Evidence</th><td>Usage keeps requested and actual tier; per-call evidence saved with the message, shown in the usage footer after reload. Missing metadata is unconfirmed. xAI reported cost beats catalogue cost; no speed ratio is inferred.</td></tr>

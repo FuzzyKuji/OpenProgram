@@ -263,8 +263,38 @@ def register_model_from_config(provider: str, model_id: str) -> bool:
             cost=cost,
             context_window=int(raw.get("context_window", 0) or 0),
             max_tokens=int(raw.get("max_tokens", 0) or 0),
+            tool_output_weight=int(raw["tool_output_weight"]) if raw.get("tool_output_weight") else None,
         )
     except Exception:
         return False
     ENABLED_MODELS[f"{provider}/{model_id}"] = m
     return True
+
+
+def use_model_in_process(provider: str, model_id: str) -> bool:
+    """Make ``provider/model_id`` usable in this process without enabling it.
+
+    For a run that names its model for one turn (``openprogram --print
+    --model``): a model already known, or enabled in the config, is used as
+    it is; otherwise the provider's model list is read (cached) and the row
+    is put in this process's registry only. The config, and so the models
+    the App shows as enabled, is not written. Returns whether the model is
+    usable.
+    """
+    from .models import get_model
+
+    if get_model(provider, model_id) is not None or register_model_from_config(provider, model_id):
+        return True
+    try:
+        from openprogram.models.listing.listing import spec_row_for
+        from .metadata import provider_endpoints
+
+        spec = spec_row_for(provider, model_id)
+        if spec is None:
+            return False
+        model = _build_model_from_row(spec, provider, provider_endpoints(provider))
+    except Exception:  # noqa: BLE001 - an unreadable row is a model not usable here
+        return False
+    ENABLED_MODELS[f"{spec.get('key_prefix') or provider}/{model.id}"] = model
+    return True
+

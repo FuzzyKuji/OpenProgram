@@ -53,6 +53,9 @@ def dispatch(args: argparse.Namespace) -> int:
             _resolve_alias(args.provider), args.account, skip_confirm=args.yes,
         )
     if cmd == "status":
+        if not args.provider:
+            from .quota_status import cmd_overview
+            return cmd_overview(getattr(args, "refresh", False), getattr(args, "json", False))
         return _cmd_status(_resolve_alias(args.provider), args.account)
     if cmd == "doctor":
         return _cmd_doctor(args.json)

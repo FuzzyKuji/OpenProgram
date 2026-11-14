@@ -71,7 +71,7 @@ class FunctionLog:
         native = filesystem_path(self.path)
         with self._lock:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            descriptor = os.open(native, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+            descriptor = os.open(native, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o600)
             try:
                 os.write(descriptor, line)
                 os.fsync(descriptor)

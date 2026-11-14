@@ -267,9 +267,20 @@ def splice_compaction_event_rows(
       covered message (the fold / boundary before the kept tail).
     * ``slot=event`` — one row per summary (including superseded), at
       the compact's execution time.
+
+    Only summaries of the shown branch get rows: the ones whose covered
+    segment lies wholly on it, the rule ``render_context`` uses to put a
+    summary in a branch's context. A branch forked inside the covered
+    range, or beside it, was never compacted.
     """
     by_id = {m.get("id"): m for m in (all_msgs or [])}
     index = {m.get("id"): i for i, m in enumerate(shown)}
+    on_branch: set = set()
+    for m in shown:
+        mid = m.get("id")
+        while mid and mid not in on_branch:
+            on_branch.add(mid)
+            mid = (by_id.get(mid) or {}).get("predecessor")
     inserts: list[tuple[int, dict]] = []
 
     def _stats(n: dict) -> tuple[int, float, dict]:
@@ -353,6 +364,9 @@ def splice_compaction_event_rows(
         n_cov, exec_ts, extra = _stats(n)
         src = extra.pop("_src")
         extra.pop("_exec_ts", None)
+        segment = extra["covers_ids"]
+        if not segment or not all(c in on_branch for c in segment):
+            continue
         inserts.append((
             _compaction_exec_at(shown, str(n["id"]), exec_ts, all_msgs or []),
             _event_row(n, extra),

@@ -26,6 +26,9 @@ import zipfile
 
 PYVENV = "venv/pyvenv.cfg"
 TOOLS = ("versions.py", "restore_version.py")
+# Git writes paths in UTF-8 whatever the system code page is; a message that
+# names a folder in another script must not stop the install while being read.
+GIT_TEXT = {"encoding": "utf-8", "errors": "replace"}
 
 
 class SeedError(RuntimeError):
@@ -51,13 +54,27 @@ def _member_is_safe(name: str) -> bool:
     return not name.startswith("/") and "\\" not in name and ".." not in name.split("/")
 
 
+def link_stays(target: str, built_root: str) -> bool:
+    """Whether an absolute link target is under the root the seed was built in.
+
+    Compared with one kind of slash: Windows' tar writes ``C:/…`` for a root
+    that ``seed.json`` records as ``C:\\…``.
+    """
+    link, built = target.replace("\\", "/"), built_root.replace("\\", "/").rstrip("/")
+    if not link.startswith("/") and not re.match(r"[A-Za-z]:", link):
+        return True  # Relative.
+    if re.match(r"[A-Za-z]:", built):
+        link, built = link.lower(), built.lower()
+    return link.startswith(f"{built}/") and ".." not in link.split("/")
+
+
 def _extract_tar(archive: Path, destination: Path, built_root: str) -> None:
     """Unpack a seed archive, keeping its links, into ``destination``."""
     with tarfile.open(archive) as tar:
         for member in tar:
             if not _member_is_safe(member.name):
                 raise SeedError(f"invalid path in the seed: {member.name}")
-            if member.issym() and member.linkname.startswith("/") and not member.linkname.startswith(f"{built_root}/"):
+            if member.issym() and not link_stays(member.linkname, built_root):
                 raise SeedError(f"a link in the seed leaves it: {member.name}")
             tar.extract(member, destination, filter="fully_trusted")
 
@@ -202,11 +219,28 @@ def install_tools(seed: Path, root: Path) -> None:
     binary = root / "bin"
     binary.mkdir(parents=True, exist_ok=True)
     if os.name == "nt":
-        shutil.copy2(seed / "bootstrap" / "bin-openprogram.cmd", binary / "openprogram.cmd")
+        write_batch_file(seed / "bootstrap" / "bin-openprogram.cmd", binary / "openprogram.cmd")
     else:
         command = binary / "openprogram"
         shutil.copy2(seed / "bootstrap" / "bin-openprogram.sh", command)
         command.chmod(0o755)
+
+
+def write_batch_file(source: Path, target: Path) -> None:
+    """Install a batch file with the line ends cmd.exe needs.
+
+    The repository keeps it with bare line feeds, and cmd.exe can miss a
+    ``goto`` label in such a file, depending on where the label falls.
+    """
+    target.write_bytes(b"".join(line + b"\r\n" for line in source.read_bytes().splitlines()))
+
+
+def git_executable(git: Path, windows: bool) -> Path:
+    """The Git command inside a base's ``git`` directory.
+
+    The bundled Git for Windows keeps it in ``cmd``; its ``bin`` does not exist.
+    """
+    return git / "cmd" / "git.exe" if windows else git / "bin" / "git"
 
 
 def _git_command(base: Path) -> tuple[str, dict[str, str]]:
@@ -221,17 +255,17 @@ def _git_command(base: Path) -> tuple[str, dict[str, str]]:
             )
         return found, environment
     if os.name == "nt":
-        return str(git / "cmd" / "git.exe"), environment
+        return str(git_executable(git, True)), environment
     environment["GIT_EXEC_PATH"] = str(git / "libexec" / "git-core")
     environment["GIT_TEMPLATE_DIR"] = str(git / "share" / "git-core" / "templates")
-    return str(git / "bin" / "git"), environment
+    return str(git_executable(git, False)), environment
 
 
 def _git(command: tuple[str, dict[str, str]], repository: Path, *arguments: str) -> None:
     executable, environment = command
     result = subprocess.run(
         [executable, "-C", str(repository), *arguments],
-        capture_output=True, text=True, env=environment, timeout=300,
+        capture_output=True, env=environment, timeout=300, **GIT_TEXT,
     )
     if result.returncode != 0:
         raise SeedError(f"git {arguments[0]} failed: {result.stderr.strip()}")
@@ -246,7 +280,7 @@ def create_repository(seed: Path, root: Path, manifest: dict) -> None:
     shutil.rmtree(staging, ignore_errors=True)
     result = subprocess.run(
         [git[0], "clone", "--quiet", "--bare", str(seed / "repo.bundle"), str(staging)],
-        capture_output=True, text=True, env=git[1], timeout=600,
+        capture_output=True, env=git[1], timeout=600, **GIT_TEXT,
     )
     if result.returncode != 0:
         shutil.rmtree(staging, ignore_errors=True)

@@ -97,3 +97,6 @@ apps/web/public/document-assets/
 /reports/content-security/
 apps/desktop/build/seed/
 apps/desktop/build/thin-shell.json
+
+# Written at build time by the evaluation launcher (scripts/benchmarks/frontier_eval.py)
+openprogram/_build_info.py

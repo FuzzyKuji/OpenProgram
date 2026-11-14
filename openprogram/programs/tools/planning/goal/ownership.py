@@ -18,7 +18,7 @@ def goal_owner(store, session_id: str):
     root = store.root_path.resolve() / ".goal-locks"
     root.mkdir(parents=True, exist_ok=True)
     name = hashlib.sha256(session_id.encode()).hexdigest()
-    with (root / f"{name}.lock").open("a+") as handle:
+    with (root / f"{name}.lock").open("a+", encoding="utf-8") as handle:
         try:
             locking.flock(handle.fileno(), locking.LOCK_EX | locking.LOCK_NB)
         except OSError as exc:

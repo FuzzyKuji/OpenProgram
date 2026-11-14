@@ -48,8 +48,12 @@ class ReplyDelivery(Protocol):
     def feed(self, delta: str) -> None:
         """A piece of reply text; whole paragraphs go out as they complete."""
 
-    def flush(self) -> None:
-        """A tool call starts: send the text written before it."""
+    def flush(self, *, response_ended: bool = True) -> None:
+        """A tool call starts: send the text written before it.
+        ``response_ended`` is false when the same response goes on after it."""
+
+    def restart(self) -> None:
+        """The response being streamed is void and comes again from its start."""
 
     def close(self) -> list[SendOutcome]:
         """Send what is queued and stop; the failed sends."""

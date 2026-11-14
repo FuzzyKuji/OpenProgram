@@ -63,7 +63,9 @@ def test_background_owner_work_runs_under_the_default(source):
 @pytest.mark.parametrize("source", BACKGROUND_SOURCES)
 def test_background_owner_work_is_refused_under_ask_because_no_one_can_approve(source):
     verdict = permission_decision(BASH, _background(source, permission_mode="ask"), {"command": "ls"})
-    assert (verdict.outcome, verdict.code) == ("deny", "NO_ONE_TO_APPROVE")
+    # A helper Agent's refusal says to report what it needed to its caller.
+    expected = "HELPER_CANNOT_ASK" if source == "agent_spawn" else "NO_ONE_TO_APPROVE"
+    assert (verdict.outcome, verdict.code) == ("deny", expected)
 
 
 def test_an_attended_owner_turn_gets_a_card_under_ask():

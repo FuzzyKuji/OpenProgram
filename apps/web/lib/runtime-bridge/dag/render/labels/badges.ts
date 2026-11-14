@@ -1,4 +1,4 @@
-import { requestSessionLoad } from "@/lib/runtime-bridge/session/session-load";
+import { requestSessionLoad, sendRuntimeCommand } from "@/lib/runtime-bridge/session/session-load";
 /**
  * Renderer: branch badge buttons below branch tip nodes.
  *
@@ -111,11 +111,11 @@ function _drawPill(
 function _sendCheckout(sessionId: string | null, headMsgId: string): void {
   const sock = getSocket();
   if (sock && sock.readyState === WebSocket.OPEN) {
-    sock.send(JSON.stringify({
+    sendRuntimeCommand({
       action: "checkout_branch",
       session_id: sessionId,
       head_msg_id: headMsgId,
-    }));
+    });
     if (sessionId) requestSessionLoad({
       action: "load_session",
       session_id: sessionId,

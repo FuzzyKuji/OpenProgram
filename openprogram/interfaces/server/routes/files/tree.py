@@ -16,9 +16,9 @@ _log = logging.getLogger(__name__)
 def _coverage_nodes(db, session_id: str, node_ids: list) -> list:
     """Per-node context coverage for ``node_ids``, in the same order.
 
-    ``[{"node_id", "in_context", "aged", "spilled"}]``. The aging
-    boundary comes from ``render.py::_aged_code_ids`` — the very
-    function the real render pass uses — and ``spilled`` reads the
+    ``[{"node_id", "in_context", "aged", "spilled"}]``. ``aged`` is
+    always false: the render never shortens an old result (only
+    compaction replaces it), and the key stays for the client. ``spilled`` reads the
     ``metadata.spilled`` blob ``spill_if_large`` wrote at record time.
     Falls back to flags-off (still ``in_context``) when the graph can't
     be loaded: coverage is a highlight, never a reason to 500.
@@ -28,11 +28,9 @@ def _coverage_nodes(db, session_id: str, node_ids: list) -> list:
     aged: set = set()
     spilled: set = set()
     try:
-        from openprogram.runtime.context.render import _aged_code_ids
         from openprogram.state.store.session.session_node_writer import SessionNodeWriter
 
         graph = SessionNodeWriter(db, session_id).load()
-        aged, _boundary = _aged_code_ids(graph, list(node_ids))
         spilled = {
             nid for nid in node_ids
             if nid in graph.nodes
@@ -415,9 +413,8 @@ def register(app):
         applies to it.
 
             ``in_context``  always true here — the list IS the covered set
-            ``aged``        a code node old enough that
-                            ``render.py::_aged_code_ids`` collapses its
-                            result to a one-line stub
+            ``aged``        always false: old results are no longer
+                            shortened by the render
             ``spilled``     the node's result was written to
                             ``large_nodes/`` and the render only cites it
 

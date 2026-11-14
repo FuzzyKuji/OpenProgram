@@ -88,11 +88,11 @@
 <table class="stack">
 <thead><tr><th scope="col">设置</th><th scope="col">默认</th><th scope="col">计数</th></tr></thead>
 <tbody>
-<tr><th scope="row"><code translate="no">agent.max_spawn_depth</code></th><td>0，无限制</td><td>新建 agent 的代数，只有创建才计数。设为 1 时，被派生 agent 的 <code translate="no">agent()</code> 派生被拒绝，由它自己完成工作</td></tr>
+<tr><th scope="row"><code translate="no">agent.max_spawn_depth</code></th><td>1</td><td>新建 agent 的代数，只有创建才计数。设为 1 时，被派生 agent 的 <code translate="no">agent()</code> 派生被拒绝，由它自己完成工作</td></tr>
 <tr><th scope="row"><code translate="no">agent.max_messages</code></th><td>0，无限制</td><td>整条链传递的消息数，不分工具，回复也算</td></tr>
 </tbody>
 </table>
-<p class="note">工具是否出现只看消息计数：消息用完时 <code translate="no">agent</code> 从清单消失，代数用完从不摘工具。<code translate="no">job_output</code> 保留。读 worker 结果的 agent 保持自己的代数，还能派下一波。见 <a href="../runtime/collaboration/agent-collab-architecture.zh.html">agent 协作</a>。</p>
+<p class="note">工具只有出现或不出现：消息或代数用完时 <code translate="no">agent</code> 从清单消失；分叉例外，它保留调用方的工具清单以共用提示缓存，在运行时被拒绝。<code translate="no">read_conversation</code> 保留。读 worker 结果的 agent 保持自己的代数，还能派下一波。见 <a href="../runtime/collaboration/agent-collaboration.zh.html#limits">agent 协作</a>。</p>
 </details>
 <details>
 <summary>第 7 条：不参与</summary>

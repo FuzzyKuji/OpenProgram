@@ -88,4 +88,28 @@ def resolve_path(file_path: str) -> tuple[str, Optional[str]]:
         return file_path, None
 
 
-__all__ = ["resolve_path"]
+def default_root() -> str:
+    """The folder a file tool searches when it is given no path: the
+    bound worktree (or the folder the turn runs in), else the default
+    workdir, else the process cwd."""
+    wt = current_worktree_path()
+    if wt:
+        return wt
+    try:
+        from openprogram.state.paths import get_default_workdir
+        return str(get_default_workdir())
+    except Exception:
+        return os.getcwd()
+
+
+def resolve_root(path: Optional[str]) -> tuple[str, Optional[str]]:
+    """``(directory, outside_warning)`` for a search tool's ``path``
+    argument: omitted means :func:`default_root`; relative means relative
+    to the bound worktree (left relative when none is bound, so the
+    tool's own absolute-path check still answers)."""
+    if not path:
+        return default_root(), None
+    return resolve_path(path)
+
+
+__all__ = ["resolve_path", "resolve_root", "default_root"]

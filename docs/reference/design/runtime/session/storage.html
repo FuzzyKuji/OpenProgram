@@ -27,6 +27,7 @@
 <li>A session with no project lands under <code translate="no">default/chats/</code>. A store opened on another root (application runs, an embedding host) uses the same placement.</li>
 <li><a href="operations.html#moving-a-conversation">Moving</a> renames the directory and records it in <code translate="no">.chats-locations.json</code>, the durable authority during migration or relocation.</li>
 <li>A working folder is never the conversation directory. <code translate="no">&lt;project&gt;/.openprogram/sessions/&lt;id&gt;/</code> is read only as a legacy migration source.</li>
+<li><code translate="no">projects.json</code> is published whole by rename. A change holds the registry lock for its read-modify-write; a lookup takes no lock and parses a published file once.</li>
 </ul>
 
 <h2 id="session-log">The session log</h2>
@@ -54,7 +55,7 @@
 <table class="stack fixed">
 <thead class="sr"><tr><th scope="col">Item</th><th scope="col">Role</th></tr></thead>
 <tbody>
-<tr><th scope="row"><code translate="no">~/.openprogram/active/&lt;session&gt;</code></th><td>Marks unfinished runs; folded at startup. Others fold when first asked for</td></tr>
+<tr><th scope="row"><code translate="no">~/.openprogram/active/&lt;session&gt;</code></th><td>Marks unfinished runs; folded at startup. Others fold when first asked for. Deleting a conversation removes its marker, and startup drops one that names a deleted conversation</td></tr>
 <tr><th scope="row"><code translate="no">run_index.jsonl</code></th><td>Execution → session</td></tr>
 <tr><th scope="row"><code translate="no">revisions.jsonl</code></th><td>Workflow versions and approvals, and global budgets</td></tr>
 <tr><th scope="row">Idle session</th><td>Leaves memory an hour after its last change, returns from its log</td></tr>
@@ -73,7 +74,7 @@
 <tr><th scope="row"><code translate="no">usage.db</code></th><td>Accounting only (events, requests, routes, probes), grouped by time, model and scope</td></tr>
 <tr><th scope="row"><code translate="no">memory/index.sqlite</code></th><td>Full-text search; rebuilt from the memory files</td></tr>
 <tr><th scope="row"><code translate="no">processes.db</code></th><td>Detached supervisors outlive the Worker and write the same record</td></tr>
-<tr><th scope="row"><code translate="no">session-resources.db</code></th><td>Tool processes report resources; Page writes are fenced across processes</td></tr>
+<tr><th scope="row"><code translate="no">session-resources.db</code></th><td>Tool processes report resources; Page state is shared across processes</td></tr>
 <tr><th scope="row"><code translate="no">programs/.runtime/</code></th><td>Application subprocesses share state with the host</td></tr>
 <tr><th scope="row"><code translate="no">project-file-history/history.sqlite3</code></th><td>A version and its group commit together</td></tr>
 </tbody>
@@ -136,10 +137,10 @@
 <p class="note">A killed Worker never clears <code translate="no">running</code>, which would pin the chat at <code translate="no">data-run-active="true"</code>. Registry load resets <code translate="no">running</code> to <code translate="no">idle</code>; <code translate="no">reconcile_interrupted_runs()</code> then turns a row still <code translate="no">running</code> into <code translate="no">interrupted</code> and <code translate="no">cancelling</code> into <code translate="no">cancelled</code>, separately from the node sweep, because a Worker killed between the status write and the placeholder leaves a running row with no running node.</p>
 
 <h2 id="moving-head">Moving HEAD</h2>
-<p><code translate="no">_set_active_head</code> (<code translate="no">interfaces/server/server_runtime/session_persistence.py</code>) is the one way. <code translate="no">_save_session</code> flushes the per-session mirror's <code translate="no">head_id</code> and <code translate="no">messages</code> into SessionStore, so a mirror left behind reverts the move on the next save.</p>
+<p><code translate="no">_set_active_head</code> (<code translate="no">interfaces/server/server_runtime/session_persistence.py</code>) coordinates an explicit checkout. SessionStore owns HEAD; <code translate="no">_save_session</code> does not write the mirror’s head or messages back.</p>
 <ol>
-<li>Write SessionStore.</li>
-<li>Re-read the new branch into the mirror.</li>
+<li>Atomically compare the source head, branch identity and settings, then save the source configuration and select the destination. The expected settings are read from disk in their stored form, so a record that has no <code translate="no">agent_id</code> yet (one first written by a model pin) still compares equal.</li>
+<li>Under the mirror lock, re-read current branch settings, head and messages. Branch references retain independent settings even at the same head.</li>
 <li>Drop the message cache.</li>
 </ol>
 <ul>

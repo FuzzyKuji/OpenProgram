@@ -55,6 +55,8 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
+from openprogram.host._platform.process_ownership import no_window_creation_flags
+
 _GIT_TIMEOUT_SECS = 30.0
 
 
@@ -135,7 +137,7 @@ def sync_include_files(source_repo: str, worktree_path: str) -> IncludeSyncResul
         return result
 
     try:
-        patterns = _parse_patterns(manifest.read_text(errors="replace"))
+        patterns = _parse_patterns(manifest.read_text(errors="replace", encoding="utf-8"))
     except OSError as e:
         result.failed.append((".worktreeinclude", f"could not read manifest: {e}"))
         return result
@@ -148,6 +150,7 @@ def sync_include_files(source_repo: str, worktree_path: str) -> IncludeSyncResul
             cwd=source_repo,
             capture_output=True,
             timeout=_GIT_TIMEOUT_SECS,
+            creationflags=no_window_creation_flags(),
         )
     except (OSError, subprocess.TimeoutExpired) as e:
         result.failed.append((".worktreeinclude", f"git ls-files failed: {e}"))
@@ -179,7 +182,9 @@ def sync_include_files(source_repo: str, worktree_path: str) -> IncludeSyncResul
             dst.parent.mkdir(parents=True, exist_ok=True)
             if src.is_symlink():
                 link_target = os.readlink(src)
-                os.symlink(link_target, dst)
+                # Windows makes a file link unless told the target is a
+                # directory, and a file link to a directory cannot be opened.
+                os.symlink(link_target, dst, target_is_directory=src.is_dir())
             else:
                 shutil.copy2(src, dst, follow_symlinks=False)
             result.copied.append(rel)

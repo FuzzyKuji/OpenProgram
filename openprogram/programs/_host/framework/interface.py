@@ -5,7 +5,7 @@ from pathlib import Path
 import secrets
 from jsonschema import Draft202012Validator
 
-COMMANDS = json.loads(Path(__file__).with_name('interface_commands.json').read_text())
+COMMANDS = json.loads(Path(__file__).with_name('interface_commands.json').read_text(encoding="utf-8"))
 _windows = {}
 _pending = {}
 

@@ -33,6 +33,13 @@ export type AgentConfigDTO = {
   session_idle_minutes: number;
   session_daily_reset: string;
   hold_outbound: boolean;
+  /** Whether other agents may start it with agent(agent=…): "on", "off",
+   *  or "" for the default (on when it has tools). */
+  delegation?: "" | "on" | "off";
+  /** Where it works when another agent starts it: "worktree", "none", or
+   *  "" for the default rule (a background helper that edits files gets a
+   *  worktree). */
+  isolation?: "" | "worktree" | "none";
   always_on: AlwaysOnConfig;
   /** How the Agent is pictured; empty means the character derived from
    *  its id (lib/agents/agent-avatar.ts). */
@@ -78,6 +85,8 @@ export function configuration(agent: Agent): AgentConfigDTO {
     session_idle_minutes: agent.session_idle_minutes,
     session_daily_reset: agent.session_daily_reset,
     hold_outbound: agent.hold_outbound,
+    ...(agent.delegation !== undefined ? { delegation: agent.delegation } : {}),
+    ...(agent.isolation !== undefined ? { isolation: agent.isolation } : {}),
     always_on: agent.always_on,
     avatar: agent.avatar ?? {},
   });

@@ -30,7 +30,7 @@ registerHooks({
   },
 });
 const { window } = parseHTML("<!doctype html><html><body></body></html>");
-Object.assign(globalThis, { window, document: window.document, Event: window.Event, CustomEvent: window.CustomEvent, HTMLElement: window.HTMLElement, MutationObserver: window.MutationObserver, CSS: { escape: value => value }, IS_REACT_ACT_ENVIRONMENT: true });
+Object.assign(globalThis, { window, document: window.document, Event: window.Event, CustomEvent: window.CustomEvent, HTMLElement: window.HTMLElement, SVGElement: window.SVGElement, MutationObserver: window.MutationObserver, CSS: { escape: value => value }, IS_REACT_ACT_ENVIRONMENT: true });
 globalThis.localStorage = { getItem() { return null; }, setItem() {}, removeItem() {} };
 globalThis.requestAnimationFrame = callback => setTimeout(() => callback(0), 0);
 globalThis.cancelAnimationFrame = clearTimeout;

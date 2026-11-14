@@ -218,6 +218,41 @@ assert.equal(verifyOn(signedLine, { status: "Valid", subject: "CN=OpenProgram", 
 assert.throws(() => verifyOn(signedLine, { status: "Valid", subject: "CN=Someone Else", thumbprint: "C".repeat(40) }),
   /different publisher/);
 
+// A line read without a publisher (PowerShell failed or timed out when the App
+// read its own signature) must not let any validly signed installer through.
+const unknownLine = { signed: true, subject: "", thumbprint: "" };
+function verifyUnknown(installer, own) {
+  const asked = [];
+  const result = () => verifyWindowsAuthenticode("C:\\Downloads\\OpenProgram.exe", {
+    platform: "win32",
+    existsSync: () => true,
+    executable: "C:\\App\\OpenProgram.exe",
+    execFileSyncImpl: (_command, _args, options) => {
+      const target = options.env.OPENPROGRAM_SIGNATURE_PATH;
+      asked.push(target);
+      if (target === "C:\\Downloads\\OpenProgram.exe") return JSON.stringify(installer);
+      if (own instanceof Error) throw own;
+      return JSON.stringify(own);
+    },
+    line: unknownLine,
+  });
+  return { result, asked };
+}
+const someoneElse = { status: "Valid", subject: "CN=Someone Else", thumbprint: "C".repeat(40) };
+const ours = { status: "Valid", subject: "CN=OpenProgram", thumbprint: "A".repeat(40) };
+assert.throws(verifyUnknown(someoneElse, new Error("PowerShell timed out")).result, /own publisher could not be read/,
+  "an App that cannot read its own publisher takes no installer");
+assert.throws(verifyUnknown(someoneElse, { status: "HashMismatch" }).result, /own publisher could not be read/,
+  "nor does an App whose signature is damaged");
+assert.throws(verifyUnknown(someoneElse, ours).result, /different publisher/,
+  "the App's publisher is read again and another publisher is refused");
+{
+  const { result, asked } = verifyUnknown({ ...ours, thumbprint: "D".repeat(40) }, ours);
+  assert.equal(result().thumbprint, "D".repeat(40), "the second read lets the App's own publisher through");
+  assert.deepEqual(asked, ["C:\\Downloads\\OpenProgram.exe", "C:\\App\\OpenProgram.exe"]);
+}
+assert.throws(verifyUnknown({ status: "NotSigned" }, ours).result, /not valid/);
+
 async function checkUpdateLine() {
   const line = (status, extra = {}) => readWindowsUpdateLine("C:\\App\\OpenProgram.exe", {
     platform: "win32",

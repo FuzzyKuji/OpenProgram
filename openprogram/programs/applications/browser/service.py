@@ -9,31 +9,64 @@ Members:
 
 - ``pages``: the page-resource module (``BrowserResourceStore``, the
   per-conversation projections, resource control, human page input).
-- ``web_use_parameters()`` / ``normalize_web_use_arguments(arguments)``:
-  the ``web_use`` argument contract.
-- ``execute_direct_web_use(arguments, owner_id=...)``: one ``web_use``
-  command for an MCP client.
-- ``registry()``: the ``web_use`` session registry; ``release_owner`` /
-  ``park_owner`` end or keep a turn's sessions without creating one.
-- ``authorized_page(arguments, window_id)``: the observed Page's lease,
-  for a native presentation command.
-- ``browser_of(args)``: ``chrome`` or ``edge`` when a call names the
-  user's own browser, else ``""``; ``user_browser_names`` names them.
 - ``tabs``: the tab driver behind ``computer_use_agent(target="browser")``
   (``ACTIONS``, ``driver()``, ``batch()``).
+- ``open_tab(url)``: open a web tab for the running conversation.
+- ``authorized_page(arguments, window_id)``: the App tab an interface
+  command names, checked against the App, for a native presentation command.
+- ``browser_of(args)``: ``chrome`` or ``edge`` when a call names the
+  user's own browser, else ``""``; ``user_browser_names`` names them.
 - ``extension``: the user's Chrome or Edge through the Playwright
   Extension (``ExtensionBrowser``, ``Unavailable``).
-- ``chrome``: the Chrome bootstrap (sidecar profile, port file), which
-  ``openprogram browser`` maintains.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 from typing import Any, Mapping
 
-from . import chrome, contract, extension, pages, tabs
-from .resource import authorized_page
-from .web_use import execute_direct_web_use as _execute_direct_web_use
-from .web_use import runtime as _runtime
+from . import extension, pages, tabs
+
+
+def _session() -> str:
+    from openprogram.runtime.execution.run_control import get_current_session_id
+    return get_current_session_id() or ""
+
+
+def open_tab(url: str) -> dict[str, Any]:
+    """Open ``url`` in a background tab of the App, as ``open`` of the browser target does."""
+    from openprogram.host.resources.providers.builtin import _require_tool
+
+    _require_tool("computer_use_agent")
+    return tabs.driver().run("open", {"url": url}, _session())
+
+
+@contextmanager
+def authorized_page(arguments: Mapping[str, Any], window_id: str):
+    """The App tab an interface command acts on, as the App knows it now.
+
+    ``arguments.tab`` names it by its id from the browser target's ``tabs``
+    (omitted: the tab this conversation used last); the command's first
+    argument is that tab and is sent as the App's own tab id.
+    """
+    from openprogram.host.processes import current_owner
+    from openprogram.host.resources import desktop_link
+    from openprogram.host.resources.providers.builtin import _require_tool
+
+    # Acting on a web tab is the screen tool's; a turn that may not use it may not do it this way either.
+    _require_tool("computer_use_agent")
+    try:
+        tab = tabs.driver().tab(arguments.get("tab"), _session())
+    except tabs.BrowserError as exc:
+        raise ValueError(str(exc)) from exc
+    descriptor = desktop_link.binding_page_descriptor(tab.binding_id) if tab.binding_id else {}
+    args = arguments.get("arguments") or []
+    if not args or args[0] not in (tab.id, tab.tab_id):
+        raise ValueError("the command's first argument is the tab: its id from computer_use_agent's tabs")
+    if (descriptor.get("tab_id") != tab.tab_id or (window_id and descriptor.get("window_id") != window_id)
+            or not desktop_link.request_bound_tab(tab.binding_id).get("ok")):
+        raise ValueError("page_context_stale")
+    session_id, _, _ = current_owner()
+    yield {**descriptor, "session_id": session_id}
 
 
 class BrowserService:
@@ -41,34 +74,10 @@ class BrowserService:
 
     pages = pages
     tabs = tabs
-    chrome = chrome
     extension = extension
     user_browser_names = extension.NAMES
 
-    @staticmethod
-    def web_use_parameters() -> dict:
-        return contract.web_use_parameters()
-
-    @staticmethod
-    def normalize_web_use_arguments(arguments: Mapping[str, Any]) -> dict:
-        return contract.normalize_web_use_arguments(arguments)
-
-    @staticmethod
-    def execute_direct_web_use(arguments: dict, *, owner_id: str):
-        return _execute_direct_web_use(arguments, owner_id=owner_id)
-
-    @staticmethod
-    def registry():
-        return _runtime.get_registry()
-
-    @staticmethod
-    def release_owner(owner_id: str) -> None:
-        _runtime.release_owner_if_initialized(owner_id)
-
-    @staticmethod
-    def park_owner(owner_id: str) -> None:
-        _runtime.park_owner_if_initialized(owner_id)
-
+    open_tab = staticmethod(open_tab)
     authorized_page = staticmethod(authorized_page)
 
     @staticmethod

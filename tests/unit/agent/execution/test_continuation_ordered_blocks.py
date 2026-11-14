@@ -32,10 +32,10 @@ async def _fixture_execute(_call_id, _args, _cancel, _update):
     return AgentToolResult(content=[TextContent(text="fixture")])
 
 
-def _web_use_tool():
+def _page_tool():
     return AgentTool(
-        name="web_use", description="web_use",
-        parameters={"type": "object"}, label="web_use",
+        name="page_tool", description="page_tool",
+        parameters={"type": "object"}, label="page_tool",
         execute=_fixture_execute,
     )
 
@@ -52,7 +52,7 @@ def _request():
 def _snapshot(request, tools=None):
     return runtime_contract_snapshot(
         model=_model(), system_prompt="",
-        tools=list(tools if tools is not None else [_web_use_tool()]),
+        tools=list(tools if tools is not None else [_page_tool()]),
         request=request,
     )
 
@@ -61,17 +61,17 @@ def _display_cards():
     return [
         {"type": "text", "text": "Counter is 1"},
         {
-            "type": "tool", "tool": "web_use", "tool_call_id": "call-1",
+            "type": "tool", "tool": "page_tool", "tool_call_id": "call-1",
             "input": '{"command": "observe"}', "result": "Counter: 1", "is_error": False,
         },
         {"type": "text", "text": "Counter is 2"},
         {
-            "type": "tool", "tool": "web_use", "tool_call_id": "call-2",
+            "type": "tool", "tool": "page_tool", "tool_call_id": "call-2",
             "input": '{"command": "act"}', "result": "Counter: 2", "is_error": False,
         },
         {"type": "text", "text": "Counter is 3"},
         {
-            "type": "tool", "tool": "web_use", "tool_call_id": "call-3",
+            "type": "tool", "tool": "page_tool", "tool_call_id": "call-3",
             "input": '{"command": "observe"}', "result": "Counter: 3", "is_error": False,
         },
     ]
@@ -85,7 +85,7 @@ def test_ordered_block_from_content_maps_text_thinking_and_tool():
     assert _ordered_block_from_content(thinking) == {
         "type": "thinking", "text": "plan",
     }
-    tool = ToolCall(id="call-pre", name="web_use", arguments={"command": "observe"})
+    tool = ToolCall(id="call-pre", name="page_tool", arguments={"command": "observe"})
     mapped = _ordered_block_from_content(tool)
     assert mapped["type"] == "tool"
     assert mapped["tool_call_id"] == "call-pre"
@@ -95,7 +95,7 @@ def test_seed_uses_full_display_when_current_decision_is_only_the_last_round():
     last = AssistantMessage(
         content=[
             TextContent(text="Counter is 3"),
-            ToolCall(id="call-3", name="web_use", arguments={"command": "observe"}),
+            ToolCall(id="call-3", name="page_tool", arguments={"command": "observe"}),
         ],
         api="fake", provider="fake", model="fake", timestamp=1, stop_reason="toolUse",
     )
@@ -104,7 +104,7 @@ def test_seed_uses_full_display_when_current_decision_is_only_the_last_round():
         assistant_message=last,
         tool_results=(
             ToolResultMessage(
-                tool_call_id="call-3", tool_name="web_use",
+                tool_call_id="call-3", tool_name="page_tool",
                 content=[TextContent(text="Counter: 3")], timestamp=1,
             ),
         ),
@@ -133,15 +133,15 @@ def test_seed_falls_back_to_current_decision_when_display_is_absent():
         display=(),
         assistant_message=SimpleNamespace(content=[
             TextContent(text="Counter is 4"),
-            ToolCall(id="call-pre", name="web_use", arguments={"command": "observe"}),
+            ToolCall(id="call-pre", name="page_tool", arguments={"command": "observe"}),
         ]),
         tool_results=(
             ToolResultMessage(
-                tool_call_id="call-pre", tool_name="web_use",
+                tool_call_id="call-pre", tool_name="page_tool",
                 content=[TextContent(text="Counter: 4")], timestamp=1,
             ),
             ToolResultMessage(
-                tool_call_id="call-orphan", tool_name="web_use",
+                tool_call_id="call-orphan", tool_name="page_tool",
                 content=[TextContent(text="listed")], timestamp=1,
             ),
         ),
@@ -166,14 +166,14 @@ def test_seed_merges_current_decision_when_display_is_a_prefix():
     last = AssistantMessage(
         content=[
             TextContent(text="saved-now"),
-            ToolCall(id="call-3", name="web_use", arguments={"command": "observe"}),
+            ToolCall(id="call-3", name="page_tool", arguments={"command": "observe"}),
         ],
         api="fake", provider="fake", model="fake", timestamp=1, stop_reason="toolUse",
     )
     prefix = [
         {"type": "text", "text": "repeated"},
         {
-            "type": "tool", "tool": "web_use", "tool_call_id": "call-1",
+            "type": "tool", "tool": "page_tool", "tool_call_id": "call-1",
             "input": "{}", "result": "ok", "is_error": False,
         },
     ]
@@ -182,7 +182,7 @@ def test_seed_merges_current_decision_when_display_is_a_prefix():
         assistant_message=last,
         tool_results=(
             ToolResultMessage(
-                tool_call_id="call-3", tool_name="web_use",
+                tool_call_id="call-3", tool_name="page_tool",
                 content=[TextContent(text="Counter: 3")], timestamp=1,
             ),
         ),
@@ -203,14 +203,14 @@ def test_seed_appends_only_unmatched_tail_when_display_ends_mid_decision():
     last = AssistantMessage(
         content=[
             TextContent(text="Current"),
-            ToolCall(id="call-new", name="web_use", arguments={"command": "act"}),
+            ToolCall(id="call-new", name="page_tool", arguments={"command": "act"}),
         ],
         api="fake", provider="fake", model="fake", timestamp=1, stop_reason="toolUse",
     )
     display = [
         {"type": "text", "text": "Old"},
         {
-            "type": "tool", "tool": "web_use", "tool_call_id": "call-old",
+            "type": "tool", "tool": "page_tool", "tool_call_id": "call-old",
             "result": "ok", "is_error": False,
         },
         {"type": "text", "text": "Current"},
@@ -236,8 +236,8 @@ def test_seed_appends_remaining_tools_when_display_ends_on_first_tool_of_decisio
     last = AssistantMessage(
         content=[
             TextContent(text="Current"),
-            ToolCall(id="call-a", name="web_use", arguments={"command": "observe"}),
-            ToolCall(id="call-b", name="web_use", arguments={"command": "act"}),
+            ToolCall(id="call-a", name="page_tool", arguments={"command": "observe"}),
+            ToolCall(id="call-b", name="page_tool", arguments={"command": "act"}),
         ],
         api="fake", provider="fake", model="fake", timestamp=1, stop_reason="toolUse",
     )
@@ -245,7 +245,7 @@ def test_seed_appends_remaining_tools_when_display_ends_on_first_tool_of_decisio
         {"type": "text", "text": "Old"},
         {"type": "text", "text": "Current"},
         {
-            "type": "tool", "tool": "web_use", "tool_call_id": "call-a",
+            "type": "tool", "tool": "page_tool", "tool_call_id": "call-a",
             "result": "ok", "is_error": False,
         },
     ]
@@ -271,22 +271,22 @@ def test_from_checkpoint_rebuilds_display_from_the_journal():
     last = AssistantMessage(
         content=[
             TextContent(text="Counter is 3"),
-            ToolCall(id="call-3", name="web_use", arguments={"command": "observe"}),
+            ToolCall(id="call-3", name="page_tool", arguments={"command": "observe"}),
         ],
         api="openai-completions", provider="openai", model="fake",
         timestamp=1, stop_reason="toolUse",
     )
     last_result = ToolResultMessage(
-        tool_call_id="call-3", tool_name="web_use",
+        tool_call_id="call-3", tool_name="page_tool",
         content=[TextContent(text="Counter: 3")], timestamp=1,
     )
     earlier = AssistantMessage(
-        content=[ToolCall(id="call-1", name="web_use", arguments={"command": "observe"})],
+        content=[ToolCall(id="call-1", name="page_tool", arguments={"command": "observe"})],
         api="openai-completions", provider="openai", model="fake",
         timestamp=1, stop_reason="toolUse",
     )
     earlier_result = ToolResultMessage(
-        tool_call_id="call-1", tool_name="web_use",
+        tool_call_id="call-1", tool_name="page_tool",
         content=[TextContent(text="Counter: 1")], timestamp=1,
     )
     continuation = journal_continuation(

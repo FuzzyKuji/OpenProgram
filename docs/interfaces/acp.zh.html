@@ -25,11 +25,15 @@
 <table class="stack fixed">
 <thead class="sr"><tr><th scope="col">功能</th><th scope="col">行为</th></tr></thead>
 <tbody>
+<tr><th scope="row">工作目录</th><td>工具从编辑器打开线程时所在的文件夹开始，这个文件夹成为会话的项目，和 <code translate="no">openprogram --print</code> 一样。无法作为项目打开的文件夹在主目录运行，并在 stderr 给出警告。</td></tr>
+<tr><th scope="row">项目标记</th><td>第一次发提示时，这个文件夹登记为项目（之前在 App 里隐藏过的会重新显示），并在文件夹里写入标记 <code translate="no">.openprogram/project.json</code>；不想让它进仓库，就把 <code translate="no">.openprogram/</code> 加进 <code translate="no">.gitignore</code>。打开线程但没发提示，不会留下任何东西。</td></tr>
 <tr><th scope="row">流式输出</th><td>逐 token；模型产生推理时作为单独的思考流</td></tr>
 <tr><th scope="row">工具调用</th><td>开始和结束时报告参数和结果；文件工具报告路径，Zed 可以跟随</td></tr>
 <tr><th scope="row">编辑器上下文</th><td>附加的选区或文件按路径写入提示，模型可继续读取</td></tr>
-<tr><th scope="row">权限提示</th><td><strong>Allow</strong>、<strong>Always allow</strong>、<strong>Reject</strong>。Always allow 把该工具的持久规则写入项目设置，和 Web UI 一样。</td></tr>
-<tr><th scope="row">取消</th><td>停止线程会取消当前轮次并撤回未答的提示</td></tr>
+<tr><th scope="row">权限提示</th><td><strong>Allow</strong>、<strong>Always allow</strong>、<strong>Reject</strong>。Always allow 把该工具的持久规则写入项目设置，和 Web UI 一样。回答后轮次在同一个提示里继续。编辑器对请求返回错误，或 10 分钟内没有回答，按拒绝处理。agent 向你提的问题在 ACP 里没有对应形式，会被拒绝。</td></tr>
+<tr><th scope="row">系统权限</th><td>需要系统权限（例如辅助功能）的步骤无法在编辑器里授予：轮次停止，提示以错误结束并写明需要的权限。</td></tr>
+<tr><th scope="row">取消</th><td>停止线程会中止进行中的模型请求、不再发起新请求，并撤回未答的提示</td></tr>
+<tr><th scope="row">错误</th><td>失败的轮次（例如服务商出错）以带原因的 JSON-RPC 错误回答提示，在权限回答之后才失败的也一样。轮次停在编辑器推不动的状态（在 App 里被暂停，或需要核对）时，提示同样以错误结束；到 OpenProgram 里继续。</td></tr>
 <tr><th scope="row">恢复</th><td>重新打开的线程从会话存储回放。会话是普通会话，在 <a href="web.zh.html">Web</a> 和 <a href="tui.zh.html">TUI</a> 可见，可从任一处继续。</td></tr>
 </tbody></table>
 <h2 id="scope">范围</h2>

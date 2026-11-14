@@ -8,6 +8,7 @@ import tempfile
 import time
 from pathlib import Path
 from typing import Any
+from openprogram.host._platform.filesystem import replace_file
 
 SUBSCRIPTION_PROVIDERS = frozenset({
     "openai-codex",
@@ -73,7 +74,7 @@ def save_catalog(provider_id: str, models: list[dict[str, Any]]) -> None:
             stream.flush()
             os.fsync(stream.fileno())
         os.chmod(temporary, 0o600)
-        os.replace(temporary, path)
+        replace_file(temporary, path)
     finally:
         Path(temporary).unlink(missing_ok=True)
 

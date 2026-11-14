@@ -30,7 +30,7 @@ AUTHORING = {
 HOST = {
     "__init__.py", "runtime.py", "execution.py", "context.py", "services.py",
     "registry.py", "packages.py", "source_loader.py", "sources.py", "check.py",
-    "watcher.py", "meta_storage.py", "identity.py", "lower_layers.py", "ui", "framework",
+    "watcher.py", "meta_storage.py", "identity.py", "lower_layers.py", "tool_rank.py", "ui", "framework",
 }
 HOST_UI = {
     "__init__.py", "bindings.py", "catalog.py", "catalog_store.py", "driver.py",
@@ -81,7 +81,6 @@ def test_authoring_import_paths_used_by_user_programs() -> None:
     assert parse_json('{"ok": true}') == {"ok": True}
     for module in ("reports.io", "reports.evidence_gate", "guides", "helpers"):
         importlib.import_module(f"openprogram.programs._authoring.{module}")
-    importlib.import_module("openprogram.programs.applications.browser.contract")
 
 
 def test_builtin_programs_load_from_tools_and_applications() -> None:

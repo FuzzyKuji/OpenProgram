@@ -52,11 +52,17 @@ async def handle_rewind(ws, cmd: dict):
     from openprogram.interfaces.server import server as _s
     phase = (cmd.get("phase") or "plan").strip().lower()
     reservation = f"rewind_{uuid.uuid4().hex}"
-    if phase == "apply" and not await asyncio.to_thread(
-        _s._try_reserve_run, session_id, reservation,
-    ):
-        await _send_run_active(ws, _s, session_id)
-        return
+    if phase == "apply":
+        refusal = await asyncio.to_thread(
+            lambda: _s.reserve_operation(
+                session_id, "rewind", reservation,
+                scope=rewind_scope((cmd.get("mode") or "code_and_conversation").strip()),
+                key=rewind_slot_key(cmd.get("idempotency_key")),
+            ),
+        )
+        if refusal is not None:
+            await _send_run_active(ws, _s, session_id, refusal)
+            return
     try:
         from openprogram.runtime.conversation.rewind import (
             list_rewind_points,
@@ -137,12 +143,25 @@ async def handle_rewind(ws, cmd: dict):
             _s._release_run_reservation(session_id, reservation)
 
 
-async def _send_run_active(ws, _s, session_id: str) -> None:
+def rewind_slot_key(idempotency_key) -> str | None:
+    """The slot key of a rewind apply: a repeat with the same idempotency
+    key joins the rewind holding the slot and returns its outcome."""
+    key = (idempotency_key or "").strip() if isinstance(idempotency_key, str) else ""
+    return f"rewind:{key}" if key else None
+
+
+def rewind_scope(mode: str) -> str:
+    """A rewind that restores files holds the whole conversation; one that
+    moves only the conversation holds its own branch."""
+    return "branch" if mode == "conversation" else "conversation"
+
+
+async def _send_run_active(ws, _s, session_id: str, refusal: dict | None = None) -> None:
+    refusal = refusal or {"code": "run_active", "error": _s.RUN_ACTIVE_ERROR}
     await ws.send_text(json.dumps({
         "type": "rewind_result",
-        "data": {"session_id": session_id, "error": _s.RUN_ACTIVE_ERROR,
-                 "code": "run_active"},
-    }))
+        "data": {"session_id": session_id, **refusal},
+    }, default=str))
 
 
 async def handle_rewind_marks(ws, cmd: dict):

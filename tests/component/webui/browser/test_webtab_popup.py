@@ -22,15 +22,14 @@ class _WS:
 
 @pytest.fixture(autouse=True)
 def _clean_webtab():
-    from openprogram.programs.applications.browser import pages as browser_resources
     for registry in (webtab._pending, webtab._bindings, webtab._desktop_windows,
                      webtab._connection_revisions, webtab._page_revisions,
-                     webtab._restore_jobs, browser_resources._opened_pages):
+                     webtab._restore_jobs):
         registry.clear()
     yield
     for registry in (webtab._pending, webtab._bindings, webtab._desktop_windows,
                      webtab._connection_revisions, webtab._page_revisions,
-                     webtab._restore_jobs, browser_resources._opened_pages):
+                     webtab._restore_jobs):
         registry.clear()
 
 
@@ -60,7 +59,7 @@ def _popup(ws, **overrides):
 
 
 def test_a_popup_joins_the_conversation_of_the_page_that_opened_it(monkeypatch, tmp_path):
-    from openprogram.programs.applications.browser.pages import BrowserResourceStore, take_opened_pages
+    from openprogram.programs.applications.browser.pages import BrowserResourceStore
     owner, opener_key = _agent_page(monkeypatch, tmp_path)
     emitted = []
     monkeypatch.setattr(
@@ -81,11 +80,6 @@ def test_a_popup_joins_the_conversation_of_the_page_that_opened_it(monkeypatch, 
         ("conv", "exec-1"),
     ]
     assert [row["tab_id"] for row in emitted] == ["popup"], "Resources lists it"
-    assert take_opened_pages(opener_key) == [{
-        "window_id": "win", "tab_id": "popup",
-        "url": "https://visa.test/apply", "title": "Apply",
-    }]
-    assert take_opened_pages(opener_key) == [], "the Agent is told once"
 
 
 def test_a_popup_from_another_window_or_an_unknown_opener_is_ignored(monkeypatch, tmp_path):

@@ -9,6 +9,7 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from openprogram.host._platform.filesystem import replace_file
 
 _MANIFEST = "openprogram-office-assets.json"
 OFFICE_SOURCE = "d15d12b6945be4d8b0f3aa1806120e740d2950ee"
@@ -238,7 +239,7 @@ def install_office_pack(source: Path, target: Path) -> Path:
             json.dump({"version": version}, stream)
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(name, target / "current.json")
+        replace_file(name, target / "current.json")
         _sync_dir(target)
     finally:
         Path(name).unlink(missing_ok=True)

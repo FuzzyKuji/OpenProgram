@@ -23,6 +23,7 @@ import zipfile
 
 from . import layout as paths
 from .layout import Layout, valid_id
+from openprogram.host._platform import filesystem
 
 VERSION_FILE = "version.json"
 FILES_FILE = "files.tsv"
@@ -98,7 +99,7 @@ def _write_zip(target: Path, root: Path, names: Iterable[str]) -> None:
                 _zip_entry(archive, root / name, name)
         with open(temporary, "r+b") as stream:  # Windows flushes only a handle opened for writing.
             os.fsync(stream.fileno())
-        os.replace(temporary, target)
+        filesystem.replace_file(temporary, target)
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -169,7 +170,7 @@ def seal(layout: Layout, staging: Path, manifest: dict) -> Path:
     )
     write_files_tsv(staging)
     _fsync_tree(staging)
-    os.replace(staging, target)
+    filesystem.replace_file(staging, target)
     return target
 
 

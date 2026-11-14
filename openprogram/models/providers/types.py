@@ -142,12 +142,6 @@ class StreamOptions(BaseModel):
     # resolved provider explicitly advertises support for it.
     supports_idempotency_key: bool = False
     idempotency_key: str | None = None
-    # Server-side context edits for this request. None uses the producer the
-    # runtime registers (openprogram.models.cache_edits). Called once per
-    # request by providers that support the Anthropic Context Editing API;
-    # returns the body fields to merge
-    # (``{"context_management": ...}``) or None when no edit fires.
-    cache_edits: Callable[[], dict[str, Any] | None] | None = None
 
     model_config = {"arbitrary_types_allowed": True}
 
@@ -173,7 +167,9 @@ class StreamOptions(BaseModel):
 
 class SimpleStreamOptions(StreamOptions):
     """Unified options with reasoning — passed to stream_simple() / complete_simple()."""
-    reasoning: ThinkingLevel | None = None
+    # "off" reaches an adapter only when its provider has a wire value for
+    # it (``thinking_spec.off_wire_value``); it is never a picker level.
+    reasoning: ThinkingLevel | Literal["off"] | None = None
     thinking_budgets: ThinkingBudgets | None = None
 
 
@@ -312,6 +308,9 @@ class Usage(BaseModel):
 class UserMessage(BaseModel):
     role: Literal["user"] = "user"
     content: str | list[TextContent | ImageContent | VideoContent | AudioContent]
+    # On a compaction summary rendered as user input: the deferred tools it
+    # carries (see ``AssistantMessage.carried_tools``). Never stored.
+    carried_tools: list[dict[str, Any]] | None = Field(default=None, exclude=True)
     timestamp: int  # Unix ms
 
 
@@ -334,6 +333,11 @@ class AssistantMessage(BaseModel):
     # Existing producers/wire messages retain authoritative verdicts by default.
     error_retryable_inferred: bool = False
     error_retry_after_s: float | None = None
+    # Which limit or refusal stopped the reply (``errors.failure_cause``):
+    # ``{"cause", "http_status", "provider", "limit", "resets_at"}`` with
+    # cause ``quota_exhausted`` / ``invalid_key`` / ``not_available`` /
+    # ``unreachable``; ``None`` for any other failure.
+    error_cause: dict[str, Any] | None = None
     # The provider already consumed its complete transport retry budget.
     # Higher retry layers must not start another identical budget.
     error_transport_exhausted: bool | None = None
@@ -345,6 +349,11 @@ class AssistantMessage(BaseModel):
     # FailoverCategory value. ``provider``/``model`` above name the model
     # that answered. Empty when the first model answered.
     failover: list[dict[str, str]] = Field(default_factory=list)
+    # On a compaction summary only: the deferred tools it carries past the
+    # turns it covers, as ``{"name", "definition"}`` records
+    # (``shared.tool_loads.carried_records``). Rendered from the summary
+    # node on every request, never stored with a message.
+    carried_tools: list[dict[str, Any]] | None = Field(default=None, exclude=True)
     timestamp: int  # Unix ms
 
     @classmethod
@@ -378,6 +387,10 @@ class Tool(BaseModel):
     # support explicit tool-level cache markers (Anthropic / Bedrock). Set by
     # the cache-policy pass (cache_policy.py) or by the caller. None = no marker.
     cache_control: dict | None = None
+    # Sent with ``defer_loading: true`` (the Anthropic ``tool_reference``
+    # form, settings/tool_search_spec.py): outside the cached prefix and the
+    # tool-set check until a ``tool_reference`` names it.
+    defer_loading: bool = False
 
 
 # AgentTool — a Tool with the function that runs it, and what running it returns.
@@ -477,10 +490,19 @@ class Model(BaseModel):
     # GPT 系在线上叫 service_tier="priority"；Claude Opus 4.6+ 走
     # speed:"fast" + fast-mode beta 头。声明表见 enabled_models.default_fast。
     fast: bool = False
+    # Native tool search: False opts this model out of the form its provider
+    # declares for the API (settings/tool_search_spec.py); None follows it.
+    tool_search: bool | None = None
     input: list[Literal["text", "image", "video", "audio"]] = Field(default_factory=lambda: ["text"])
     cost: ModelCost = Field(default_factory=ModelCost)
     context_window: int = 128000
     max_tokens: int = 8192
+    # How much one stored tool result may weigh (``state.store.session.weight``: a CJK
+    # character counts 1, anything else 0.25), as Codex's per-model
+    # ``truncation_policy``. None means the default
+    # (``spill.DEFAULT_TOOL_OUTPUT_WEIGHT``); either way at most 30% of the
+    # window (``spill.result_cap``).
+    tool_output_weight: int | None = None
     headers: dict[str, str] | None = None
     compat: (
         OpenAICompletionsCompat | 
@@ -537,6 +559,10 @@ class EventRetry(BaseModel):
     delay_ms: int = 0
     # What failed, in one short line, for the retry row's detail.
     error: str | None = None
+    # True when the request is sent again from its start after content had
+    # streamed: what this response showed so far is void, and its text and
+    # reasoning are no longer shown. Absent otherwise.
+    restart: bool | None = None
 
 
 class EventStructuredOutputEnd(BaseModel):

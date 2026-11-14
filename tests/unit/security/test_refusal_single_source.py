@@ -25,8 +25,6 @@ _BROKER_WHY = "the GUI broker's own lifecycle: a revoked handle or a stale attem
 
 # (file, finding) -> why it is not a refusal.
 ALLOWED: dict[tuple[str, str], str] = {
-    ("openprogram/programs/tools/agents/agent/agent/agent.py", "[agent refused]"):
-        "argument error: to= names the caller's own branch",
     ("openprogram/programs/tools/agents/send_message/send_message/send_message.py", "[send_message refused]"):
         "argument error: the target is the caller's own turn",
     ("openprogram/programs/tools/interaction/handoff.py", "[handoff refused]"):
@@ -46,8 +44,6 @@ ALLOWED: dict[tuple[str, str], str] = {
     ("openprogram/programs/_host/registry.py",
      "raise PermissionError(f'refusing to import unrecorded agentic source: {abs_path}')"):
         "validates a request path on hot reload; the model does not reach it",
-    ("openprogram/programs/applications/browser/resource.py", "raise PermissionError('web_session_owner_mismatch')"):
-        "a resource call from another owner's web session, not a decision about a tool call",
     ("openprogram/programs/applications/browser/pages.py",
      "raise PermissionError(str(command.get('rejection_code') or 'command_rejected'))"):
         "a page command the browser rejected, relayed to its caller",

@@ -222,7 +222,7 @@ class RequestReceipt:
             conn.execute("UPDATE usage_requests SET state = 'released' WHERE request_id = ? AND state = 'prepared'",
                          (self.request_id,))
 
-    def event(self, message):
+    def event(self, message, prefix=None):
         from openprogram.models.providers.types import Model, ModelCost
         data = self.metadata
         model = Model(id=data["model_id"], name=data["model_id"], api=data["api"], provider=data["provider"],
@@ -232,7 +232,8 @@ class RequestReceipt:
         if message.usage.requested_service_tier is None:
             message.usage.requested_service_tier = data["service_tier"]
         event = build_message_event(model, message, context=UsageContext(**data["context"]),
-                                    request_id=self.request_id, timestamp=data["created_at"])
+                                    request_id=self.request_id, timestamp=data["created_at"],
+                                    prefix=prefix)
         if event is None or (not event.tokens_known and event.cost_source == "unknown"
                              and not event.total_tokens and not event.cost_total):
             return None
@@ -244,8 +245,8 @@ class RequestReceipt:
                                              "reservation_id": data["job_reservation_id"] + ":token"})
         return event
 
-    def settle(self, message):
-        event = self.event(message)
+    def settle(self, message, prefix=None):
+        event = self.event(message, prefix)
         if event is None:
             self.refresh()
             return None

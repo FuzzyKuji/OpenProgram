@@ -274,3 +274,25 @@ def test_base_peer_out_of_range_treated_as_none(store, fake_dispatcher):
     )
     assert out.base_peer is None  # silently dropped
     assert 'role="base"' not in fake_dispatcher["prompt"]
+
+
+def test_a_merge_stopped_before_it_starts_reports_the_stop(store, fake_dispatcher, monkeypatch):
+    """A stop before the merge turn runs ends it as stopped and closes its attach cards."""
+    from openprogram.runtime.conversation.merge import process_merge_turn
+    from openprogram.runtime.conversation.production_driver.shared import STOPPED_BEFORE_START
+    from tests.support.stop_before_start import stop_every_turn_before_it_starts
+
+    stopped = stop_every_turn_before_it_starts(monkeypatch)
+    out = process_merge_turn(
+        target_session_id="p1",
+        peers=[{"session_id": "peer_a"}, {"session_id": "peer_b"}],
+        message="reconcile",
+        agent_id="main",
+    )
+
+    assert len(stopped) == 1
+    assert "prompt" not in fake_dispatcher
+    assert (out.failed, out.error, out.commit_id) == (True, STOPPED_BEFORE_START, None)
+    attaches = [m for m in store.get_messages("p1") if m.get("function") == "attach"]
+    assert attaches
+    assert {(m.get("status"), m.get("reason_code")) for m in attaches} == {("failed", "stopped_before_start")}

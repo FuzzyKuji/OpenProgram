@@ -8,9 +8,19 @@
 <thead class="sr"><tr><th scope="col">Command</th><th scope="col">Does</th></tr></thead>
 <tbody>
 <tr><th scope="row"><code translate="no">openprogram</code></th><td>Opens the chat. A bare run first asks terminal UI or web UI, and launches a worker if none is running.</td></tr>
-<tr><th scope="row"><code translate="no">--print PROMPT</code></th><td>One-shot prompt; prints the reply and exits</td></tr>
+<tr><th scope="row"><code translate="no">--print PROMPT</code></th><td>One-shot prompt; prints the reply and exits. Works in the current directory and runs until the model answers; a failure prints to stderr and exits non-zero. Run in its own process, it makes no model request beside the turn and leaves memory to the next worker: the conversation keeps the title cut from the prompt</td></tr>
+<tr><th scope="row"><code translate="no">--print</code>, stopped</th><td>Ctrl-C or SIGTERM stops the run, waits up to 30 seconds for it to stop (2 seconds once a second signal comes), writes the usage and transcript files and exits 128 plus the first signal's number (130 for Ctrl-C, 143 for SIGTERM, 129 for SIGHUP), whatever signal follows; a turn still busy then has its commands stopped</td></tr>
+<tr><th scope="row"><code translate="no">-p</code>, <code translate="no">--print -</code></th><td><code translate="no">-p</code> is <code translate="no">--print</code>. With no prompt or <code translate="no">-</code> the prompt comes from stdin; a prompt plus piped stdin adds the input as a <code translate="no">&lt;stdin&gt;</code> block. An empty prompt exits 2</td></tr>
+<tr><th scope="row"><code translate="no">--output-format FORMAT</code></th><td>What <code translate="no">--print</code> writes on stdout: <code translate="no">text</code> (the reply), <code translate="no">json</code> (one record of how the run ended) or <code translate="no">stream-json</code> (one event per line, init first, result last); <code translate="no">--include-partial-messages</code> adds text and reasoning deltas to the stream</td></tr>
+<tr><th scope="row"><code translate="no">--permission-mode MODE</code></th><td>Permission mode for this <code translate="no">--print</code> turn only: <code translate="no">ask</code>, <code translate="no">acceptEdits</code>, <code translate="no">plan</code>, <code translate="no">auto</code>, <code translate="no">bypass</code>. A call that would ask is refused, since nobody can answer; it shows on stderr and the run still exits 0</td></tr>
+<tr><th scope="row"><code translate="no">--continue</code>, <code translate="no">--session-id ID</code>, <code translate="no">--at REF</code></th><td><code translate="no">--continue</code> (<code translate="no">-c</code>) runs on this folder's latest conversation; <code translate="no">--session-id</code> starts a new one with that id and fails if it exists; <code translate="no">--at</code> with <code translate="no">--resume</code> or <code translate="no">--continue</code> picks a branch or a message to run after</td></tr>
+<tr><th scope="row"><code translate="no">--standalone</code>, <code translate="no">--no-project-binding</code>, <code translate="no">--no-web</code></th><td>Run in this process instead of the App's Worker; keep a new conversation in the profile and write nothing in the folder; run the turn without web tools or the provider's own search</td></tr>
 <tr><th scope="row"><code translate="no">--json-schema PATH</code></th><td>Requires JSON Schema output for <code translate="no">--print</code>; <code translate="no">-</code> reads stdin</td></tr>
-<tr><th scope="row"><code translate="no">--resume SESSION_ID</code></th><td>Resumes a session; ids from <code translate="no">openprogram sessions list</code> or the Web UI sidebar</td></tr>
+<tr><th scope="row"><code translate="no">--model PROVIDER/MODEL</code></th><td>Model for a <code translate="no">--print</code> run in a new conversation; the provider needs a key from <code translate="no">providers login &lt;provider&gt; --api-key-stdin</code></td></tr>
+<tr><th scope="row"><code translate="no">--effort LEVEL</code></th><td>Reasoning effort for one <code translate="no">--print</code> run: <code translate="no">off</code> (or <code translate="no">none</code>), <code translate="no">minimal</code>, <code translate="no">low</code>, <code translate="no">medium</code>, <code translate="no">high</code>, <code translate="no">xhigh</code>, <code translate="no">max</code>. Not saved; without it the Agent's effort applies</td></tr>
+<tr><th scope="row"><code translate="no">--usage-file PATH</code></th><td>After <code translate="no">--print</code>, writes tokens, cost, model, rounds and how the run ended to <code translate="no">PATH</code> as JSON</td></tr>
+<tr><th scope="row"><code translate="no">--transcript-file PATH</code></th><td>After <code translate="no">--print</code>, writes the turn to <code translate="no">PATH</code> as JSON lines: each model request with its tokens, the reply text, every tool call with its arguments and its result, in order, with times</td></tr>
+<tr><th scope="row"><code translate="no">--resume SESSION_ID</code></th><td>Resumes a session; ids from <code translate="no">openprogram sessions list</code> or the Web UI sidebar. With <code translate="no">--print</code>, an unknown id exits 1</td></tr>
 <tr><th scope="row"><code translate="no">--profile PROFILE</code></th><td>State directory <code translate="no">~/.openprogram-&lt;name&gt;/</code>; same as <code translate="no">OPENPROGRAM_PROFILE</code></td></tr>
 <tr><th scope="row"><code translate="no">--no-alt-screen</code></th><td>Inline TUI, keeps terminal scrollback</td></tr>
 <tr><th scope="row"><code translate="no">--screen-reader</code></th><td>Inline assistive-technology mode, no mouse tracking</td></tr>
@@ -21,7 +31,7 @@
 <table class="stack fixed">
 <thead class="sr"><tr><th scope="col">Command</th><th scope="col">Does</th></tr></thead>
 <tbody>
-<tr><th scope="row"><code translate="no">tui</code> (alias <code translate="no">chat</code>)</th><td>Launches the Ink terminal UI directly on Windows, macOS or Linux; terminals without raw input fall back to Rich. Takes <code translate="no">--print</code>, <code translate="no">--json-schema</code>, <code translate="no">--resume</code>, <code translate="no">--no-alt-screen</code>, <code translate="no">--screen-reader</code>.</td></tr>
+<tr><th scope="row"><code translate="no">tui</code> (alias <code translate="no">chat</code>)</th><td>Launches the Ink terminal UI directly on Windows, macOS or Linux; terminals without raw input fall back to Rich. Takes <code translate="no">--print</code>, <code translate="no">--json-schema</code>, <code translate="no">--model</code>, <code translate="no">--effort</code>, <code translate="no">--usage-file</code>, <code translate="no">--transcript-file</code>, <code translate="no">--resume</code>, <code translate="no">--no-alt-screen</code>, <code translate="no">--screen-reader</code>.</td></tr>
 <tr><th scope="row"><code translate="no">web</code></th><td>Starts the service and opens <code translate="no">http://localhost:18100</code>. <code translate="no">--web-port</code> (this run; default stored preference, then 18100), <code translate="no">--no-browser</code>. <code translate="no">web auth-url</code> prints an authenticated link.</td></tr>
 <tr><th scope="row"><code translate="no">acp</code></th><td>Agent Client Protocol server. <code translate="no">--agent</code>, <code translate="no">--permission</code>.</td></tr>
 </tbody>
@@ -98,17 +108,6 @@
 export OPENPROGRAM_MCP_TOKEN="&lt;paste the token printed above&gt;"
 openprogram mcp serve</code></pre>
 <p class="note"><code translate="no">token create</code> prints the raw token once and does not set the variable. If one exists, reuse the saved token.</p>
-<h3 id="browser">browser</h3>
-<table class="stack fixed">
-<thead class="sr"><tr><th scope="col">Verb</th><th scope="col">Does</th></tr></thead>
-<tbody>
-<tr><th scope="row"><code translate="no">install</code></th><td>Source checkouts: Playwright with Chromium, patchright, camoufox. Packaged releases reject it and already contain the default backend.</td></tr>
-<tr><th scope="row"><code translate="no">status</code></th><td>Installed state, sidecar Chrome, saved logins</td></tr>
-<tr><th scope="row"><code translate="no">refresh</code></th><td>Re-copies your Chrome profile after a new login</td></tr>
-<tr><th scope="row"><code translate="no">reset</code></th><td>Kills the sidecar, clears profile, logins and port file</td></tr>
-<tr><th scope="row"><code translate="no">list</code>, <code translate="no">rm</code></th><td>Saved logins under <code translate="no">browser-states/</code></td></tr>
-</tbody>
-</table>
 <h2 id="content-management">Content</h2>
 <h3 id="agents">agents</h3>
 <table class="stack fixed">
@@ -212,6 +211,7 @@ openprogram mcp serve</code></pre>
 <tbody>
 <tr><th scope="row"><code translate="no">execution</code></th><td><code translate="no">pause</code>, <code translate="no">continue</code>, <code translate="no">step</code>, <code translate="no">steer</code>, <code translate="no">cancel</code>, <code translate="no">fork</code>, <code translate="no">retry</code>, <code translate="no">wait-answer</code>, <code translate="no">wait-decline</code></td></tr>
 <tr><th scope="row"><code translate="no">jobs</code></th><td><code translate="no">list</code>, <code translate="no">get</code>: job resource views</td></tr>
+<tr><th scope="row"><code translate="no">transcript</code></th><td>Rebuilds a <code translate="no">--print</code> run's transcript from its stored state, as <code translate="no">--transcript-file</code> writes it, for a run killed before it wrote one. <code translate="no">--state DIR</code>, <code translate="no">--session ID</code>, <code translate="no">--output PATH</code></td></tr>
 <tr><th scope="row"><code translate="no">scheduler-worker</code> (<code translate="no">cron-worker</code>)</th><td>Foreground loop for one-time, recurring and monitor tasks. A failed daemon tick logs a warning and traceback to stderr, then evaluation continues at the next minute without replaying a failed initial <code translate="no">@reboot</code> tick. <code translate="no">--once</code> runs one tick and propagates failures; <code translate="no">--list</code> shows match state.</td></tr>
 </tbody>
 </table>

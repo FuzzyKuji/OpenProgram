@@ -51,7 +51,15 @@ def two_sessions(tmp_path, monkeypatch):
     from openprogram.state import store as store_mod
     sid_tok = run_control_binding._current_session_id.set("p1")
     turn_tok = store_mod._current_turn_id.set("a1")
+    # Every message is a tracked Job, so a queued one is admitted by the job
+    # runner. Build it on the empty store and stop it with the test.
+    monkeypatch.setattr("openprogram.runtime.jobs.runner.shared._broadcast", lambda *a, **k: None)
+    from openprogram.runtime.jobs import runner as runner_mod
+    runner = runner_mod.get_runner()
     yield s
+    runner_mod.shutdown_runner()
+    for thread in (runner._dispatcher_thread, runner._reconciler_thread, runner._budget_thread):
+        thread.join()
     run_control_binding._current_session_id.reset(sid_tok)
     store_mod._current_turn_id.reset(turn_tok)
 
@@ -314,7 +322,7 @@ def test_a_message_from_another_conversation_is_marked_and_still_returns(two_ses
     receiver's user, and its reply still comes back to the sender."""
     calls = _capture_async(monkeypatch)
     out = _send_message_impl("hello t1", to="t1:b1")
-    assert "come back to you automatically" in out
+    assert "comes back to you automatically" in out
     kw = calls[-1]
     assert kw["caller_session_id"] == "p1"
     assert "not from your user" in kw["prompt"]
@@ -328,3 +336,21 @@ def test_a_queued_message_from_another_conversation_is_marked(two_sessions, busy
     run_control.unregister_cancel_event("t1", busy_target)
     inbox.drain("t1")
     assert "not from your user" in calls[0]["prompt"]
+
+
+def test_a_queued_cross_session_message_continues_the_branch_it_was_sent_to(
+    two_sessions, busy_target, monkeypatch,
+):
+    """The target may select another branch while the message waits; the
+    message still continues the branch it addressed, from that branch's tip."""
+    s = two_sessions
+    calls = _capture_async(monkeypatch)
+    _send_message_impl("hello t1", to="t1:b1")
+    s.append_message("t1", {"id": "b9", "role": "assistant", "content": "another version",
+                            "timestamp": 0, "predecessor": "u2"})
+    s.set_head("t1", "b9")
+    s.commit_turn("t1", "another branch selected")
+    from openprogram.runtime.conversation import run_control
+    run_control.unregister_cancel_event("t1", busy_target)
+    assert inbox.drain("t1") == 1
+    assert calls[0]["branch_from"] == "b1"

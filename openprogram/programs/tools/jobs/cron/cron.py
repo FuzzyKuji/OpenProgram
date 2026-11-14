@@ -25,6 +25,7 @@ from openprogram.host._platform import locking
 from openprogram.programs._authoring.helpers import read_string_param
 from openprogram.programs._host.runtime import function
 import logging
+from openprogram.host._platform.filesystem import replace_file
 
 _log = logging.getLogger(__name__)
 
@@ -199,7 +200,7 @@ def _save(path: str, entries: list[dict[str, Any]]) -> None:
             handle.flush()
             os.fsync(handle.fileno())
         os.chmod(temporary, 0o600)
-        os.replace(temporary, path)
+        replace_file(temporary, path)
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
@@ -661,7 +662,6 @@ function(
     description=DESCRIPTION,
     parameters=SPEC["parameters"],
     toolset=["core"],
-    max_result_chars=40_000,
 )(execute)
 
 # Keep the former tool name callable for existing profiles and clients while
@@ -671,7 +671,6 @@ function(
     description="Compatibility alias for the scheduler tool.",
     parameters=SPEC["parameters"],
     toolset=["core"],
-    max_result_chars=40_000,
 )(execute)
 
 

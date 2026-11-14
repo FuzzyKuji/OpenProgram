@@ -62,7 +62,7 @@ def main():
             if not project_path:
                 raise ValueError("no project bound")
             from .catalog import contained
-            return contained(Path(project_path), relative).read_text()
+            return contained(Path(project_path), relative).read_text(encoding="utf-8")
 
         def write_file(self, relative, content):
             """Write a project file atomically; never outside the project or into .git."""

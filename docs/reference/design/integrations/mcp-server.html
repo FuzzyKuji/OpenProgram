@@ -12,7 +12,6 @@
 <tr><th scope="row"><code translate="no">prompt_cancel</code></th><td>Cancel an active prompt this connection started</td><td><code translate="no">reply</code></td><td>None</td></tr>
 <tr><th scope="row"><code translate="no">tools_list</code></th><td>List Runtime tools exposed to this client, with schemas</td><td><code translate="no">reply</code></td><td>None</td></tr>
 <tr><th scope="row"><code translate="no">tool_call</code></th><td>Call one exposed Runtime tool by name</td><td>Depends on the tool</td><td>Passes the three gates below</td></tr>
-<tr><th scope="row"><code translate="no">web_use</code></th><td>Observe or control an authorized browser Page. Listed only while the browser application provides its service</td><td><code translate="no">browser.control</code>, tier <code translate="no">mcp_browser</code></td><td>Exact Page only, see <a href="web-use.html">Web Use</a></td></tr>
 </tbody>
 </table>
 <p class="note">Not offered: tool registration, configuration rewriting, credential access, direct file tools. File reads go through <code translate="no">tool_call</code>. Peers: codex two tools, openclaw nine, hermes ten; exposing every tool is excluded.</p>
@@ -61,7 +60,7 @@
 <tbody>
 <tr><th scope="row">Authenticated local Web, CLI, TUI</th><td><code translate="no">principal_id=owner</code>, interactive</td><td><code translate="no">owner</code>, holds <code translate="no">approval.request</code></td><td>Entry point must build it; invalid authentication is rejected</td></tr>
 <tr><th scope="row">Paired channel account</th><td>Instance owner; speaker stored separately</td><td><code translate="no">paired</code></td><td>Message without a tier is rejected, not downgraded</td></tr>
-<tr><th scope="row">External MCP client</th><td>Instance owner; client id stored separately, <code translate="no">speaker_kind=client</code>, non-interactive</td><td><code translate="no">paired</code> ∩ allowlist; <code translate="no">mcp_browser</code> for <code translate="no">web_use</code></td><td>Connection rejected</td></tr>
+<tr><th scope="row">External MCP client</th><td>Instance owner; client id stored separately, <code translate="no">speaker_kind=client</code>, non-interactive</td><td><code translate="no">paired</code> ∩ allowlist</td><td>Connection rejected</td></tr>
 <tr><th scope="row">Continuation, subagent</th><td>Explicitly inherits owner</td><td>Caller's tier, never higher</td><td>State error: deny</td></tr>
 <tr><th scope="row">Cron trigger</th><td>Owner approved at creation</td><td>Job capability fixed at approval</td><td>Not recomputed as interactive</td></tr>
 </tbody>

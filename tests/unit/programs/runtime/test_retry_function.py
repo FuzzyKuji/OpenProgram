@@ -602,6 +602,9 @@ def test_new_run_rejected_while_run_active(monkeypatch):
     monkeypatch.setattr(
         "openprogram.interfaces.server.server._is_run_active", lambda sid: True
     )
+    monkeypatch.setattr(
+        "openprogram.interfaces.server.server._is_selected_run_active", lambda sid: True
+    )
 
     dispatched = []
     monkeypatch.setattr(

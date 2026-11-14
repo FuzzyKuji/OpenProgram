@@ -84,7 +84,7 @@ def _git(cwd: str, *args: str, timeout: int = _GIT_TIMEOUT) -> tuple[int, str, s
     try:
         proc = subprocess.run(
             ["git", "-C", cwd, *args],
-            capture_output=True, text=True, timeout=timeout, env=_env(),
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout, env=_env(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         return 1, "", str(exc)
@@ -255,7 +255,7 @@ def _open_pr(root: str, branch: str) -> Optional[dict[str, Any]]:
     try:
         proc = subprocess.run(
             [gh, "pr", "view", branch, "--json", "number,url,state,title,isDraft,statusCheckRollup"],
-            cwd=root, capture_output=True, text=True, timeout=8, env=_env(),
+            cwd=root, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=8, env=_env(),
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
@@ -513,7 +513,7 @@ def create_pull_request(path: object, *, base: object = None) -> dict[str, Any]:
     try:
         proc = subprocess.run(
             [gh, "pr", "create", "--fill", "--head", branch, "--base", target],
-            cwd=root, capture_output=True, text=True, timeout=_NETWORK_TIMEOUT, env=_env(),
+            cwd=root, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=_NETWORK_TIMEOUT, env=_env(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise FolderGitError(str(exc)) from exc

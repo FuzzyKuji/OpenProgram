@@ -343,7 +343,8 @@ def run_spawn_async(
     })
 
 
-def run_merge(*, session_id: str, msg_id: str, kwargs: dict, agent_id: str) -> bool:
+def run_merge(*, session_id: str, msg_id: str, kwargs: dict, agent_id: str,
+              branch_id: str | None = None) -> bool:
     """User-initiated ``/merge`` — runs ``process_merge_turn`` and
     broadcasts the result text into this (target) session.
 
@@ -351,6 +352,9 @@ def run_merge(*, session_id: str, msg_id: str, kwargs: dict, agent_id: str) -> b
     ``sid:head_id`` (specific branch tip). The parser passes strings
     through unmodified; we normalize here so same-session and
     cross-session merges share one entry point.
+
+    ``branch_id`` is the branch the ``/merge`` was typed on; the merge
+    reply continues it even if the person selects another meanwhile.
     """
     from openprogram.runtime import interface_link
     raw_tokens = list(kwargs.get("sub_sessions") or [])
@@ -397,6 +401,7 @@ def run_merge(*, session_id: str, msg_id: str, kwargs: dict, agent_id: str) -> b
             message=message,
             agent_id=agent_id,
             base_peer=base_peer,
+            target_branch_id=branch_id,
         )
     except Exception as e:  # noqa: BLE001
         interface_link.broadcast_chat_response(session_id, msg_id, {
@@ -421,7 +426,8 @@ def run_merge(*, session_id: str, msg_id: str, kwargs: dict, agent_id: str) -> b
     # SessionDB and would silently orphan the merge reply. Route the
     # move through _set_active_head, the single head-write primitive
     # that refreshes DB + mirror + message cache together.
-    if result.target_assistant_id:
+    from openprogram.runtime.conversation.merge import still_selected
+    if result.target_assistant_id and still_selected(session_id, result.branch_id):
         interface_link.set_active_head(session_id, result.target_assistant_id)
 
     extra_lines = []

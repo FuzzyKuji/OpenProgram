@@ -205,7 +205,7 @@ def _pid_for_class(name: str) -> int:
 
 def _proc_name(pid: int) -> str:
     try:
-        return Path(f"/proc/{pid}/comm").read_text().strip()
+        return Path(f"/proc/{pid}/comm").read_text(encoding="utf-8").strip()
     except OSError:
         return ""
 
@@ -223,7 +223,7 @@ def _descendants(pid: int) -> set[int]:
     for entry in os.listdir("/proc"):
         if entry.isdigit():
             try:
-                stat = Path(f"/proc/{entry}/stat").read_text()
+                stat = Path(f"/proc/{entry}/stat").read_text(encoding="utf-8")
                 parents[int(entry)] = int(stat.rsplit(")", 1)[1].split()[1])
             except (OSError, ValueError, IndexError):
                 continue

@@ -6,7 +6,7 @@ configured. Channel polling remains an optional add-on.
 Public functions:
 
     spawn_detached()      — fork a background worker, return immediately
-    stop_worker()         — SIGTERM the live worker (escalates to SIGKILL)
+    stop_worker()         — ask the live worker to stop (escalates to a kill)
     restart_worker()      — stop + spawn_detached
     print_status()        — human-readable status report
     current_worker_pid()  — PID of the live worker, or None
@@ -28,6 +28,7 @@ from openprogram.host._platform.process_ownership import no_window_creation_flag
 
 from . import paths
 from .lock import is_held_by, read_holder_pid
+from openprogram.host._platform.filesystem import replace_file
 
 _log = logging.getLogger(__name__)
 
@@ -215,6 +216,45 @@ def _looks_like_worker_process(pid: int) -> bool:
     return "openprogram" in command and "worker run" in command
 
 
+# stop request
+
+
+def request_stop(pid: int) -> None:
+    """Ask the worker to shut down in order: checkpoints, channels, server.
+
+    POSIX sends SIGTERM. Windows has no signal one process can send another:
+    ``os.kill`` there is ``TerminateProcess``, which ends the worker with
+    nothing run, its restart checkpoints unwritten and its web server child
+    left holding the port. The request is a file naming the PID instead; the
+    worker's main loop reads it (:func:`stop_requested`).
+    """
+    if sys.platform != "win32":
+        os.kill(pid, signal.SIGTERM)
+        return
+    if not _process_alive(pid):
+        raise ProcessLookupError(pid)
+    target = paths.stop_request_path()
+    staged = target.with_name(f"{target.name}.{os.getpid()}.tmp")
+    staged.write_text(f"{pid}\n", encoding="utf-8")
+    replace_file(staged, target)
+
+
+def stop_requested() -> bool:
+    """Whether a stop was asked of this process. Called by the running worker."""
+    try:
+        raw = paths.stop_request_path().read_text(encoding="utf-8").strip()
+    except OSError:
+        return False
+    return raw == str(os.getpid())
+
+
+def clear_stop_request() -> None:
+    try:
+        paths.stop_request_path().unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 # start / stop
 
 
@@ -283,8 +323,8 @@ def use_named_runtime_for_cli() -> None:
     os.execv(executable, [executable, *flags, "-m", "openprogram", *sys.argv[1:]])
 
 
-def _detached_worker_command(flags=None) -> list[str]:
-    """Preserve isolation and bytecode policy across the worker re-exec."""
+def _detached_worker_command(flags=None, *, windows: bool | None = None) -> list[str]:
+    """Preserve isolation, bytecode policy and Windows' UTF-8 mode across the worker re-exec."""
     from openprogram.operations.self_update.versions.layout import current_runtime
 
     runtime = current_runtime()
@@ -297,6 +337,9 @@ def _detached_worker_command(flags=None) -> list[str]:
         command.append("-I")
     if active_flags.dont_write_bytecode:
         command.append("-B")
+    # The Windows launchers start Python with -X utf8, and -I drops PYTHONUTF8.
+    if (os.name == "nt" if windows is None else windows) and getattr(active_flags, "utf8_mode", 0):
+        command.extend(["-X", "utf8"])
     command.extend(["-u", "-m", "openprogram", "worker", "run"])
     return command
 
@@ -329,7 +372,7 @@ def rotate_worker_log(path: Path | None = None, *, limit_bytes: int = WORKER_LOG
             if index == keep:
                 source.unlink()
             else:
-                source.replace(log_file.with_name(f"{log_file.name}.{index + 1}"))
+                replace_file(source, log_file.with_name(f"{log_file.name}.{index + 1}"))
         with open(log_file, "rb") as current, open(log_file.with_name(f"{log_file.name}.1"), "wb") as previous:
             while chunk := current.read(1024 * 1024):
                 previous.write(chunk)
@@ -478,7 +521,7 @@ def stop_worker(*, prefer_service: bool = True) -> int:
         return 0
     print(f"Stopping openprogram (PID {pid})...")
     try:
-        os.kill(pid, signal.SIGTERM)
+        request_stop(pid)
     except ProcessLookupError:
         print("Process already gone.")
         clear_pid_file()
@@ -487,7 +530,13 @@ def stop_worker(*, prefer_service: bool = True) -> int:
     except PermissionError:
         print(f"Can't signal PID {pid} — owned by another user.")
         return 1
+    try:
+        return _await_stop(pid)
+    finally:
+        clear_stop_request()
 
+
+def _await_stop(pid: int) -> int:
     deadline = time.time() + 5.0
     while time.time() < deadline:
         if not _process_alive(pid):
@@ -495,7 +544,7 @@ def stop_worker(*, prefer_service: bool = True) -> int:
             return 0
         time.sleep(0.2)
 
-    print(f"PID {pid} didn't exit after SIGTERM; force-killing.")
+    print(f"PID {pid} didn't exit when asked; force-killing.")
     # kill_process_tree handles both POSIX SIGKILL and Windows taskkill;
     # also takes out any uvicorn / channel-bot children the worker
     # spawned. signal.SIGKILL doesn't exist on Windows Python so we

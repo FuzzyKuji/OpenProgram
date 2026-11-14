@@ -136,10 +136,24 @@ test("the overview sums the sub-agents up under the main agent", async () => {
     run("j_done", "completed", now - 50, { parent_execution_id: "done", display: { kind: "job_agent", label: "Research" } }),
   ], async host => {
     const text = host.textContent;
-    assert.match(text, /AgentsMain agentRunning · 2 min · 3 sub-agentsPrograms and commandsScheduled tasks$/);
+    assert.match(text, /AgentsMain agentRunning · 2 min · 3 sub-agents$/);
     assert.doesNotMatch(text, /Research|Form filler|Fix page close/);
     assert.doesNotMatch(text, /check and fix it|fill the form|what happened/);
   }, [], {}, { calls: [agentCall] });
+});
+
+test("a conversation whose turns left no execution record still lists its main agent, and empty groups are not shown", async () => {
+  useSessionStore.setState({ conversations: { session: { id: "session", title: "NeurIPS trip", updated_at: now - 60 } } });
+  try {
+    await mounted([], async (host, click) => {
+      assert.match(host.textContent, /AgentsMain agent\d{1,2}:\d{2}/);
+      assert.doesNotMatch(host.textContent, /Programs and commands|Scheduled tasks/);
+      await click("Main agent");
+      assert.match(host.textContent, /NeurIPS trip/);
+    });
+  } finally {
+    useSessionStore.setState({ conversations: { session: { id: "session", title: "NeurIPS trip" } } });
+  }
 });
 
 test("ongoing shell calls and programs keep their level-1 rows, and open their own pages", async () => {

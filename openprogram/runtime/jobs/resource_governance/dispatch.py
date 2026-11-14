@@ -378,6 +378,14 @@ class DispatchOperations:
         ]
 
 
+    def dispatch_published(self, job_id: str) -> bool:
+        """Whether a deferred Job has already been handed to the dispatcher."""
+        row = self._admission(self._read(), job_id)
+        if row is None or row["state"] == "preparing":
+            return False
+        return not (row["state"] == "queued" and not row["dispatch_ready"])
+
+
     def deferred_dispatches(self) -> list[tuple[str, str]]:
         """Return admitted Jobs waiting for their inbox intent."""
         rows = self._read().rows(

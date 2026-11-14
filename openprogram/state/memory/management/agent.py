@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
-import re
 import shutil
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
@@ -47,11 +45,11 @@ def render_conversation(
 
 
 def _baseline(workspace: MemoryWorkspace) -> tuple[Any, ...] | None:
-    """Snapshot the stage, or None if it cannot be parsed.
+    """Snapshot the stage, or None if it cannot be read.
 
-    A turn whose edits were rejected leaves the stage rolled back, but a
-    malformed file that reached disk another way would make this raise. That
-    is a reason to skip committing, never to abort the whole build.
+    The stage is read the way memory is read, so a file another tool wrote
+    never makes this fail; only an unreadable stage does, and that is a
+    reason to skip committing, never to abort the whole build.
     """
     try:
         return workspace.baseline()
@@ -131,13 +129,6 @@ def _record_trajectory(
         handle.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
-_BLOCK_ID = re.compile(r"(?m)\s\^([A-Za-z0-9-]+)\s*$")
-
-# The broken files a repair last failed on, per workspace. The same files
-# are not handed to another agent until they change: every waiting write
-# would otherwise pay for the same failed repair.
-_FAILED_REPAIRS: dict[str, str] = {}
-
 # How many times a turn whose staged edits fail the checks is sent back to
 # fix them in place before the commit decides.
 FIX_ROUNDS = 3
@@ -207,103 +198,6 @@ def _fix_in_place(
         )
 
 
-def repair_committed_topics(
-    memory_dir: str | Path,
-    *,
-    agent: ClaudeCodeAgent,
-    config: MemoryConfig | None = None,
-    history_dir: str | Path | None = None,
-    usage_logger: Any | None = None,
-) -> bool:
-    """Have an agent fix committed Topic files that no longer parse.
-
-    Only an edit made outside OpenProgram can leave one: everything the
-    Runtime installs is checked first. Until it is fixed no write can be
-    checked against the tree, so this runs before any writer does.
-    Returns whether there was anything to fix; raises a retryable error
-    when it stays broken, so the next write tries the repair again.
-    """
-    from ..markdown import topic_tree_problems
-    from .transaction import git_commit_state
-
-    memory_dir = Path(memory_dir)
-    units, problems = topic_tree_problems(memory_dir / "topics")
-    if not problems:
-        return False
-    listing = "\n".join(
-        f"- topics/{path}: {problem}" for path, problem in sorted(problems.items())
-    )
-    broken = hashlib.sha256("\0".join(
-        f"{path}\0{(memory_dir / 'topics' / path).read_text(encoding='utf-8')}"
-        for path in sorted(problems)
-    ).encode()).hexdigest()
-    if _FAILED_REPAIRS.get(str(memory_dir)) == broken:
-        raise TransactionError(
-            "INVALID_TOPIC_FORMAT",
-            f"committed Topic files stay broken ({listing}); the repair "
-            "is tried again once they change",
-            retryable=True,
-        )
-    if config is None:
-        from .config import load_memory_config
-
-        config = load_memory_config()
-    history_dir = memory_dir if history_dir is None else history_dir
-    task = (
-        "These committed Topic files no longer follow the memory format, "
-        "most likely after a hand edit:\n\n"
-        f"{listing}\n\n"
-        "Fix each file so it parses again. Keep its facts and wording; "
-        "repair only the format: footnote markers and definitions, block "
-        "IDs, source links. Do not touch any other file."
-    )
-    workspace = MemoryWorkspace(memory_dir, config=config)
-    try:
-        # The files that still parse are the baseline, and the broken ones
-        # are checked as new. Their block IDs are kept all the same: links
-        # elsewhere point at them.
-        kept_ids = {unit.memory_id for unit in units}
-        for path in problems:
-            kept_ids.update(_BLOCK_ID.findall(
-                (memory_dir / "topics" / path).read_text(encoding="utf-8")
-            ))
-        baseline = (
-            units,
-            kept_ids,
-            workspace._topic_fingerprints(workspace.stage_dir / "topics"),
-        )
-        workspace.turn_baseline = baseline
-        audit: list[dict[str, Any]] = []
-
-        def run_turn(*, prompt: str, stage: str) -> Any:
-            return _turn(
-                agent, workspace, audit, prompt=prompt,
-                system_prompt=SYSTEM_PROMPT, config=config,
-                history_dir=history_dir, stage=stage,
-                usage_logger=usage_logger,
-            )
-
-        run_turn(prompt=task, stage="repair-format")
-        _fix_in_place(workspace, baseline, task, run_turn, "repair-format")
-        error = _commit_turn(workspace, baseline, audit)
-        if error is None and not workspace.committed:
-            error = "the repair changed nothing"
-    finally:
-        shutil.rmtree(workspace.stage_dir, ignore_errors=True)
-    if error is not None:
-        _FAILED_REPAIRS[str(memory_dir)] = broken
-        # The broken files are not the conversation's fault: its write
-        # waits for the next repair instead of being given up on.
-        raise TransactionError(
-            "INVALID_TOPIC_FORMAT",
-            f"committed Topic files stay broken ({listing}): {error}",
-            retryable=True,
-        )
-    _FAILED_REPAIRS.pop(str(memory_dir), None)
-    git_commit_state(memory_dir, "memory: repair topic format")
-    return True
-
-
 def _run_agent(
     memory_dir: str | Path,
     *,
@@ -323,10 +217,6 @@ def _run_agent(
     # Verification runs against a throwaway copy of the memory. Its history
     # belongs with the real workspace, or it is deleted with the copy.
     history_dir = memory_dir if history_dir is None else history_dir
-    repair_committed_topics(
-        memory_dir, agent=agent, config=config,
-        history_dir=history_dir, usage_logger=usage_logger,
-    )
     workspace = MemoryWorkspace(
         memory_dir,
         config=config,

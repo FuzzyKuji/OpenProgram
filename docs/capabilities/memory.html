@@ -31,7 +31,8 @@
 <tbody>
 <tr><th scope="row">Writer model unusable (rejected sign-in, plan without access, unknown model, exhausted plan)</th><td>Switches to the default agent's model, then the last used model</td></tr>
 <tr><th scope="row">Edits fail format checks</th><td>Sent back to fix in place up to three times, then redoes the turn once</td></tr>
-<tr><th scope="row">Topic file broken by a hand edit</th><td>A repair agent fixes its format before new writes, keeping facts and block IDs, with its own history entry</td></tr>
+<tr><th scope="row">Topic files written by you or another tool</th><td>Remembered as written: search finds them and recall can bring them in, marked "added by person" or "outside file" instead of a source. Memory never rewrites a file another tool wrote; a file that is not text is named once on the Memory page and the rest of memory goes on</td></tr>
+<tr><th scope="row">Citing a message by hand</th><td>End the paragraph with a footnote whose source is <code translate="no">[keyword](/s/&lt;conversation&gt;#&lt;message&gt;)</code>: the conversation ID ends the link <strong>Copy link</strong> copies (keep only the <code translate="no">/s/…</code> part), the message ID is what <strong>Copy ID</strong> copies for its node in the context graph. A conversation with memory off cannot be cited.</td></tr>
 </tbody>
 </table>
 <details>
@@ -40,7 +41,7 @@
 <thead class="sr"><tr><th scope="col">Case</th><th scope="col">Result</th></tr></thead>
 <tbody>
 <tr><th scope="row">Last run still failed</th><td>Red strip at the top of Memory: why, last write, turns waiting</td></tr>
-<tr><th scope="row">Retried on its own</th><td>Strip only</td></tr>
+<tr><th scope="row">Retried on its own</th><td>Strip only. An outage or usage limit waits from 5 minutes up to 6 hours and is never given up on. A failure in the conversation is tried three times, an hour apart, then waits for the conversation to change. A sign-in failure, or a memory the writer cannot start from, stops writing once until the sign-in, the configuration or that memory changes</td></tr>
 <tr><th scope="row">Nothing will retry</th><td>Strip plus one notice, repeated only if the reason changes</td></tr>
 <tr><th scope="row">Unwritten turns</th><td>Retried</td></tr>
 <tr><th scope="row">Nothing worth keeping</th><td>Counts as written</td></tr>

@@ -99,32 +99,6 @@ def test_linux_port_probe_falls_back_when_lsof_is_missing(monkeypatch) -> None:
     assert processes.pids_on_port(18100) == [18100]
 
 
-def test_posix_process_match_is_literal_and_skips_the_caller(monkeypatch) -> None:
-    killed: list[int] = []
-    monkeypatch.setattr(sys, "platform", "linux")
-    monkeypatch.setattr(os, "getpid", lambda: 10)
-    monkeypatch.setattr(
-        processes,
-        "_posix_process_command_lines",
-        lambda: {
-            10: "openprogram test runner",
-            20: "chrome --user-data-dir=/home/me/.openprogram-a[1]/chrome-profile",
-            30: "chrome --user-data-dir=/home/me/.openprogram-a1/chrome-profile",
-        },
-    )
-    monkeypatch.setattr(
-        processes,
-        "kill_process_tree",
-        lambda pid: killed.append(pid) or True,
-    )
-
-    processes.kill_processes_matching(
-        ["chrome"], "/home/me/.openprogram-a[1]/chrome-profile",
-    )
-
-    assert killed == [20]
-
-
 def test_worker_pid_requires_a_live_lock_or_matching_command(monkeypatch) -> None:
     from openprogram.operations.worker import lifecycle
 

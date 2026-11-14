@@ -20,6 +20,7 @@ from pathlib import Path
 
 from openprogram.state.paths import get_active_profile
 from openprogram.operations.worker import paths as worker_paths
+from openprogram.host._platform.filesystem import replace_file
 
 UNIT_NAME = "openprogram-worker.service"
 
@@ -155,7 +156,7 @@ def _write_unit(unit_file: Path, content: bytes) -> None:
             handle.write(content)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temporary, unit_file)
+        replace_file(temporary, unit_file)
     finally:
         temporary.unlink(missing_ok=True)
 

@@ -31,6 +31,13 @@ class UsageContext:
     goal_run_id: Optional[str] = None
     goal_session_id: Optional[str] = None
     execution_id: Optional[str] = None
+    # Which prompt a conversation's call is made with, when it is not the
+    # conversation's own (a Goal verification turn): requests are compared
+    # for prompt-cache breaks only with requests of the same lane.
+    prefix_lane: Optional[str] = None
+    # The conversation branch the turn runs on: a request is compared with
+    # the previous request of its own branch.
+    branch_id: Optional[str] = None
 
 
 _current: contextvars.ContextVar[UsageContext] = contextvars.ContextVar(
@@ -57,6 +64,21 @@ def bind_goal(identity, *, session_id: str):
 
 def current_usage_context() -> UsageContext:
     return _current.get()
+
+
+def call_context() -> UsageContext:
+    """The current context with the execution this call is made in.
+
+    The execution bound to the running context (the turn's driver binds it)
+    names the call, so a run's usage reads back by its execution tree. A
+    call on a thread of its own, which starts from an empty context (the
+    title the Worker writes beside a finished turn), names none.
+    """
+    from openprogram.state.execution_facts import current_execution_id
+
+    base = _current.get()
+    execution_id = current_execution_id() or base.execution_id
+    return base if execution_id == base.execution_id else replace(base, execution_id=execution_id)
 
 
 @contextmanager
@@ -100,13 +122,11 @@ def snapshot() -> dict:
 
 def request_context(session_id: str | None = None) -> UsageContext:
     """Capture trusted turn identity, never infer it from the current session Goal."""
-    from openprogram.state.execution_facts import current_execution_id
     from openprogram.models.usage.goal_port import turn_goal
-    base = _current.get()
+    base = call_context()
     bound = turn_goal.get()
     effective = base.session_id or session_id
-    updates = {"session_id": effective,
-               "execution_id": current_execution_id() or base.execution_id}
+    updates = {"session_id": effective}
     if bound is not None:
         updates.update(goal_id=bound.get("goal_id"), goal_revision=bound.get("revision"),
                        goal_run_id=bound.get("run_id"),
@@ -130,6 +150,8 @@ def apply_snapshot(data: Optional[dict]) -> None:
         goal_run_id=data.get("goal_run_id"),
         goal_session_id=data.get("goal_session_id"),
         execution_id=data.get("execution_id"),
+        prefix_lane=data.get("prefix_lane"),
+        branch_id=data.get("branch_id"),
     ))
 
 

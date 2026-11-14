@@ -53,8 +53,8 @@
 <h2 id="publishing-a-version">发布一个版本</h2>
 <pre><code translate="no">scripts/publish-github.sh -m "Sidebar run status, Launchpad, Agent cards" --dry-run
 scripts/publish-github.sh -m "Sidebar run status, Launchpad, Agent cards"
-scripts/publish-github.sh -m "Windows and Linux Apps" --tag v1.1.0 --dry-run
-scripts/publish-github.sh -m "Windows and Linux Apps" --tag v1.1.0</code></pre>
+scripts/publish-github.sh -m "Windows and Linux Apps" --tag v1.2.0 --dry-run
+scripts/publish-github.sh -m "Windows and Linux Apps" --tag v1.2.0</code></pre>
 
 <table class="stack fixed">
 <thead class="sr"><tr><th scope="col">参数</th><th scope="col">作用</th></tr></thead>
@@ -92,12 +92,17 @@ scripts/publish-github.sh -m "Windows and Linux Apps" --tag v1.1.0</code></pre>
 
 <h2 id="what-a-release-builds">一次发布构建什么</h2>
 <p>Release 工作流由推送的标签触发。每个平台分支彼此独立。</p>
+<p>标签不会移动，所以发版前可以先演练。不带 <code translate="no">--tag</code> 发布 <code translate="no">main</code>，再运行 <code translate="no">gh workflow run release.yml -f tag=vX.Y.Z -f rehearse=true</code>：每个分支都从 <code translate="no">main</code> 构建，跑同样的检查，什么都不发布。</p>
+<p><code translate="no">gh workflow run windows-install-smoke.yml -f tag=vX.Y.Z -f run_id=&lt;演练运行&gt;</code> 在 Windows runner 上安装那次运行的 Windows 文件。两者都通过后，<code translate="no">scripts/publish-github.sh --source refs/publish/last --tag vX.Y.Z</code> 给同一个提交打标签；不带 <code translate="no">--source</code> 时，中间若有过晋升，会变成一个没演练过的新版本。</p>
 <table class="stack fixed">
 <thead class="sr"><tr><th scope="col">项目</th><th scope="col">行为</th></tr></thead>
 <tbody>
 <tr><th scope="row">失败的分支</th><td>只缺自己的文件；发布任务上传成功的部分</td></tr>
+<tr><th scope="row">薄 App 缺更新文件</th><td>该平台的更新文件没构建出来时，Windows 或 Linux App 分支在构建前先报错，但仍然构建并检查 App，同一次运行就能看到其他问题；发布时去掉这个 App 并写明原因</td></tr>
+<tr><th scope="row">Windows 检查</th><td>App 分支：先跑 <code translate="no">scripts/release/windows-contracts.txt</code> 里的平台契约测试，再用安装包安装、启动到 worker 健康、做一次工具调用、卸载并保留数据。契约测试失败不会拦住构建和安装检查，由上传前的一步把这个 App 去掉。运行时分支：安装好的命令做一次工具调用。失败只缺这一个包。Windows 分支失败时把日志存为 <code translate="no">diagnostics-windows-*</code> 工件，不会发布</td></tr>
 <tr><th scope="row"><code translate="no">release-manifest.json</code></th><td>只列实际存在的文件</td></tr>
 <tr><th scope="row">发布说明</th><td>多出 “Not in this release” 一节，写明缺什么、为什么缺</td></tr>
+<tr><th scope="row">计划内的包缺失</th><td>发行版公开之后，发布任务失败并逐个列出，运行结果不会看起来完整</td></tr>
 <tr><th scope="row">拒绝发布</th><td>只有 wheel 缺失，或者 macOS 和 Linux 的命令行运行时一个都没有时</td></tr>
 </tbody>
 </table>
@@ -157,6 +162,6 @@ scripts/publish-github.sh -m "Windows and Linux Apps" --tag v1.1.0</code></pre>
 <thead class="sr"><tr><th scope="col">状态</th><th scope="col">内容</th></tr></thead>
 <tbody>
 <tr><th scope="row">已实现</th><td><code translate="no">scripts/publish-github.sh</code>，含 dry run、<code translate="no">--no-push</code>、<code translate="no">--tag</code>、凭据扫描和 <code translate="no">refs/publish/last</code>；两个 hook；<code translate="no">AGENTS.md</code> 中的规则；Release 工作流的独立分支</td></tr>
-<tr><th scope="row">尚未运行</th><td>Release 工作流及其 Windows、Linux 分支还没有在 GitHub Actions 上真正跑过</td></tr>
+<tr><th scope="row">尚未运行</th><td>一次完整的 Release 运行。目前唯一的一次是 v1.1.0，发布了 macOS 和 Linux App 以及全部命令行运行时；Windows 安装包构建出来但没有带上，因为 Windows 更新文件失败。1.2.0 的演练跑过一次：发布任务的检查列出了没通过的三个 App（两个 macOS 任务卡在签名，Windows 卡在 App 冒烟）。Windows install smoke 工作流还没有运行过</td></tr>
 </tbody>
 </table>

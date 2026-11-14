@@ -35,7 +35,18 @@ def repair_guidance(error: str) -> str:
             "rewrite a paragraph that is already in memory, keep its existing "
             "`[^e-...]` citation and definition instead of writing a new one."
         )
-    if "memory block ID required" in error or "footnote required" in error:
+    if "written outside OpenProgram" in error:
+        return (
+            "That file was written outside OpenProgram and is read-only. "
+            "Leave it exactly as it was (no edit, move or deletion, and no "
+            "link to its paragraphs) and put the facts in a Topic file of "
+            "memory's own."
+        )
+    if (
+        "memory block ID required" in error
+        or "footnote required" in error
+        or "cites no chat message" in error
+    ):
         return (
             "Every paragraph in a Topic file must end with an evidence "
             "citation. Bullet lists and uncited prose are not allowed there: "

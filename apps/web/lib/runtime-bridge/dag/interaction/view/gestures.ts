@@ -9,6 +9,7 @@
  *     a left press on a node is a click on it)
  */
 
+import { hasPrimaryModifier } from "../../../../shortcut-keys";
 import { wheelKind } from "./wheel";
 import { SelectionBand, clearSelection, releaseEditableFocus, select } from "../selection/selection";
 import { _viewScale, _viewTx, _viewTy, setView } from "../../store/globals";
@@ -123,7 +124,7 @@ export function wireGestures(host: HTMLElement, camera: Camera): void {
       band = {
         b: new SelectionBand(host, { x: e.clientX, y: e.clientY }),
         id: e.pointerId, sx: e.clientX, sy: e.clientY, moved: false,
-        add: e.shiftKey || e.metaKey,
+        add: e.shiftKey || hasPrimaryModifier(e),
       };
       return;
     }

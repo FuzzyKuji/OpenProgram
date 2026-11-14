@@ -81,35 +81,15 @@ for _, _, _schema_json in _TOOL_DEFINITIONS:
     Draft202012Validator.check_schema(json.loads(_schema_json))
 
 
-_WEB_USE_DESCRIPTION = "Observe or control an authorized OpenProgram browser Page."
-
-
-def _browser():
-    """The browser service; ``web_use`` exists only while it is provided."""
-    from openprogram.programs._host import services as _services
-    return _services.lookup("browser")
-
-
-def _web_use_schema() -> dict[str, Any] | None:
-    browser = _browser()
-    return browser.web_use_parameters() if browser is not None else None
-
-
 def get_mcp_tools() -> tuple[mcp_types.Tool, ...]:
-    tools = [
+    return tuple(
         mcp_types.Tool(
             name=name,
             description=description,
             inputSchema=json.loads(schema_json),
         )
         for name, description, schema_json in _TOOL_DEFINITIONS
-    ]
-    web_use = _web_use_schema()
-    if web_use is not None:
-        tools.append(mcp_types.Tool(
-            name="web_use", description=_WEB_USE_DESCRIPTION, inputSchema=web_use,
-        ))
-    return tuple(tools)
+    )
 
 
 def _error(code: int, message: str) -> McpError:
@@ -147,12 +127,6 @@ def validate_tool_call(
 ) -> dict[str, Any]:
     """Validate one fixed wrapper call and return a detached normalized dict."""
     validator = _VALIDATORS.get(name)
-    browser = None
-    if name == "web_use":
-        browser = _browser()
-        if browser is None:
-            raise _error(mcp_types.METHOD_NOT_FOUND, "web_use: the browser is not enabled")
-        validator = Draft202012Validator(browser.web_use_parameters())
     if validator is None:
         raise _error(mcp_types.METHOD_NOT_FOUND, "unknown MCP wrapper tool")
     if arguments is None:
@@ -170,8 +144,6 @@ def validate_tool_call(
 
     if name == "tool_call" and normalized.get("arguments") is None:
         normalized["arguments"] = {}
-    if browser is not None:
-        normalized = browser.normalize_web_use_arguments(normalized)
 
     errors = sorted(
         validator.iter_errors(normalized),

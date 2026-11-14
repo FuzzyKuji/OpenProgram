@@ -33,7 +33,7 @@ def _supervisor_command(store, process_id, launch):
         return command
     # setsid does not move a child out of a systemd service's cgroup. Keep
     # worker KillMode untouched and assign only this supervisor to a new scope.
-    cgroups = Path("/proc/self/cgroup").read_text()
+    cgroups = Path("/proc/self/cgroup").read_text(encoding="utf-8")
     services = [part for line in cgroups.splitlines() for part in line.split(":", 2)[-1].split("/")
                 if part.endswith(".service") and not part.startswith("user@")]
     if not services:

@@ -48,7 +48,8 @@ class UsageState:
     source: str = "estimate"  # estimate | provider | cached
 
     def cache_hit_rate(self) -> float:
-        denom = self.last_prompt_tokens + self.last_cache_read_tokens
+        denom = (self.last_prompt_tokens + self.last_cache_read_tokens
+                 + self.last_cache_write_tokens)
         if denom <= 0:
             return 0.0
         return self.last_cache_read_tokens / denom
@@ -112,6 +113,17 @@ class TurnPrep:
     tool_results_redacted: int = 0
     tokens_freed_by_microcompact: int = 0
     summary_id: Optional[str] = None
+    # ``{section id: note}``: the last note of each section the rendered
+    # history shows (absent: none, so the system prompt's section is what
+    # the model has; ``context.turn_context``). None: the engine did not
+    # report it (a TurnPrep built elsewhere), and the turn then assumes any
+    # stored note may be shown.
+    section_notes: Optional[dict] = None
+    # What the rendered history shows of earlier per-turn notes (the last
+    # date, the last full Goal note, plan-mode notes, todo use:
+    # ``turn_context.turn_view``). None: not reported, and every such note
+    # is sent as if none were in view.
+    turn_view: Optional[dict] = None
 
     # Trace breadcrumbs for the compaction decision path
     decision_path: list[str] = field(default_factory=list)

@@ -1,5 +1,6 @@
 "use client";
 
+import { isMacPlatform } from "@/lib/shortcut-keys";
 import { useRef, useState } from "react";
 import type { ReactElement, ReactNode, RefObject } from "react";
 import { Globe, Lock, Search } from "lucide-react";
@@ -23,7 +24,7 @@ export function ToolbarTip({
   shortcut?: { key: string; shift?: boolean };
   children: ReactElement;
 }) {
-  const mac = typeof navigator !== "undefined" && /Mac/.test(navigator.platform);
+  const mac = isMacPlatform();
   return (
     <HoverTip
       side="top"

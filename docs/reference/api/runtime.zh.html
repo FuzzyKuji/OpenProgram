@@ -45,7 +45,7 @@ finally:
 <tr><th scope="row"><code translate="no">max_retries</code></th><td>解析后的重试额度</td></tr>
 <tr><th scope="row"><code translate="no">system</code></th><td>可赋值的系统提示；<code translate="no">method_options[...]["system"]</code> 在单次调用中设置</td></tr>
 <tr><th scope="row"><code translate="no">thinking_level</code></th><td><code translate="no">"off"</code>（默认）、<code translate="no">"low"</code>、<code translate="no">"medium"</code>、<code translate="no">"high"</code>、<code translate="no">"xhigh"</code>；传给 provider</td></tr>
-<tr><th scope="row"><code translate="no">session_id</code></th><td>跨 <code translate="no">exec()</code> 稳定的 <code translate="no">"op-&lt;hex&gt;"</code>，作提示缓存 key</td></tr>
+<tr><th scope="row"><code translate="no">session_id</code></th><td>这个 Runtime 自己的 <code translate="no">"op-&lt;hex&gt;"</code>。不作提示缓存 key 发出：模型、系统提示和工具都相同的调用共用一个由它们算出的 id，跨 Runtime 也一样。给它赋值即自己指定 key</td></tr>
 <tr><th scope="row"><code translate="no">on_stream</code></th><td><code translate="no">fn(event_dict)</code>，接收 text、thinking、tool_use、tool_result 事件</td></tr>
 <tr><th scope="row"><code translate="no">last_usage</code></th><td>上次调用的 <code translate="no">{input_tokens, output_tokens, total_tokens, cache_read, cache_create, ...}</code></td></tr>
 </tbody>

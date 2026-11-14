@@ -412,6 +412,7 @@ class ParserChange:
     root_options: frozenset[str]                     # root flags changed: every command carries them
     removed: frozenset[tuple[tuple[str, ...], str]]  # (command path, verb or option string) gone from it
     vanished: frozenset[str]                         # removed tokens no command offers any more
+    top_level: frozenset[str] = frozenset()          # the top-level verbs there are now
 
 
 def parser_change(before: argparse.ArgumentParser, after: argparse.ArgumentParser) -> ParserChange:
@@ -437,7 +438,8 @@ def parser_change(before: argparse.ArgumentParser, after: argparse.ArgumentParse
             paths.add(path)
     offered = {token for shape in new.values() for token in (*shape.children, *shape.options)}
     return ParserChange(frozenset(paths), frozenset(root_options), frozenset(removed),
-                        frozenset(token for _path, token in removed) - offered)
+                        frozenset(token for _path, token in removed) - offered,
+                        frozenset(new[()].children) if () in new else frozenset())
 
 
 def _literal_lines(source: str) -> set[int]:

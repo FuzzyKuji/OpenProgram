@@ -205,6 +205,15 @@ describe("reconnect", () => {
     store.setRunningTaskFor(A, null, "never");
   });
 
+  test("after a branch switch the load hands over the selected branch's turn", () => {
+    store.setRunningTaskFor(A, { session_id: A, msg_id: "on_a", execution_id: "exec_a", status_version: 3 }, "never");
+    reconcileAfterSessionLoad(A, true, { msg_id: "on_b", execution_id: "exec_b", status_version: 5 });
+    const task = useSessionStore.getState().runningTasks[A];
+    assert.equal(task?.execution_id, "exec_b");
+    assert.equal(task?.status_version, 5);
+    store.setRunningTaskFor(A, null, "never");
+  });
+
   test("a draft with attachments never enters the text queue", () => {
     const attachedId = enqueueMessage(A, draft("caption with image"), 1);
     assert.equal(attachedId, null);

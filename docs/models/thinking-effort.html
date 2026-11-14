@@ -3,7 +3,8 @@
 <meta name="covers" content="openprogram/interfaces/server/thinking_effort.py apps/web/lib/effort/">
 <h1>Thinking effort</h1>
 <p>One slider over each vendor's own parameter; the provider translates the level before each request.</p>
-<pre translate="no"><code>off · minimal · low · medium · high · xhigh · max</code></pre>
+<pre translate="no"><code>minimal · low · medium · high · xhigh · max</code></pre>
+<p class="note"><code translate="no">off</code> is a setting value, never a picker level: it turns reasoning off where the provider has a way to, as <code translate="no">effort: "none"</code> on OpenAI Responses.</p>
 <p>The UI shows the levels the model supports. Opus 4.8 has five, low to max; DeepSeek reasoner is not adjustable; GitHub Copilot has none. Levels come from the <code translate="no">thinking</code> block in <code translate="no">provider.json</code>, with per-model overrides; Fetch refreshes them where the endpoint reports capabilities (Anthropic <code translate="no">/v1/models</code>, Codex subscription models). No declaration: low, medium, high.</p>
 <table class="stack">
 <thead><tr><th scope="col">Provider family</th><th scope="col">Default, <code translate="no">default_effort</code> in <code translate="no">provider.json</code></th></tr></thead>

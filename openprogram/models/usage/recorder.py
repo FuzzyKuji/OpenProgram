@@ -14,7 +14,7 @@ from __future__ import annotations
 import time
 from typing import Callable, Optional
 
-from .context import current_usage_context
+from .context import call_context
 from .event import CALL_KIND_DIRECT, UsageEvent
 from .ledger import default_ledger
 import logging
@@ -82,6 +82,7 @@ def build_message_event(
     model, message, *, session_id: Optional[str] = None,
     token_source: str = "provider_usage",
     context=None, request_id: str | None = None, timestamp: float | None = None,
+    prefix=None,
 ) -> Optional[UsageEvent]:
     """Assemble the UsageEvent for one finished LLM call without storing it.
 
@@ -89,7 +90,8 @@ def build_message_event(
     governor's settle transaction, so building is separate from appending.
     Legacy callers skip absent/zero counters. A request identity preserves
     known zero and separate token/cost availability. Raises on malformed
-    request counters rather than silently under-billing.
+    request counters rather than silently under-billing. ``prefix`` is the
+    request's prompt-cache check (``prefix_fingerprint.PrefixCheck``).
     """
     usage = getattr(message, "usage", None)
     if usage is None:
@@ -101,7 +103,7 @@ def build_message_event(
     if not (inp or out or cr or cw) and request_id is None:
         return None  # no tokens — nothing happened worth recording
 
-    ctx = context or current_usage_context()
+    ctx = context or call_context()
     reported_total = int(getattr(usage, "total_tokens", 0) or 0)
     known = bool(inp or out or cr or cw or reported_total) or bool(getattr(usage, "tokens_reported", False))
     if request_id is not None:
@@ -139,11 +141,17 @@ def build_message_event(
         output_tokens=out,
         cache_read_tokens=cr,
         cache_write_tokens=cw,
-        total_tokens=(reported_total or inp + out + cr + cw) if request_id else inp + out,
+        # Every token the request carried, cached ones included, as a governed
+        # request has always counted them. Adapters report ``input`` without
+        # its cached part, so ``input + output`` alone undercounted any reply
+        # with a cache hit (DeepSeek's cache reads exceeded its "total").
+        total_tokens=(reported_total or inp + out + cr + cw) if request_id
+        else max(reported_total, inp + out + cr + cw),
         token_source=token_source,
         cost_source=cost_source,
         first_token_ms=getattr(usage, "first_token_ms", None),
         first_text_ms=getattr(usage, "first_text_ms", None),
+        **({} if prefix is None else prefix.event_fields()),
         **cost,
     )
 
@@ -168,7 +176,7 @@ def run_usage_hooks(event: UsageEvent) -> None:
 
 
 def record_message(model, message, *, session_id: Optional[str] = None,
-                   token_source: str = "provider_usage") -> Optional[UsageEvent]:
+                   token_source: str = "provider_usage", prefix=None) -> Optional[UsageEvent]:
     """Record one finished LLM call. ``model`` is the provider Model,
     ``message`` the final AssistantMessage. Returns the event (for callers
     that want a summary) or None if there was nothing to record.
@@ -177,7 +185,7 @@ def record_message(model, message, *, session_id: Optional[str] = None,
     """
     try:
         event = build_message_event(
-            model, message, session_id=session_id, token_source=token_source,
+            model, message, session_id=session_id, token_source=token_source, prefix=prefix,
         )
         if event is None:
             return None
@@ -188,7 +196,40 @@ def record_message(model, message, *, session_id: Optional[str] = None,
         return None
 
 
+def record_failed_request(model, partial=None, *, session_id: Optional[str] = None) -> Optional[UsageEvent]:
+    """Record a request that reached the provider and ended without a final message.
+
+    A reply that stalled or whose connection dropped may still be billed.
+    ``partial`` is the last partial message the reply streamed, if any: the
+    tokens it reported are recorded as they are. With none reported the
+    request is still counted, as one event whose tokens and cost are
+    unknown, so a summary shows the request and says its cost is not known
+    instead of leaving it out. Never raises.
+    """
+    try:
+        usage = getattr(partial, "usage", None)
+        if usage is not None and (usage.input or usage.output or usage.cache_read or usage.cache_write):
+            return record_message(model, partial, session_id=session_id)
+        ctx = call_context()
+        event = UsageEvent(
+            ts=time.time(), tokens_known=False, cost_source="unknown",
+            session_id=ctx.session_id or session_id,
+            parent_session_id=ctx.parent_session_id, agent_id=ctx.agent_id,
+            goal_id=ctx.goal_id, goal_revision=ctx.goal_revision,
+            goal_session_id=ctx.goal_session_id, execution_id=ctx.execution_id,
+            call_kind=ctx.call_kind or CALL_KIND_DIRECT, call_label=ctx.call_label,
+            provider=getattr(model, "provider", "") or "", api=getattr(model, "api", None),
+            model_id=getattr(model, "id", "") or "",
+        )
+        default_ledger.append(event)
+        run_usage_hooks(event)
+        return event
+    except Exception:
+        _log.warning("failed request not recorded for %s", getattr(model, "id", model), exc_info=True)
+        return None
+
+
 __all__ = [
-    "build_message_event", "record_message", "register_usage_hook",
+    "build_message_event", "record_failed_request", "record_message", "register_usage_hook",
     "run_usage_hooks",
 ]

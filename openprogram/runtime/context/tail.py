@@ -12,14 +12,12 @@ everything under that call, so a tool call and its result are always kept or
 dropped together. The reply that made a kept call is kept with it.
 
 A step costs what the renderer sends for it, not what the node stores: a
-spilled result reaches the model as head and tail, an old result as a stub,
-and a ``/skill`` message as its whole body.
+spilled result reaches the model as head and tail, and a ``/skill`` message as its whole body.
 """
 from __future__ import annotations
 
 from typing import Any
 
-from openprogram.runtime.context.aging import aged_before_seq, build_manifest
 from openprogram.runtime.context.nodes import summary_covers_ids
 from openprogram.runtime.context.render import render_dag_messages
 from openprogram.runtime.context.tokens import estimate_message_tokens
@@ -32,9 +30,9 @@ OMITTED_NOTE = (
 )
 
 
-def _rendered_tokens(graph: Any, node_ids: list[str], manifest: dict) -> int:
+def _rendered_tokens(graph: Any, node_ids: list[str]) -> int:
     return sum(estimate_message_tokens(message)
-               for message in render_dag_messages(graph, node_ids, manifest=manifest))
+               for message in render_dag_messages(graph, node_ids))
 
 
 def bounded_tail(graph: Any, read_ids: list[str], max_tokens: int) -> tuple[list[str], bool]:
@@ -59,11 +57,6 @@ def bounded_tail(graph: Any, read_ids: list[str], max_tokens: int) -> tuple[list
         owner = chain[-1]
         return owner, (chain[-2] if len(chain) > 1 else owner)
 
-    # A passed manifest also keeps these trial renders from being recorded as
-    # the turn's own. Fixing the boundary on the whole list matches the render
-    # of the kept ids, since aging counts back from the newest reply.
-    manifest = build_manifest(
-        aged_before_seq([graph.nodes[nid] for nid in read_ids if nid in graph.nodes]), [])
     members: dict[str, list[str]] = {}
     order: list[str] = []
     for node_id in read_ids:
@@ -85,11 +78,11 @@ def bounded_tail(graph: Any, read_ids: list[str], max_tokens: int) -> tuple[list
     for step in reversed(order):
         if step in summaries:
             continue
-        cost = 0 if step in charged else _rendered_tokens(graph, members[step], manifest)
+        cost = 0 if step in charged else _rendered_tokens(graph, members[step])
         owner = owner_of[step]
         owner_needed = owner != step and owner not in kept and owner in members
         if owner_needed:
-            cost += _rendered_tokens(graph, members[owner], manifest)
+            cost += _rendered_tokens(graph, members[owner])
         if used + cost > max_tokens:
             complete = False
             break

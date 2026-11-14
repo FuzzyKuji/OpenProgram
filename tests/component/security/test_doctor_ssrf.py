@@ -136,6 +136,7 @@ def test_run_checks_reuses_one_runtime_http_inventory(monkeypatch):
     monkeypatch.setattr(doctor, "CHECKS", ())
     monkeypatch.setattr("openprogram.host.system_access.doctor_rows", lambda: [])
     monkeypatch.setattr(doctor, "runtime_http_checks", fake_runtime_checks)
+    monkeypatch.setattr(doctor, "_check_command_shell", lambda: (True, "command shell", "bash"))
     monkeypatch.setattr(
         "openprogram.host._platform.environment.platform_environment_advisories", lambda _path: []
     )
@@ -149,4 +150,5 @@ def test_run_checks_reuses_one_runtime_http_inventory(monkeypatch):
         "runtime-http-policy-proxy",
         "runtime-http-recent-denials",
         "runtime-http-unmanaged-transport",
+        "command shell",
     ]

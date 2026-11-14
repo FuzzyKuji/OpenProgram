@@ -51,28 +51,50 @@ async def _handle_chat(ws, cmd: dict):
     req = await _parse_chat_command(ws, cmd)
     if req is None:
         return
+    from openprogram.interfaces.server.branch_settings import check_branch
+    from openprogram.state.store.session.branch_config import BranchConfigConflict
+    try:
+        check_branch(req.session_id, cmd)
+    except BranchConfigConflict:
+        await _send_chat_error(ws, req.session_id, "branch_config_conflict",
+                               "The selected branch changed. Reload it before sending.")
+        return
     if not await _prepare_agent_and_environment(ws, req):
         return
     # Session open, run config, admission and the user-message commit read
     # and write the session repo and the execution store. They run off the
     # event loop so one send never stalls every other socket.
     conv = await asyncio.to_thread(_open_session, _s, req)
-    if not _is_skill_command(req.text) and not await _run_local_command(ws, req):
+    if not await _resolve_side_branch(ws, req):
         return
-    if not await _check_workspace_alignment(ws, req):
+    if not _is_skill_command(req.text) and not await _run_local_command(ws, req):
         return
     msg_id = await _reserve_run(ws, _s, req)
     if msg_id is None:
         return
     if not await _admit_skill_command(ws, _s, req, msg_id):
         return
-    run_cfg, effective_permission = await asyncio.to_thread(
-        _save_run_config, _s, req, conv, msg_id,
-    )
+    try:
+        run_cfg, effective_permission = await asyncio.to_thread(
+            _save_run_config, _s, req, conv, msg_id,
+        )
+    except BranchConfigConflict:
+        await _send_chat_error(ws, req.session_id, "branch_config_conflict",
+                               "The selected branch changed. Reload it before sending.")
+        return
     await _persist_turn_attachments(_s, req, msg_id)
-    turn, user_msg = await asyncio.to_thread(
-        _admit_and_commit, _s, ws, req, conv, msg_id, run_cfg, effective_permission,
-    )
+    from openprogram.runtime.conversation.production_driver import AgentDriverError
+    try:
+        turn, user_msg = await asyncio.to_thread(
+            _admit_and_commit, _s, ws, req, conv, msg_id, run_cfg, effective_permission,
+        )
+    except AgentDriverError as refused:
+        # Admission refused the input (too large, a bad image): the turn
+        # ends with that reason, not a bare ``handler_error``. Nothing was
+        # written and the reservation is already released (``_admit_turn``).
+        await _send_chat_error(ws, req.session_id, refused.code, str(refused),
+                               kind=refused.code)
+        return
     _broadcast_user_message(_s, ws, turn, user_msg)
     await _send_chat_ack(ws, req, turn, effective_permission)
     _publish_running_task(_s, turn)
@@ -112,6 +134,7 @@ def _broadcast_user_message(_s, ws, turn: _AdmittedTurn, user_msg: dict) -> None
                 "source": user_msg.get("source"),
                 "timestamp": user_msg.get("timestamp"),
                 "predecessor": user_msg.get("predecessor"),
+                **({"branch_id": turn.branch_id} if turn.branch_id else {}),
             },
         }, default=str), exclude=ws)
     except Exception:
@@ -121,6 +144,10 @@ def _broadcast_user_message(_s, ws, turn: _AdmittedTurn, user_msg: dict) -> None
 
 
 def _open_session(_s, req: _ChatRequest) -> dict:
+    from openprogram.interfaces.server.branch_settings import prepare_initial_guard, materialized_guard
+    if req.session_id is None:
+        req.session_id = "local_" + uuid.uuid4().hex[:10]
+    req.initial_branch_id = prepare_initial_guard(req.session_id, req.cmd)
     cmd = req.cmd
     new_channel = (cmd.get("channel") or "").strip().lower() or None
     new_account_id = (cmd.get("account_id") or "").strip() or None
@@ -161,31 +188,52 @@ def _open_session(_s, req: _ChatRequest) -> dict:
             # project.
             _log.warning(
                 "project session row not created for %s", session_id, exc_info=True)
+    req.cmd = materialized_guard(session_id, req.cmd, req.initial_branch_id)
     return conv
 
 
-async def _check_workspace_alignment(ws, req: _ChatRequest) -> bool:
-    # A conversation-only checkout deliberately leaves files untouched.
-    # The next mutating turn must adopt that workspace explicitly; otherwise
-    # the model would edit one branch while reading another branch's history.
-    session_id = req.session_id
-    from openprogram.runtime.conversation.workspace_alignment import (
-        adopt_current_workspace,
-        get_workspace_alignment,
-    )
-    alignment = await asyncio.to_thread(get_workspace_alignment, session_id)
-    if alignment.get("status") == "mismatch":
-        if req.cmd.get("workspace_decision") == "keep_current_files":
-            alignment = await asyncio.to_thread(adopt_current_workspace, session_id)
-        if alignment.get("status") == "mismatch":
-            await _send_chat_error(
-                ws, session_id, "workspace_alignment_required",
-                ("Conversation and workspace are not aligned. "
-                 "Choose Keep current files or Restore branch code first."),
-                retry_query=req.text,
-                workspace_alignment=alignment, display="chat",
-            )
-            return False
+#: Commands that act on the conversation as a whole, not on one branch:
+#: they run only on the selected branch. ``/goal`` counts only when it
+#: starts or clears a Goal; reading or steering the existing one is fine.
+CONVERSATION_WIDE_COMMANDS = frozenset({"clear", "goal", "rename"})
+_GOAL_ON_EXISTING = frozenset({"", "status", "pause", "resume", "verify", "budget", "edit"})
+
+
+def conversation_wide_command(text: str) -> bool:
+    head, _, rest = (text or "").strip().partition(" ")
+    name = head[1:].lower() if head.startswith("/") else ""
+    if name not in CONVERSATION_WIDE_COMMANDS:
+        return False
+    if name == "goal":
+        verb = rest.strip().split(" ", 1)[0].lower() if rest.strip() else ""
+        return verb not in _GOAL_ON_EXISTING
+    return True
+
+
+async def _resolve_side_branch(ws, req: _ChatRequest) -> bool:
+    """Find the unselected branch a message names; ``False`` refuses it.
+
+    A message to a recorded branch that is not selected runs on that branch
+    beside the selected one, commands, skills and Agent calls included: a
+    branch's todo board and Goal are its own, so nothing it does overwrites
+    another branch's. Only a command that acts on the whole conversation
+    (``CONVERSATION_WIDE_COMMANDS``) stays with the selected branch.
+    """
+    from openprogram.state.store.session.branch_config import BranchConfigConflict
+    from openprogram.interfaces.server.server_runtime.session_lifecycle import side_branch_target
+    try:
+        req.side_branch_id = await asyncio.to_thread(side_branch_target, req.session_id, req.cmd)
+    except BranchConfigConflict:
+        await _send_chat_error(ws, req.session_id, "branch_gone",
+                               "The branch no longer exists; reload the conversation.")
+        return False
+    if req.side_branch_id is None:
+        return True
+    if req.text.startswith("/") and conversation_wide_command(req.text):
+        await _send_chat_error(
+            ws, req.session_id, "side_branch_refused",
+            "This command acts on the whole conversation; select this branch to use it.")
+        return False
     return True
 
 
@@ -202,8 +250,27 @@ async def _reserve_run(ws, _s, req: _ChatRequest) -> str | None:
     # implicit steer, so the user's selected running-message mode stays exact.
     session_id = req.session_id
     msg_id = uuid.uuid4().hex
+    # The slot keeps the send's id: a repeat of a send that holds it is
+    # that send, answered ``request_admitted``, never queued as a new one.
+    request_id = client_request_id_of(req.cmd)
+    key = {"key": f"send:{request_id}"} if request_id else {}
+    if req.side_branch_id:
+        # A branch that is not selected has its own slot: one turn on it at
+        # a time, whatever the selected branch is doing.
+        if not await asyncio.to_thread(lambda: _s._try_reserve_branch_run(
+                session_id, req.side_branch_id, msg_id, **key)):
+            if await _send_repeat_refusal(ws, _s, session_id, key):
+                return None
+            await _send_chat_error(
+                ws, session_id, "run_active", _s.RUN_ACTIVE_ERROR,
+                retry_query=req.text, display="chat", branch_id=req.side_branch_id,
+            )
+            return None
+        return msg_id
     from openprogram.programs.tools.planning.goal.chat import note_user_waiting
-    if not await asyncio.to_thread(_s._try_reserve_run, session_id, msg_id):
+    if not await asyncio.to_thread(lambda: _s._try_reserve_run(session_id, msg_id, **key)):
+        if await _send_repeat_refusal(ws, _s, session_id, key):
+            return None
         # The client re-queues this message; an automatic Goal turn yields to it.
         note_user_waiting(session_id, True)
         await _send_chat_error(
@@ -212,6 +279,20 @@ async def _reserve_run(ws, _s, req: _ChatRequest) -> str | None:
         )
         return None
     return msg_id
+
+
+async def _send_repeat_refusal(ws, _s, session_id: str, key: dict) -> bool:
+    """Answer a send whose own id holds the slot; ``False`` when it does not."""
+    refusal = await asyncio.to_thread(
+        _s.repeated_request_refusal, session_id, key.get("key"),
+    ) if key else None
+    if refusal is None:
+        return False
+    await _send_chat_error(
+        ws, session_id, "request_admitted", refusal["error"], display="chat",
+        **{name: refusal[name] for name in ("execution_id", "branch_id", "op_id") if name in refusal},
+    )
+    return True
 
 
 async def _admit_skill_command(ws, _s, req: _ChatRequest, msg_id: str) -> bool:
@@ -257,36 +338,65 @@ def _save_run_config(_s, req: _ChatRequest, conv: dict, msg_id: str):
         # (and other run settings) survives refresh without a project binding.
         from openprogram.runtime.context.session_db import default_db
         session_db = default_db()
+        from openprogram.interfaces.server.branch_settings import (
+            check_branch, branch_guard, prepare_initial_guard, materialized_guard,
+        )
+        if req.initial_branch_id is None:
+            req.initial_branch_id = prepare_initial_guard(session_id, req.cmd)
+        req.cmd = materialized_guard(session_id, req.cmd, req.initial_branch_id)
+        check_branch(session_id, req.cmd)
         if not session_db.is_created(session_id):
             session_db.create_session(session_id, req.agent_id or _s._default_agent_id(),
                                       project_id=req.project_id)
             _bind_draft_channel(_s, req)
+            req.cmd = materialized_guard(session_id, req.cmd, req.initial_branch_id)
         from openprogram.host.environments import assign_new_session_environment
         conv["environment_id"] = assign_new_session_environment(
             session_db, session_id, req.requested_environment)
         if req.agent_invocation is not None:
             from ..agent_invocation import persist_agent_invocation
-            persist_agent_invocation(session_id, req.agent_invocation, conv)
+            persist_agent_invocation(session_id, req.agent_invocation, conv,
+                                     branch_id=req.side_branch_id)
+        # The composer's values are stored on the branch the message goes to.
+        # The Agent is not: it changes only through the Agent switch. A
+        # /skill's tool whitelist is not either: it is this turn's alone.
+        # A branch whose permission is versioned keeps it; the composer's
+        # legacy mode would only be masked by it.
+        stored = session_db.get_session(session_id) or {}
+        if req.side_branch_id:
+            from openprogram.state.store.session.branch_config import config_for_branch
+            stored = config_for_branch(stored, req.side_branch_id)
         run_cfg = save_session_run_config(
             session_id,
-            agent_id=_db_agent_id(session_id),
-            tools=req.tools_flag,
             # web_search stored as INTENT (not expanded into a list) so
             # the session always follows the live tool set.
             web_search=req.web_search_flag,
             thinking_effort=req.thinking_effort,
-            permission_mode=req.permission_mode,
+            permission_mode=None if stored.get("permission_state") else req.permission_mode,
+            service_tier=req.service_tier,
             # 草稿会话（尚无 session_id）在首条消息落地额外工作目录的唯一通道
             # （additional-working-directories.md §3.3）。None = 不动既有配置。
             additional_working_dirs=req.cmd.get("additional_working_dirs"),
             sandbox_enabled=req.sandbox_flag,
+            **({"branch_id": req.side_branch_id} if req.side_branch_id else branch_guard(req.cmd)),
         )
     except BaseException:
         _s._release_run_reservation(session_id, msg_id)
         raise
     effective_permission = permission_from_config(
         run_cfg, default=project_defaults(session_id).get("permission_mode"))
+    if req.side_branch_id:
+        # The live mirror shows the selected branch; this turn's branch is another.
+        if req.tools_flag is not None:
+            run_cfg.tools_override = list(req.tools_flag)
+        return run_cfg, effective_permission
+    # The mirror holds the branch's stored tools: ``_save_session`` writes it
+    # back to the branch after the turn, so a /skill whitelist placed there
+    # would narrow every later message.
     conv["tools_override"] = run_cfg.tools_override
+    if req.tools_flag is not None:
+        # The /skill whitelist narrows this turn's request only.
+        run_cfg.tools_override = list(req.tools_flag)
     conv["web_search"] = run_cfg.web_search
     conv["thinking_effort"] = run_cfg.thinking_effort
     conv["permission_mode"] = run_cfg.permission_mode
@@ -388,6 +498,13 @@ def _capture_turn_inputs(_s, ws, req: _ChatRequest, msg_id: str):
     try:
         from openprogram.runtime.permissions.authority import local_owner_authority
         _local_authority = local_owner_authority()
+        # A client with no one behind it (``openprogram --print`` in a
+        # pipeline) says so, and the turn runs as one nobody answers: an
+        # operation that would ask is refused at once and the question tool
+        # is not offered, instead of the turn waiting on an approval card.
+        # It can only narrow the owner's authority, never widen it.
+        if req.cmd.get("interaction") == "non-interactive":
+            _local_authority = {**_local_authority, "interaction": "non-interactive"}
     except BaseException:
         _s._release_run_reservation(session_id, msg_id)
         raise
@@ -455,12 +572,53 @@ def _build_user_msg(req: _ChatRequest, msg_id: str, parsed: dict,
         extra_meta["text_elements"] = text_elements
     if extra_meta:
         user_msg["extra"] = json.dumps(extra_meta, default=str)
+    if req.attachments:
+        # The images the turn sends after the text, kept so later requests
+        # send them again (``store.session.media``).
+        try:
+            from openprogram.runtime.context.session_db import default_db
+            from openprogram.state.store.session.media import records_for_attachments
+            media = records_for_attachments(
+                default_db()._session_dir(req.session_id), req.attachments, 1)  # noqa: SLF001
+        except Exception:  # noqa: BLE001 - the turn goes on without the copy
+            _log.warning("user message media not kept for session %s", req.session_id, exc_info=True)
+            media = []
+        if media:
+            user_msg["media"] = media
     return user_msg
 
 
-def _agent_event_sink(_s, session_id: str, msg_id: str, conv: dict):
+def _agent_event_sink(_s, session_id: str, msg_id: str, conv: dict,
+                      side_branch_id: str | None = None, branch_id: str | None = None):
+    """Broadcast a turn's frames, each naming the branch the turn runs on, so
+    a client draws them only while that branch is selected. Context usage
+    goes on the conversation's mirror only while the turn's branch is the
+    selected one; the person may switch away while it runs."""
+    from openprogram.interfaces.server.server_runtime.run_slots import SELECTED
+    branch_id = side_branch_id or branch_id
+
     def _on_agent_event(env: dict) -> None:
         data = env.get("data") or {}
+        if data.get("type") == "result" and data.get("msg_id") == msg_id:
+            # A turn no one watches hands its requests' wire facts back.
+            from openprogram.models.providers.recording import wire_facts as _wire
+            facts = _wire.take(msg_id)
+            if facts is not None:
+                data = {**data, "wire_facts": facts}
+                env = {**env, "data": data}
+        if branch_id and isinstance(env.get("data"), dict):
+            env = {**env, "data": {**data, "branch_id": branch_id}}
+        selected = not side_branch_id and _s._slot_location(session_id, msg_id) in (SELECTED, None)
+        if not selected:
+            # A turn on another branch: its context usage is that branch's,
+            # not the selected one's.
+            if data.get("type") == "context_usage":
+                return
+            if hasattr(_s, "_broadcast_envelope"):
+                _s._broadcast_envelope(env)
+            else:
+                _s._broadcast(json.dumps(env, default=str))
+            return
         if data.get("type") == "context_usage":
             try:
                 _record_context_usage(
@@ -479,51 +637,77 @@ def _agent_event_sink(_s, session_id: str, msg_id: str, conv: dict):
     return _on_agent_event
 
 
-def _turn_request_payload(req: _ChatRequest, msg_id: str, run_cfg,
-                          effective_permission, parsed: dict,
-                          _local_authority: dict, surface_context) -> dict:
-    session_id = req.session_id
+def _turn_request_fields(req: _ChatRequest, parsed: dict) -> dict:
+    """What a chat command adds to the turn request beside what every
+    surface's request carries (``turn_input.build_turn_request``)."""
     response_format = req.response_format
-    from openprogram.runtime.conversation.session_config import tools_override_from_config
     _response_format_payload = (
         response_format.model_dump(mode="json")
         if hasattr(response_format, "model_dump") else response_format
     )
-    from openprogram.runtime.permissions.rule import load_merged_rules as _load_merged_rules
+    from openprogram.runtime.conversation.local_commands import slash_fields
     return {
-        "session_id": session_id,
-        "user_text": _skill_model_text(req) or parsed.get("raw") or req.text,
-        "agent_id": _db_agent_id(session_id),
-        "source": "web",
-        "permission_mode": effective_permission,
-        "permission_rules": _load_merged_rules(session_id),
-        **_local_authority,
-        # A typed /task or /merge is marked after the authority fields, which
-        # also carry `interaction`. The admitted actor keeps the authority.
-        **({"interaction": parsed["action"]}
-           if parsed.get("action") in {"spawn", "merge"} else {}),
-        "thinking_effort": run_cfg.thinking_effort,
+        # A typed /task or /merge: its own field, so `interaction` keeps the
+        # authority's value (``--print`` builds the same fields).
+        **slash_fields(parsed),
         "service_tier": req.service_tier,
         "response_format": _response_format_payload,
-        "tools_override": tools_override_from_config(run_cfg),
         "attachments": req.attachments,
-        "user_msg_id": msg_id,
         "user_already_persisted": True,
-        "surface_context": surface_context,
-        "structured_output": (
-            {
-                "prompt": parsed.get("prompt") or "",
-                "label": parsed.get("label") or "",
-                "context": parsed.get("context") or "inherit",
-                "wait": parsed.get("wait", True),
-            }
-            if parsed.get("action") == "spawn" else {
-                "sub_sessions": parsed.get("sub_sessions") or [],
-                "message": parsed.get("message") or "",
-            }
-            if parsed.get("action") == "merge" else None
-        ),
-        "additional_working_dirs": getattr(run_cfg, "additional_working_dirs", []),
+        **_side_branch_fields(req),
+        **_one_turn_fields(req),
+    }
+
+
+def _surface_fields(session_id: str, req: _ChatRequest, parsed: dict,
+                    admitted: str | None) -> dict:
+    """The fields a chat command passes to ``build_turn_request``: the Agent
+    binding the conversation runs (an Agent trial's profile and saved model),
+    then the command's own fields, which win, so a model chosen for this
+    turn only (``turn_model``) replaces the trial's saved one instead of
+    colliding with it."""
+    from ..agent_invocation import request_agent_invocation
+    return {
+        **request_agent_invocation(session_id, req.agent_invocation),
+        **_turn_request_fields(req, parsed),
+        **({"branch_id": admitted} if admitted and not req.side_branch_id else {}),
+    }
+
+
+def _one_turn_fields(req: _ChatRequest) -> dict:
+    """The model, effort and permission mode a frame sets for this turn only
+    (``turn_*``); as request fields they win over the branch's saved ones.
+    A model the provider lists but no one enabled is usable for the turn,
+    in this process only (``enabled_models.use_model_in_process``)."""
+    fields: dict = {}
+    if req.turn_model:
+        from openprogram.models.providers.catalog.enabled_models import use_model_in_process
+        provider, _, model_id = req.turn_model.partition("/")
+        use_model_in_process(provider, model_id)
+        fields["model_override"] = req.turn_model
+    if req.turn_effort:
+        fields["thinking_effort"] = req.turn_effort
+    if req.turn_permission_mode:
+        fields["permission_mode"] = req.turn_permission_mode
+    if getattr(req, "turn_no_web", None):
+        from openprogram.runtime.agent.provider_search import NO_WEB_OVERRIDE
+        fields["tools_override"] = dict(NO_WEB_OVERRIDE)
+    return fields
+
+
+def _side_branch_fields(req: _ChatRequest) -> dict:
+    """A turn on an unselected branch: it continues that branch's tip and
+    moves only that branch (``advance_head=False``, ``side_branch``)."""
+    if not req.side_branch_id:
+        return {}
+    from openprogram.runtime.context.session_db import default_db
+    row = default_db().get_session(req.session_id) or {}
+    ref = (row.get("branch_refs") or {}).get(req.side_branch_id) or {}
+    return {
+        "branch_id": req.side_branch_id,
+        "branch_from": ref.get("head_id"),
+        "advance_head": False,
+        "side_branch": True,
     }
 
 
@@ -533,19 +717,34 @@ def _admit_turn(_s, req: _ChatRequest, conv: dict, msg_id: str, run_cfg,
     # Admission is the sole source of execution identity. The message id is
     # retained only as transport/DAG provenance and never becomes ownership.
     session_id = req.session_id
-    from openprogram.runtime.agent.turn_request import TurnRequest
     from openprogram.runtime.conversation.production_driver import CanonicalAgentAdapter
+    from openprogram.runtime.conversation.turn_input import build_turn_request
+    from openprogram.runtime.permissions.rule import load_merged_rules
+    # The branch the turn was admitted on: its slot names it. The turn
+    # writes there whatever the person selects while it runs.
+    admitted = req.side_branch_id or _s._slot_branch(session_id, msg_id)
     _adapter = CanonicalAgentAdapter(
-        event_sink=_agent_event_sink(_s, session_id, msg_id, conv),
+        event_sink=_agent_event_sink(_s, session_id, msg_id, conv, req.side_branch_id, admitted),
     )
-    _request_payload = _turn_request_payload(
-        req, msg_id, run_cfg, effective_permission, parsed,
-        _local_authority, surface_context,
-    )
-    from ..agent_invocation import request_agent_invocation
     try:
-        _request_payload.update(request_agent_invocation(session_id, req.agent_invocation))
-        _request = TurnRequest(**_request_payload)
+        _request = build_turn_request(
+            session_id,
+            _skill_model_text(req) or parsed.get("raw") or req.text,
+            # A message goes to the selected branch: its Agent, mode and rules.
+            agent_id=_db_agent_id(session_id),
+            source="web",
+            msg_id=msg_id,
+            authority=_local_authority,
+            permission={"permission_mode": effective_permission,
+                        "permission_rules": load_merged_rules(session_id)},
+            run_config=("thinking_effort", "tools_override", "additional_working_dirs"),
+            run_cfg=run_cfg,
+            # A chat command no client answers (``--print`` through the
+            # Worker) is told so, the same way the in-process run is.
+            unattended=_local_authority.get("interaction") == "non-interactive",
+            surface_context=surface_context,
+            **_surface_fields(session_id, req, parsed, admitted),
+        )
         _admission = _adapter.admit(
             _request,
             trusted_actor=_local_authority,
@@ -556,11 +755,18 @@ def _admit_turn(_s, req: _ChatRequest, conv: dict, msg_id: str, run_cfg,
             # execution input and finalize it exactly once.
             assistant_message_id=f"{msg_id}_reply",
             config_snapshot_ref=f"session:{session_id}",
+            # A stop can name this send before the ack names its execution.
+            client_request_id=client_request_id_of(req.cmd),
         )
     except BaseException:
         _release_surface_bindings(surface_context)
         _s._release_run_reservation(session_id, msg_id)
         raise
+    if _request.run_note:
+        # ``--print`` on the Worker: note what its requests send, for the
+        # result frame (``wire_facts``).
+        from openprogram.models.providers.recording import wire_facts as _wire
+        _wire.watch(_admission.execution_id, msg_id)
     return _AdmittedTurn(
         session_id=session_id,
         msg_id=msg_id,
@@ -571,6 +777,9 @@ def _admit_turn(_s, req: _ChatRequest, conv: dict, msg_id: str, run_cfg,
         release_surface_bindings=_release_surface_bindings,
         response_format=req.response_format,
         execution_id=_admission.execution_id,
+        side_branch_id=req.side_branch_id,
+        branch_from=_request.branch_from if req.side_branch_id else None,
+        branch_id=admitted,
     )
 
 
@@ -581,7 +790,14 @@ def _commit_user_message(_s, req: _ChatRequest, turn: _AdmittedTurn,
     # has been admitted. If admission rejects an oversized or malformed
     # request, no user node is left behind without an execution record.
     try:
-        _s._append_msg(turn.conv, user_msg, strict=True)
+        if turn.side_branch_id:
+            _append_side_branch_message(turn, user_msg, turn.side_branch_id)
+        elif _left_since_admission(turn):
+            # The person switched away after the send was admitted: the
+            # message goes on the branch it was sent to, not the one now shown.
+            _append_side_branch_message(turn, user_msg, turn.branch_id)
+        else:
+            _s._append_msg(turn.conv, user_msg, strict=True)
     except BaseException:
         turn.adapter.fail_admission(turn.admission, reason_code="user_persist_failed")
         turn.release_surface_bindings(turn.surface_context)
@@ -607,6 +823,49 @@ def _commit_user_message(_s, req: _ChatRequest, turn: _AdmittedTurn,
         raise
 
 
+def _left_since_admission(turn: _AdmittedTurn) -> bool:
+    """Whether the turn's branch is no longer selected; sets the tip it
+    continues (``turn.branch_from``) when so."""
+    if not turn.branch_id:
+        return False
+    from openprogram.runtime.context.session_db import default_db
+    row = default_db().get_session(turn.session_id) or {}
+    if row.get("active_branch_id") in (None, turn.branch_id):
+        return False
+    ref = (row.get("branch_refs") or {}).get(turn.branch_id)
+    if not isinstance(ref, dict) or not ref.get("head_id"):
+        return False
+    turn.branch_from = ref["head_id"]
+    return True
+
+
+def _append_side_branch_message(turn: _AdmittedTurn, user_msg: dict, branch_id: str) -> None:
+    """Write a message under a branch's tip and move only that branch.
+
+    The head, the selected branch and the live mirror stay as they are. The
+    branch record follows the message (``point_branch``), so the reply,
+    written beside the head, carries it on. A branch the person selected
+    meanwhile takes the head with its record.
+    """
+    from openprogram.runtime.context.session_db import default_db
+    from openprogram.state.store import SessionNodeWriter
+    from openprogram.state.store.session.nodes import Call, ROLE_USER
+    db = default_db()
+    tip = turn.branch_from
+    metadata = {k: v for k, v in user_msg.items()
+                if k not in {"id", "role", "content", "timestamp", "predecessor"} and v is not None}
+    SessionNodeWriter(db, turn.session_id, advance_head=False).append(Call(
+        id=turn.msg_id, role=ROLE_USER, output=user_msg.get("content") or "",
+        caller="ROOT", predecessor=tip or "ROOT", metadata=metadata,
+        created_at=user_msg.get("timestamp") or time.time(),
+    ))
+    if not db.point_branch(turn.session_id, branch_id,
+                           expected_head=tip, head=turn.msg_id):
+        raise RuntimeError("the branch moved before its message was written")
+    user_msg["predecessor"] = tip
+    user_msg["branch_id"] = branch_id
+
+
 async def _send_chat_ack(ws, req: _ChatRequest, turn: _AdmittedTurn,
                          effective_permission) -> None:
     # Echo the STORED text back. The composer only knows the path-less
@@ -615,6 +874,8 @@ async def _send_chat_ack(ws, req: _ChatRequest, turn: _AdmittedTurn,
     # own draft has no path to open. Handing it the final text is what
     # makes an attachment clickable in the turn you sent it, instead of
     # only after a reload.
+    from openprogram.interfaces.server.handshake import server_identity
+
     first_read, end_parking = await _join_and_read(ws, turn.session_id)
     try:
         await ws.send_text(json.dumps({
@@ -627,8 +888,14 @@ async def _send_chat_ack(ws, req: _ChatRequest, turn: _AdmittedTurn,
                 "text": req.text,
                 "execution_id": turn.execution_id,
                 "status_version": turn.admission.status_version,
-                "permission_mode": effective_permission,
+                # The mode the turn runs with: a turn-only override
+                # (``turn_permission_mode``) wins over the branch's own.
+                "permission_mode": req.turn_permission_mode or effective_permission,
                 "environment_id": turn.conv.get("environment_id"),
+                **({"branch_id": turn.side_branch_id} if turn.side_branch_id else {}),
+                # Who took the turn, for a client that did not read it on
+                # connect (``handshake.server_identity``).
+                "server": server_identity(),
             }),
         }))
     except Exception:
@@ -656,6 +923,7 @@ async def _join_and_read(ws, session_id: str):
         db = default_db()
         head = (db.get_session(session_id) or {}).get("head_id")
         view = await asyncio.to_thread(turn_index.get_view, db, session_id, head)
+        publisher.read_view(session_id, view)
         turns, window = await asyncio.to_thread(reader.first_read, db, view)
     except Exception:
         _log.warning("first read for session %s failed", session_id, exc_info=True)

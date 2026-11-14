@@ -119,6 +119,11 @@ export function errorHeadline(
         "Not authorized — check your plan / access for this model.",
         "无权限 —— 检查该模型的套餐 / 访问权限。",
       );
+    case "blocked":
+      return text(
+        "The provider's network refused the address you connect from — switch your proxy node or turn off the VPN, then try again.",
+        "模型服务的网络拒绝了你当前的出口地址 —— 换一个代理节点或关闭 VPN 后重试。",
+      );
     case "context":
       return rewindOffered
         ? text(

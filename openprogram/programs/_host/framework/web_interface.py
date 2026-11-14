@@ -1,4 +1,4 @@
-"""Reuse the existing Page lease for native presentation commands."""
+"""The App tab a native presentation command acts on."""
 from contextlib import contextmanager
 
 

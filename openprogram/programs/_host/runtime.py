@@ -34,14 +34,10 @@ Design synthesizes three external frameworks (see ``references/``):
     drops the function from the tool list when the request came
     in on a blacklisted channel (see ``apply_tool_policy``).
 
-Beyond the references this module adds four knobs none of them ship:
+Beyond the references this module adds three knobs none of them ship
+(a result's share of a small model window is the agent loop's bound,
+``spill.result_cap``, applied once where the result is stored):
 
-  - **Dynamic per-call result ceiling**: the effective char cap is
-    ``min(per-function max_result_chars, 30% × context_window)`` so
-    a single function can't dominate a small-context model. The
-    dispatcher installs the live context window via the
-    ``_current_context_window_chars`` ContextVar before each turn;
-    if absent, the per-function cap is used straight.
   - **LLM-controllable timeout**: when the wrapped function declares
     a ``timeout`` parameter AND the decorator passed
     ``timeout_min`` / ``timeout_max``, the LLM-supplied value is
@@ -57,9 +53,9 @@ Beyond the references this module adds four knobs none of them ship:
     ``unsafe_in`` (channel blacklist); covers role-based gating
     where the session's user lacks the privilege for this function.
 
-All caps are in characters, not tokens — token counting is provider-
-dependent and expensive; chars are a reasonable, cheap proxy that
-matches all three reference frameworks.
+A result's cap is a weight (``state.store.session.weight``), a fixed estimate of
+its tokens that is the same on every installation, not a tokenizer's
+count.
 """
 from __future__ import annotations
 
@@ -83,9 +79,8 @@ from openprogram.models.providers.types import TextContent
 from openprogram.runtime.permissions.refusal import Refused
 
 from .execution import (
-    DEFAULT_HEAD_RATIO,
-    DEFAULT_MAX_RESULT_CHARS,
-    MIN_KEEP_CHARS,
+    DEFAULT_STREAM_CAPACITY_CHARS,
+    MIN_STREAM_CAPACITY_CHARS,
     ToolReturn,  # noqa: F401 -- @function authors import ToolReturn from here
     _normalize_result as _normalize_result_impl,
     _persist_full_result as _persist_full_result_impl,
@@ -108,16 +103,11 @@ def _tool_results_dir() -> Path:
 
 
 def _persist_full_result(call_id: str, text: str) -> Path:
-    return _persist_full_result_impl(call_id, text, results_dir=_tool_results_dir())
+    return _persist_full_result_impl(call_id, text, fallback_dir=lambda: _tool_results_dir())
 
 
-def _normalize_result(raw: Any, *, call_id: str, max_chars: int,
-                      persist_full: bool, head_ratio: float) -> AgentToolResult:
-    return _normalize_result_impl(
-        raw, call_id=call_id, max_chars=max_chars,
-        persist_full=persist_full, head_ratio=head_ratio,
-        persist=_persist_full_result,
-    )
+def _normalize_result(raw: Any, *, call_id: str, cap: int | None = None) -> AgentToolResult:
+    return _normalize_result_impl(raw, call_id=call_id, cap=cap)
 
 
 # ---------------------------------------------------------------------------
@@ -263,6 +253,7 @@ def register(tool: AgentTool, *, toolsets: list[str] = (),
     out of every LLM tools array, still Python-callable and in the
     registry.
     """
+    _departed.pop(getattr(tool, "name", None), None)
     if not expose:
         setattr(tool, "_tier", Tier.HIDDEN)
     elif not isinstance(getattr(tool, "_tier", None), Tier):
@@ -281,8 +272,13 @@ def register(tool: AgentTool, *, toolsets: list[str] = (),
     return tool
 
 
-def unregister(name: str) -> None:
-    """Remove a tool, as when a workflow package is reloaded or deleted."""
+def unregister(name: str, *, reason: str = "") -> None:
+    """Remove a tool, as when a workflow package is reloaded or deleted.
+
+    A conversation that loaded it keeps its definition and is told why a
+    call of it fails (``unavailable_tool``); ``reason`` says why."""
+    if reason:
+        mark_unavailable([name], reason)
     with _registry_lock:
         _registry.pop(name, None)
         _toolset_membership.pop(name, None)
@@ -731,35 +727,6 @@ def _cache_set(key: str, value: AgentToolResult, ttl: float) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Dynamic per-call ceiling
-# ---------------------------------------------------------------------------
-#
-# Dispatcher installs the live provider's context window (in characters)
-# before each turn so a small-context model can't be drowned by a
-# single 200k-char tool result. When absent (standalone scripts, tests),
-# the per-function cap is used as-is.
-
-_current_context_window_chars: contextvars.ContextVar[Optional[int]] = (
-    contextvars.ContextVar("_current_context_window_chars", default=None)
-)
-
-
-def _effective_max_chars(per_function: int) -> int:
-    """The actual cap for this call.
-
-    Returns ``min(per_function, 0.3 × context_window_chars)`` when the
-    dispatcher has installed a context-window hint; otherwise the
-    decorator's ``max_result_chars`` is used straight. Always floored
-    at ``MIN_KEEP_CHARS`` so even a tiny window keeps something useful.
-    """
-    ctx = _current_context_window_chars.get(None)
-    if ctx is None:
-        return per_function
-    ceiling = max(MIN_KEEP_CHARS, int(ctx * 0.3))
-    return min(per_function, ceiling)
-
-
-# ---------------------------------------------------------------------------
 # Streaming tail accumulator
 # ---------------------------------------------------------------------------
 #
@@ -782,7 +749,7 @@ class _TailAccumulator:
     __slots__ = ("_capacity", "_buf", "_total", "_dropped")
 
     def __init__(self, capacity: int) -> None:
-        self._capacity = max(MIN_KEEP_CHARS, capacity)
+        self._capacity = max(MIN_STREAM_CAPACITY_CHARS, capacity)
         self._buf: list[str] = []
         self._total: int = 0
         self._dropped: int = 0
@@ -833,9 +800,7 @@ def function(
     label: Optional[str] = None,
     parameters: Optional[dict[str, Any]] = None,
     # Result handling
-    max_result_chars: int = DEFAULT_MAX_RESULT_CHARS,
-    persist_full: bool = False,
-    head_ratio: float = DEFAULT_HEAD_RATIO,
+    max_result_weight: Optional[int] = None,
     stream_capacity_chars: Optional[int] = None,
     # Time
     timeout: Optional[float] = None,
@@ -876,15 +841,16 @@ def function(
 
     Runtime extras (declarative kwargs):
 
-      max_result_chars: per-function char cap. The effective cap for
-        any single call is ``min(max_result_chars,
-        0.3 × context_window_chars)`` — see ``_effective_max_chars``.
-        Over the cap we head+tail truncate with a marker.
-      persist_full: when True, oversized results are also saved
-        whole to ``~/.openprogram/tool_results/<call_id>.txt`` and the
-        marker mentions the path. The read tool can fetch it.
+      max_result_weight: a smaller bound than the model's for this
+        tool's results, as a weight (``state.store.session.weight``: a CJK character
+        counts 1, anything else 0.25). The tool itself never cuts: the
+        agent loop bounds every result once, to the smaller of this and
+        ``spill.result_cap()``, saving the whole text to the
+        conversation's ``tool_results/<sha256>.txt`` (the profile's
+        ``tool_results/`` outside a conversation) and naming it in the
+        result. A larger value has no effect.
       stream_capacity_chars: bound on the streaming on_update tail
-        accumulator. Defaults to ``max_result_chars``.
+        accumulator. Defaults to ``DEFAULT_STREAM_CAPACITY_CHARS``.
 
       timeout: hard kill after N seconds (``asyncio.wait_for``).
       timeout_min / timeout_max: when set AND the wrapped function
@@ -961,8 +927,7 @@ def function(
             return function(
                 f, name=name, description=description, label=label,
                 parameters=parameters,
-                max_result_chars=max_result_chars,
-                persist_full=persist_full, head_ratio=head_ratio,
+                max_result_weight=max_result_weight,
                 stream_capacity_chars=stream_capacity_chars,
                 timeout=timeout, timeout_min=timeout_min,
                 timeout_max=timeout_max,
@@ -1048,7 +1013,7 @@ def function(
         accumulator = _TailAccumulator(
             stream_capacity_chars
             if stream_capacity_chars is not None
-            else max_result_chars
+            else DEFAULT_STREAM_CAPACITY_CHARS
         )
         if accepts_on_update:
             def _on_update(text: str) -> None:
@@ -1136,12 +1101,9 @@ def function(
                 is_error=True,
             ))
 
-        # Dynamic per-call ceiling — shrinks in small-context models.
         result = _normalize_result(
             raw, call_id=call_id,
-            max_chars=_effective_max_chars(max_result_chars),
-            persist_full=persist_full,
-            head_ratio=head_ratio,
+            cap=max_result_weight,
         )
 
         if cache and not result.is_error:
@@ -1277,48 +1239,38 @@ def tool_requires_approval(t: AgentTool, args: dict[str, Any]) -> tuple[bool, Op
 # ``<name>: <one-line description>`` but their parameter schema is
 # **not** included in the provider's tools array. The model has to
 # call ``tool_search(select="<name>,<other>")`` to load the schemas;
-# the dispatcher tracks the loaded set per session and includes the
-# now-loaded tools' full schemas on subsequent turns.
+# the next request includes the now-loaded tools' full schemas.
 #
-# State lives in a ContextVar so the dispatcher can install a fresh
-# set at the top of each session and ``tool_search.execute`` can
-# mutate it from deep inside the agent loop.
+# What is loaded is not kept anywhere: each request reads it from its own
+# messages (``loaded_tools``), the load records of its tool results and the
+# names a compaction summary among them carries. ``tool_search`` is the one
+# writer of a record (``record_loads``): a guide or an opened application
+# names its tools and the model loads them with ``select:`` like any other.
+# Design: docs/reference/design/function/deferred-tools.html
 
-_loaded_deferred: contextvars.ContextVar[Optional[set[str]]] = (
-    contextvars.ContextVar("_loaded_deferred", default=None)
+#: The loaded set of the request this loop sent last, as that request read
+#: it from its messages. A failed call of a deferred tool reads it to say
+#: the schema was not sent (``schema_not_sent_hint``); it decides nothing
+#: about the next request.
+_request_loaded: contextvars.ContextVar[frozenset[str]] = (
+    contextvars.ContextVar("_request_loaded", default=frozenset())
 )
 
-# Freeze initial membership per turn. Explicit discovery may add names, so
-# the next provider request includes their real schema, not only result text.
-# The request still takes tools from the resolved, permission-wrapped list;
-# discovery does not rebuild the runtime contract from the mutable registry.
-_frozen_turn_tools: contextvars.ContextVar[Optional[set[str]]] = (
-    contextvars.ContextVar("_frozen_turn_tools", default=None)
-)
+
+def loaded_tools(messages: Any) -> list[str]:
+    """Names of the deferred tools ``messages`` loaded (``shared.tool_loads``)."""
+    from openprogram.models.providers.shared.tool_loads import loaded_tools as _loaded
+
+    return _loaded(messages)
 
 
-def freeze_turn_tools(tools: list[AgentTool]) -> None:
-    """Pin the deferred tools that may appear in the provider array for
-    the rest of this turn.
-
-    Called once at each turn boundary with the session's full tool list.
-    The initial set is copied from loaded-deferred names. Only explicit
-    discovery extends it within the turn; unrelated configuration changes do
-    not rebuild the tools list or its permission wrappers.
-    """
-    loaded = _loaded_deferred.get()
-    _frozen_turn_tools.set(set(loaded) if loaded else set())
+def note_request_loaded(names: Any) -> None:
+    """Record the loaded set of the request about to be sent (``_request_loaded``)."""
+    _request_loaded.set(frozenset(names or ()))
 
 
-def release_turn_tools() -> None:
-    """Drop the freeze — ``split_tools_for_dispatch`` reverts to using the
-    live loaded set. Used by callers that assemble a provider array outside
-    any turn (budget accounting, breakdown, tests)."""
-    _frozen_turn_tools.set(None)
-
-
-#: The applications open in a window for the current session, by id. Their
-#: deferred entries are resident for the session's requests while open.
+#: The applications open in a window for the current session, by id. Read
+#: by the page; an open application's tools stay deferred like any other.
 _open_applications: contextvars.ContextVar[frozenset[str]] = (
     contextvars.ContextVar("_open_applications", default=frozenset())
 )
@@ -1329,11 +1281,12 @@ def install_open_applications(app_ids: Any) -> Any:
     return _open_applications.set(frozenset(app_ids or ()))
 
 
-def resident_now(t: Any, loaded: Optional[set[str]] = None) -> bool:
+def resident_now(t: Any, loaded: Any = None) -> bool:
     """Whether ``t``'s schema goes into this request's tools array.
 
-    A resident tool always does; a deferred one once ``tool_search`` loaded
-    it, or while the application that owns it is open in a window.
+    A resident tool always does; a deferred one once ``loaded`` names it
+    (by default the last request's loaded set). Opening the application
+    that owns it loads nothing: the model loads it by name.
     """
     tier = tool_tier(t)
     if tier is Tier.RESIDENT:
@@ -1341,23 +1294,65 @@ def resident_now(t: Any, loaded: Optional[set[str]] = None) -> bool:
     if tier is not Tier.DEFERRED:
         return False
     if loaded is None:
-        frozen = _frozen_turn_tools.get()
-        loaded = frozen if frozen is not None else (_loaded_deferred.get() or set())
-    if getattr(t, "name", None) in loaded:
-        return True
-    app_id = application_of(tool_owner(t))
-    return bool(app_id) and app_id in _open_applications.get()
+        loaded = _request_loaded.get()
+    return getattr(t, "name", None) in loaded
 
 
-def install_loaded_deferred(loaded: Optional[set[str]] = None) -> Any:
-    """Install a session-scoped 'loaded deferred tool names' set.
+#: Why a tool a conversation may have loaded is gone, by name: its MCP server
+#: disconnected, its package was removed. Cleared when it registers again.
+_departed: dict[str, str] = {}
 
-    Returns the ContextVar token so the caller can ``reset()`` it on
-    session teardown — same idiom as ``_store_var`` in the dispatcher.
-    Pass ``loaded=None`` to start fresh; pass a set to restore session
-    state across restarts.
+#: What a call of a loaded tool that is gone says when no reason was kept.
+UNAVAILABLE_DEFAULT = "it is no longer available"
+
+
+def mark_unavailable(names: Any, reason: str) -> None:
+    """Record why the tools ``names`` are leaving the registry."""
+    for name in names or ():
+        if isinstance(name, str) and name:
+            _departed[name] = reason
+
+
+def unavailable_reason(name: str) -> str:
+    return _departed.get(name) or UNAVAILABLE_DEFAULT
+
+
+def unavailable_text(name: str) -> str:
+    """What the model reads when it calls a loaded tool that is gone."""
+    return f"Tool {name} is unavailable: {unavailable_reason(name)}."
+
+
+def unavailable_tool(name: str, definition: dict[str, Any]) -> AgentTool:
+    """A loaded tool whose source is gone, as the request still sends it.
+
+    Its definition is the one its load record kept, so the tools array
+    does not shrink (a removed entry is a rejected request on Anthropic and
+    a re-read of everything on every provider); a call of it fails with
+    why (Codex answers an unknown tool the same way, ``unsupported call``).
     """
-    return _loaded_deferred.set(set() if loaded is None else loaded)
+    async def _execute(call_id, args, cancel, on_update):
+        return AgentToolResult(content=[TextContent(text=unavailable_text(name))],
+                               details={}, is_error=True)
+
+    placeholder = AgentTool(
+        name=name, description=str(definition.get("description") or ""),
+        parameters=dict(definition.get("parameters") or {"type": "object", "properties": {}}),
+        label=name, execute=_execute,
+    )
+    setattr(placeholder, "_requires_approval", False)
+    setattr(placeholder, "_check_fn", None)
+    setattr(placeholder, "_requires_env", ())
+    setattr(placeholder, "_can_use", None)
+    setattr(placeholder, "_unavailable", True)
+    set_tier(placeholder, Tier.DEFERRED)
+    return placeholder
+
+
+def schema_not_sent_hint(name: str) -> str:
+    """Added to a failed argument check of a deferred tool the request had
+    not loaded (Claude Code ``buildSchemaNotSentHint``)."""
+    return (f"This tool's schema was not sent. Load it with `tool_search select:{name}`, "
+            "then retry.")
 
 
 def install_allowed_tool_names(names: set[str]) -> Any:
@@ -1365,33 +1360,10 @@ def install_allowed_tool_names(names: set[str]) -> Any:
     return _allowed_tool_names.set(set(names))
 
 
-def mark_deferred_loaded(names: list[str]) -> set[str]:
-    """Add tool names to the current session's loaded-deferred set.
-
-    Returns the updated set. No-ops gracefully when the ContextVar
-    wasn't installed (standalone scripts, pre-integration tests).
-    """
-    current = _loaded_deferred.get()
-    if current is None:
-        current = set()
-        _loaded_deferred.set(current)
-    for n in names:
-        current.add(n)
-    frozen = _frozen_turn_tools.get()
-    if frozen is not None:
-        # Tool workers inherit ContextVar values. Mutate the shared set so
-        # the provider coroutine observes the promotion after tool completion.
-        frozen.update(names)
-    return current
-
-
-def loaded_deferred_names() -> list[str]:
-    """Snapshot explicit discoveries shared with the current tool workers."""
-    return sorted(_loaded_deferred.get() or ())
-
-
 def split_tools_for_dispatch(
     tools: list[AgentTool],
+    loaded: Any = None,
+    records: Optional[dict[str, dict[str, Any]]] = None,
 ) -> tuple[list[AgentTool], list[tuple[str, str]]]:
     """Partition an AgentTool list for the dispatcher.
 
@@ -1399,34 +1371,65 @@ def split_tools_for_dispatch(
 
       - ``provider_tools`` is the subset to ship with full JSON Schema
         in the provider's tools array. Every non-deferred tool plus
-        every deferred tool whose name is in the session's loaded set.
+        every deferred tool named in ``loaded`` — the request's
+        ``loaded_tools(messages)``; by default the last request's. With
+        ``records`` (``tool_loads.loaded_records``), a loaded tool that
+        is no longer offered stays, as ``unavailable_tool``.
       - ``deferred_catalog`` is ``[(name, description), ...]`` for
-        every deferred tool *not yet loaded*. The dispatcher exposes
-        only its size plus keyword-search guidance in the prompt.
-
-    When the ContextVar isn't installed (no session) the loaded set
-    is empty — all deferred tools land in the catalog.
-
-    Inside a turn the initial frozen set plus explicit discoveries decides
-    membership. Repeated searches do not change the provider array.
+        every deferred tool offered now, loaded or not.
     """
-    frozen = _frozen_turn_tools.get()
-    loaded = (frozen if frozen is not None
-              else (_loaded_deferred.get() or set()))
+    loaded = _request_loaded.get() if loaded is None else frozenset(loaded)
     provider_tools: list[AgentTool] = []
     catalog: list[tuple[str, str]] = []
+    offered: set[str] = set()
     for t in tools:
+        offered.add(t.name)
         if resident_now(t, loaded):
             provider_tools.append(t)
-        else:
+        if tool_tier(t) is Tier.DEFERRED:
             catalog.append((t.name, t.description))
+    for name, definition in (records or {}).items():
+        if name in loaded and name not in offered and definition:
+            provider_tools.append(unavailable_tool(name, definition))
     return provider_tools, catalog
 
 
 _TOOL_SEARCH_MAX_RESULTS = 5
 
 
+def record_loads(details: Optional[dict[str, Any]], tools: list[AgentTool]) -> dict[str, Any]:
+    """Write a load record for ``tools`` into a tool result's ``details``.
+
+    The one writer of ``details["loads"]`` (``shared.tool_loads``): each
+    tool's definition as it is now, so the history that loaded it keeps the
+    definition the model was first sent. A name no provider accepts is not
+    recorded. Returns the updated ``details``.
+    """
+    from openprogram.models.providers.shared.tool_loads import (
+        LOADS, tool_definition, valid_tool_name,
+    )
+    details = dict(details or {})
+    records = list(details.get(LOADS) or ())
+    seen = {entry.get("name") for entry in records if isinstance(entry, dict)}
+    for t in tools:
+        t = current_tool(t)
+        if not valid_tool_name(t.name) or t.name in seen:
+            continue
+        seen.add(t.name)
+        records.append({"name": t.name, "definition": tool_definition(t)})
+    if records:
+        details[LOADS] = records
+    return details
+
+
 def _tool_search_impl(select: str, *, max_results: int = _TOOL_SEARCH_MAX_RESULTS) -> str:
+    """The text of a ``tool_search`` call (``_tool_search_run``)."""
+    return _tool_search_run(select, max_results=max_results)[0]
+
+
+def _tool_search_run(
+    select: str, *, max_results: int = _TOOL_SEARCH_MAX_RESULTS,
+) -> tuple[str, list[AgentTool]]:
     """Argument format mirrors Claude Code's ``ToolSearch``:
 
       ``select:name1,name2,name3``  — explicit names, comma-separated
@@ -1437,6 +1440,9 @@ def _tool_search_impl(select: str, *, max_results: int = _TOOL_SEARCH_MAX_RESULT
       ``+slack send``                — require ``slack`` in the tool
                                      name, rank remaining terms.
 
+    Returns the result text and the tools the call loaded; the caller
+    records those as the result's load record (``record_loads``).
+
     After this call the matched tools' full schemas appear in the
     provider tools array on the next provider request. Calling a deferred tool
     *before* it has been loaded triggers an InputValidationError on
@@ -1444,7 +1450,7 @@ def _tool_search_impl(select: str, *, max_results: int = _TOOL_SEARCH_MAX_RESULT
     """
     payload = select.strip()
     if not payload:
-        return "Error: pass tool names like `select:name1,name2` or a keyword query."
+        return "Error: pass tool names like `select:name1,name2` or a keyword query.", []
 
     # Explicit-name path: select: prefix, or input looks like a pure
     # comma-list of identifiers ("foo, bar, baz" with no whitespace
@@ -1496,33 +1502,19 @@ def _already_callable_hint(query: str) -> str:
     q = query.strip()
     if not q:
         return ""
-    loaded = _loaded_deferred.get() or set()
     t = get(q)
-    if t is None:
-        qlow = q.lower()
-        hits = [name for name in sorted(loaded) if name.lower() == qlow]
-    elif resident_now(t, loaded):
-        hits = [t.name]
-    else:
-        hits = []
-    if not hits:
+    if t is None or tool_tier(t) is not Tier.RESIDENT:
         return ""
-    if len(hits) == 1:
-        return (
-            f"Tool '{hits[0]}' is already loaded in this turn's tool list — "
-            "call it directly instead of searching again."
-        )
-    quoted = ", ".join(f"'{n}'" for n in hits)
     return (
-        f"Tools {quoted} are already loaded in this turn's tool list — "
-        "call them directly instead of searching again."
+        f"Tool '{t.name}' is already in this turn's tool list — "
+        "call it directly instead of searching again."
     )
 
 
-def _tool_search_by_name(payload: str) -> str:
+def _tool_search_by_name(payload: str) -> tuple[str, list[AgentTool]]:
     requested = [n.strip() for n in payload.split(",") if n.strip()]
     if not requested:
-        return "Error: pass tool names like `select:name1,name2`."
+        return "Error: pass tool names like `select:name1,name2`.", []
 
     loaded: list[AgentTool] = []
     missing: list[str] = []
@@ -1538,16 +1530,17 @@ def _tool_search_by_name(payload: str) -> str:
         if t is None:
             missing.append(name)
             continue
-        if resident_now(t, _loaded_deferred.get() or set()):
+        if tool_tier(t) is Tier.RESIDENT:
             lines.append(
-                f"Tool '{name}' is already loaded in this turn's tool list — "
+                f"Tool '{name}' is already in this turn's tool list — "
                 "call it directly instead of searching again."
             )
             continue
+        # A tool the request already loaded is loaded again: its definition
+        # comes back and is recorded (Claude Code returns the reference).
         loaded.append(t)
 
     if loaded:
-        mark_deferred_loaded([t.name for t in loaded])
         lines.append("<functions>")
         lines.extend(f"<function>{_tool_schema_line(t)}</function>" for t in loaded)
         lines.append("</functions>")
@@ -1559,80 +1552,68 @@ def _tool_search_by_name(payload: str) -> str:
     )
     if missing:
         lines.append(f"\n[warning] unknown tool name(s): {', '.join(missing)}")
-    return head + "\n" + "\n".join(lines)
+    return head + "\n" + "\n".join(lines), loaded
 
 
-def _tool_search_by_keyword(query: str, *, max_results: int) -> str:
-    """Rank deferred-not-yet-loaded tools against ``query`` and load
-    the top hits.
+def _namespace_of(t: Any) -> str:
+    """The MCP server or application a deferred tool belongs to, or ""."""
+    return str(getattr(t, "_mcp_server", None) or application_of(tool_owner(t)) or "")
 
-    Scoring (cheap word-overlap, no embeddings):
-      * ``+term`` (term prefixed with ``+``) is a HARD filter on the
-        tool name — candidates that don't contain it are eliminated.
-      * Each remaining word adds points based on where it lands:
-        +10 substring in name, +5 in searchHint (set by MCP servers
-        via ``_meta['anthropic/searchHint']``), +2 in description.
-      * Ties broken alphabetically by name for stable output.
+
+def _tool_search_by_keyword(query: str, *, max_results: int) -> tuple[str, list[AgentTool]]:
+    """Rank the deferred tools in scope against ``query`` and load the top
+    hits (``tool_rank``: Pi's BM25 over name, description, search hint,
+    schema and namespace).
+
+    A ``+term`` is a hard filter on the tool name, applied first; the other
+    terms rank what is left. A query of ``+term`` alone loads every tool
+    whose name has it, in name order. A tool the request already loaded is
+    ranked and loaded like the others.
     """
+    from openprogram.programs._host.tool_rank import document, rank
+
     raw_terms = [t for t in query.split() if t.strip()]
     required = [t[1:].lower() for t in raw_terms if t.startswith("+") and len(t) > 1]
-    weighted = [t.lower() for t in raw_terms if not t.startswith("+")]
+    weighted = [t for t in raw_terms if not t.startswith("+")]
     if not raw_terms:
-        return "Error: empty query."
+        return "Error: empty query.", []
 
     hint = _already_callable_hint(query)
     if hint:
-        return hint
+        return hint, []
 
-    # Candidate pool: deferred tools whose schema isn't already in this
-    # session's provider tools array.
-    loaded = _loaded_deferred.get() or set()
     allowed = _allowed_tool_names.get()
-    candidates = [
-        t for t in all_tools()
-        if tool_tier(t) is Tier.DEFERRED and not resident_now(t, loaded)
-        and (allowed is None or t.name in allowed)
-    ]
+    candidates = sorted(
+        (t for t in all_tools()
+         if tool_tier(t) is Tier.DEFERRED and (allowed is None or t.name in allowed)
+         and all(req in t.name.lower() for req in required)),
+        key=lambda t: t.name,
+    )
+    if weighted:
+        by_name = {t.name: t for t in candidates}
+        ranked = rank(" ".join(weighted), [
+            document(t.name, t.description or "", t.parameters,
+                     getattr(t, "_search_hint", None) or "", _namespace_of(t))
+            for t in (current_tool(t) for t in candidates)
+        ], len(candidates))
+        matched = [by_name[name] for name, _score in ranked]
+    else:
+        matched = candidates
 
-    scored: list[tuple[int, str, AgentTool]] = []
-    for t in candidates:
-        name_lower = t.name.lower()
-        if not all(req in name_lower for req in required):
-            continue
-        hint = (getattr(t, "_search_hint", None) or "").lower()
-        desc = (t.description or "").lower()
-        score = 0
-        for term in weighted:
-            if term in name_lower:
-                score += 10
-            if term in hint:
-                score += 5
-            if term in desc:
-                score += 2
-        # Required-only query (e.g. "+linear") still ranks all matching.
-        if not weighted:
-            score = 1
-        if score > 0:
-            scored.append((score, t.name, t))
+    if not matched:
+        return f"No deferred tools matched query {query!r}.", []
 
-    if not scored:
-        return f"No deferred tools matched query {query!r}."
-
-    scored.sort(key=lambda row: (-row[0], row[1]))
-    top = scored[:max_results]
-    loaded_names = [name for _, name, _ in top]
-    mark_deferred_loaded(loaded_names)
-
+    top = matched[:max_results]
     head = (
         f"Loaded {len(top)} deferred tool"
         f"{'s' if len(top) != 1 else ''} matching {query!r} "
-        f"(scored, top {max_results} of {len(scored)} matches). "
+        f"(top {len(top)} of {len(matched)} matches). "
         f"{_SCHEMA_PREAMBLE}"
     )
     lines = ["<functions>"]
-    lines += [f"<function>{_tool_schema_line(t)}</function>" for _, _, t in top]
+    lines += [f"<function>{_tool_schema_line(t)}</function>" for t in top]
     lines.append("</functions>")
-    return head + "\n" + "\n".join(lines)
+    return head + "\n" + "\n".join(lines), top
 
 
 # Build + register the ToolSearch entry point manually (rather than
@@ -1650,8 +1631,9 @@ async def _tool_search_execute(call_id, args, cancel, on_update):
     except (TypeError, ValueError):
         max_results = _TOOL_SEARCH_MAX_RESULTS
     max_results = max(1, min(max_results, 20))
-    text = _tool_search_impl(select, max_results=max_results)
-    return AgentToolResult(content=[TextContent(text=text)])
+    text, loaded = _tool_search_run(select, max_results=max_results)
+    return AgentToolResult(content=[TextContent(text=text)],
+                           details=record_loads(None, loaded) if loaded else None)
 
 
 tool_search = AgentTool(
@@ -1665,7 +1647,7 @@ tool_search = AgentTool(
         "Query forms:\n"
         "  `select:name1,name2`  — load these exact tools by name.\n"
         "  `notebook jupyter`    — keyword search; up to 5 best matches "
-        "scored against tool name / search hint / description.\n"
+        "ranked by tool name, description, parameters and server.\n"
         "  `+slack send`         — `+`-prefixed terms HARD-filter on "
         "the name; remaining terms rank within survivors."
     ),
@@ -1706,14 +1688,30 @@ register(tool_search,
                    "coding", "vision", "memory"])
 
 
-#: Deferred tool names listed in the prompt; the rest are counted.
+#: Deferred tool names listed in a prompt's catalog; the rest are counted.
 DEFERRED_NAMES_SHOWN = 80
+
+#: How long a catalog line's description may be, and the whole catalog note
+#: (Codex ``world_state/tools.rs``: 250 characters, 4 KiB).
+CATALOG_DESCRIPTION_CHARS = 250
+CATALOG_MAX_BYTES = 4 * 1024
+_CATALOG_OMISSION_RESERVE = 64
+_CATALOG_TAG = "deferred-tools"
+
+#: What loading a tool promises: it stays while its source does.
+_LOAD_PROMISE = (
+    "Their schemas are not loaded at the start. Before a tool's first call, "
+    "call tool_search with its name (`select:name`) or descriptive keywords; "
+    "returned schemas can be called in the same turn, and a loaded tool stays "
+    "callable while its source is connected."
+)
 
 
 def deferred_catalog_text(catalog: list[tuple[str, str]]) -> str:
-    """Deferred-discovery guidance for the prompt: the tools' names, never
-    their descriptions or schemas, so the model knows what exists and loads
-    a schema with tool_search before calling it."""
+    """Deferred-discovery guidance for a prompt of its own (a ``runtime.exec``
+    call, an Agent method): the tools' names, never their descriptions or
+    schemas. A conversation's turns get the catalog beside their message
+    instead (``deferred_catalog`` / ``catalog_note``)."""
     if not catalog:
         return ""
     names = [name for name, _ in catalog]
@@ -1721,9 +1719,114 @@ def deferred_catalog_text(catalog: list[tuple[str, str]]) -> str:
     more = len(names) - DEFERRED_NAMES_SHOWN
     if more > 0:
         shown += f", and {more} more"
-    return (
-        f"{len(catalog)} deferred tools are available via tool_search: {shown}. "
-        "Their schemas are not loaded. Call tool_search with a name or "
-        "descriptive keywords first; returned schemas can be called in the "
-        "same turn."
-    )
+    return f"{len(catalog)} deferred tools are available via tool_search: {shown}. {_LOAD_PROMISE}"
+
+
+def _one_line(text: str, limit: int = CATALOG_DESCRIPTION_CHARS) -> str:
+    line = " ".join(((text or "").strip().splitlines() or [""])[0].split())
+    return line if len(line) <= limit else line[: limit - 1].rstrip() + "…"
+
+
+def deferred_catalog(tools: Any, open_applications: Any = ()) -> dict[str, str]:
+    """The deferred tools in scope, as the catalog lists them.
+
+    ``{entry: line}``: a built-in deferred tool is its own entry with no
+    description; an MCP server's or an application's tools are one entry,
+    the namespace, whose line names its tools (cut to 250 characters). An
+    application open in a window for the conversation (``open_applications``)
+    says so and how to load its tools: opening it loads nothing.
+    """
+    open_ids = set(open_applications or ())
+    groups: dict[str, list[str]] = {}
+    plain: dict[str, str] = {}
+    for t in tools or ():
+        if tool_tier(t) is not Tier.DEFERRED or getattr(t, "_unavailable", False):
+            continue
+        namespace = _namespace_of(t)
+        if namespace:
+            groups.setdefault(namespace, []).append(t.name)
+        else:
+            plain[t.name] = ""
+    out = dict(sorted(plain.items()))
+    for namespace in sorted(groups):
+        names = sorted(groups[namespace])
+        if namespace in open_ids:
+            from openprogram.programs._authoring.guides import activation_note
+
+            out[namespace] = _one_line("Open in a window. " + activation_note(names))
+        else:
+            out[namespace] = _one_line(f"{len(names)} tools: " + ", ".join(names))
+    return out
+
+
+def _catalog_rows(rows: dict[str, str], budget: int) -> tuple[list[str], int]:
+    """Lines for ``rows`` within ``budget`` bytes: names first, then each
+    description as far as the bytes left allow. Returns the lines and how
+    many rows did not fit."""
+    names = list(rows)
+    kept: list[str] = []
+    used = 0
+    for name in names:
+        size = len(f"- {name}\n".encode())
+        if used + size > budget - _CATALOG_OMISSION_RESERVE and len(kept) < len(names):
+            break
+        kept.append(name)
+        used += size
+    lines = []
+    left = budget - _CATALOG_OMISSION_RESERVE - used
+    for name in kept:
+        description = rows[name]
+        line = f"- {name}"
+        if description and left > 8:
+            extra = f": {description}"
+            encoded = extra.encode()
+            if len(encoded) > left:
+                extra = encoded[: max(0, left - 3)].decode("utf-8", "ignore") + "…"
+            left -= len(extra.encode())
+            line += extra
+        lines.append(line)
+    return lines, len(names) - len(kept)
+
+
+def catalog_note(previous: Optional[dict[str, str]], current: dict[str, str]) -> str:
+    """What a turn tells the model about the deferred tools, or "".
+
+    With no ``previous`` (the conversation's first turn, the first after a
+    summary) the whole catalog; afterwards only what was added and removed
+    since, and nothing when nothing changed (Claude Code's
+    ``deferred_tools_delta``, Codex's namespace groups). At most
+    ``CATALOG_MAX_BYTES``: names are kept before descriptions, and what
+    does not fit is counted.
+    """
+    if previous is not None and previous == current:
+        return ""
+    if previous is None and not current:
+        return ""
+    if previous is None:
+        groups = [("Deferred tools you can load with tool_search", dict(current))]
+    else:
+        added = {k: v for k, v in current.items() if previous.get(k) != v}
+        removed = {k: v for k, v in previous.items() if k not in current}
+        groups = [("Added deferred tools", added), ("Removed deferred tools", removed)]
+        if not added and not removed:
+            return ""
+    open_tag, close_tag = f"<{_CATALOG_TAG}>", f"</{_CATALOG_TAG}>"
+    tail = _LOAD_PROMISE if previous is None else (
+        "A removed tool can no longer be loaded; a call of one already loaded "
+        "says it is unavailable.")
+    if not current:
+        tail = "No deferred tools remain."
+    budget = CATALOG_MAX_BYTES - len(f"{open_tag}\n\n{tail}\n{close_tag}".encode())
+    out = [open_tag]
+    present = [(label, rows) for label, rows in groups if rows]
+    for label, rows in present:
+        share = budget // len(present) - len(f"{label}:\n".encode())
+        lines, omitted = _catalog_rows(rows, share)
+        out.append(f"{label}:")
+        out.extend(lines)
+        if omitted:
+            out.append(f"- … and {omitted} more (find them with a keyword query)")
+    out.append("")
+    out.append(tail)
+    out.append(close_tag)
+    return "\n".join(out)

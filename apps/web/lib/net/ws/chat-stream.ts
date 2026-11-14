@@ -40,6 +40,7 @@ import {
   rejectPendingUserText,
 } from "@/lib/chat/send/pending-user-text";
 import { frameNamesPendingSend } from "./unacked-sends";
+import { offSelectedBranch } from "../../chat/run/selected-branch.ts";
 import { patchHeldRow, placeCitations, queueTextFrame } from "./text-frames.ts";
 import { normalizeCitations } from "../../chat/transcript/web-sources.ts";
 
@@ -94,6 +95,8 @@ interface ChatResponseData {
   type: string;
   msg_id?: string;
   session_id?: string;
+  /** The branch the turn runs on. */
+  branch_id?: string;
   event?: StreamEvent;
   content?: string;
   text?: string;
@@ -215,6 +218,13 @@ function handleResponse(d: ChatResponseData | undefined): void {
     || Object.values(useSessionStore.getState().runningTasks)
       .find(task => task?.msg_id === d.msg_id)?.session_id;
   if (!sid) return;
+  // A turn on a branch other than the selected one is not drawn: its rows
+  // are not in this transcript, and switching to it loads them.
+  if (offSelectedBranch(d.branch_id,
+    useSessionStore.getState().composerSettingsBySession[sid]?.active_branch_id)) {
+    if (isTurnEnd(d.type)) sessionByMsgId.delete(d.msg_id);
+    return;
+  }
   if (d.type === "stream_event") {
     if (d.event) applyStreamFrame(d, d.event);
     return;

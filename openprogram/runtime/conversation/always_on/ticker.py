@@ -186,7 +186,13 @@ def tick(now: float | None = None) -> list[dict]:
 
 
 def start_in_worker(interval: float = TICK_SECONDS) -> tuple[threading.Event, threading.Thread]:
-    from openprogram.runtime.conversation.always_on import handoff
+    from openprogram.runtime.conversation.always_on import handoff, handoff_migration
+    try:
+        # What the removed handoff tool left waiting goes through
+        # send_message now; this runs before the old replay reads the file.
+        handoff_migration.migrate_in_worker()
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("stored handoffs not migrated: %s: %s", type(exc).__name__, exc, exc_info=True)
     try:
         # Chains an earlier worker left keep their hop counts and owed replies,
         # and what it left waiting for a busy conversation is delivered once.

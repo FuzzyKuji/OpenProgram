@@ -206,10 +206,11 @@ writer=controller</pre>
 <li>Read <code translate="no">current</code>; on a <code translate="no">generation</code> mismatch release and fail.</li>
 <li>Write <code translate="no">current.&lt;pid&gt;.tmp</code> with generation + 1, fsync. Copy <code translate="no">current</code> to <code translate="no">current.prev</code> the same way; the write ending probation stores the committed pointer there, so a repair cannot bring back an expired probation.</li>
 <li>POSIX: rename, fsync the directory. Windows: <code translate="no">MoveFileExW</code> with <code translate="no">MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH</code>, retried 20 times at 50 ms on access or sharing errors.</li>
-<li>Release the lock.</li>
+<li>Release the lock. A lock that cannot be removed does not undo the move; it expires by age.</li>
 </ol>
 <dl class="pairs">
-<dt>Implementations</dt><dd><code translate="no">versions/pointer.py</code>, JavaScript in the shell, C in the launcher, <code translate="no">bootstrap/versions.py</code>. No symlinks.</dd>
+<dt>Implementations</dt><dd><code translate="no">versions/pointer.py</code>, JavaScript in the shell, C in the launcher, <code translate="no">bootstrap/versions.py</code>. No symlinks, no junctions.</dd>
+<dt>What a switch replaces</dt><dd>This one file, after the worker has stopped. <code translate="no">versions/</code> and <code translate="no">bases/</code> are never rewritten once sealed, so an interpreter or DLL that a process or a scanner still holds is never in the way of a switch; it only delays retention.</dd>
 <dt>Writers</dt><dd>Controller, launcher guard, shell recovery page, <code translate="no">bootstrap/versions.py</code>, installer</dd>
 <dt>Missing or unparsable</dt><dd>Rebuilt, never reseeded: from <code translate="no">current.prev</code>, else <code translate="no">rebuild-pointer</code> picks the newest version whose commit is reachable from <code translate="no">local</code>, <code translate="no">writer=bootstrap</code>.</dd>
 <dt>Rollback conflict</dt><dd>Reread; <code translate="no">version</code> no longer the candidate means done. Still failing at the deadline: write <code translate="no">pending-rollback</code>, applied by the launcher.</dd>
@@ -246,7 +247,7 @@ writer=controller</pre>
 <tr><th scope="row">Not started</th><td>Scheduler, cron, always-on ticker, channels, MCP server and clients, release check, service installation, update sweep, idle-session watcher, nightly reorganizer, config hooks, subscription catalog refresher, Programs watcher. Decided in <code translate="no">runner.py:trial_mode()</code></td></tr>
 <tr><th scope="row">macOS</th><td><code translate="no">sandbox.sb</code>: writes only in the trial directory; live state reads denied except <code translate="no">versions/&lt;id&gt;</code>, <code translate="no">bases/&lt;base&gt;</code>, <code translate="no">trials/&lt;update&gt;</code> and ancestor metadata; network only to the trial's worker port and fake model port</td></tr>
 <tr><th scope="row">Linux</th><td>bubblewrap with the same rules where available</td></tr>
-<tr><th scope="row">Windows</th><td>Temporary data, port and sanitized copy only; every result says so</td></tr>
+<tr><th scope="row">Windows</th><td>No OS sandbox: temporary data, a separate port and the sanitized copy are the only isolation. The progress line during the trial and the result both say the test could reach other files on the computer. <code translate="no">PATH</code> is the base's Python plus the Windows system directories. The check that the launcher follows a moved pointer is skipped.</td></tr>
 </tbody>
 </table>
 <ol>
@@ -347,7 +348,8 @@ writer=controller</pre>
 <h2 id="retention">Retention</h2>
 <dl class="pairs">
 <dt>Kept</dt><dd><code translate="no">current</code>, <code translate="no">last_good</code>, <code translate="no">previous_good</code>; 5 most recent successful versions; each update's <code translate="no">controller_version</code> and <code translate="no">candidate_version</code> while non-terminal or queued; the version an open shell loaded (<code translate="no">shell.json</code>, live pid); versions whose <code translate="no">boot/&lt;id&gt;.attempts</code> was touched in 10 minutes; the frontend zips kept versions name</dd>
-<dt>Deletion</dt><dd>Rename to <code translate="no">trash/&lt;id&gt;</code>, then delete; a Windows lock retries next pass. Unreferenced bases go the same way.</dd>
+<dt>Deletion</dt><dd>Rename to <code translate="no">trash/&lt;id&gt;</code>, then delete. A read-only file, such as a Git object on Windows, is made writable and tried again. Unreferenced bases go the same way.</dd>
+<dt>Left behind</dt><dd>A tree a running process holds, or a file that stays locked. The pass lists them in <code translate="no">Plan.remaining</code>, logs them, and the next pass tries again.</dd>
 <dt>When</dt><dd>After <code translate="no">succeeded</code> and at worker start, never while the slot is held. Failed candidates after 7 days, <code translate="no">work/&lt;task&gt;</code> from aborted updates after 14.</dd>
 </dl>
 
@@ -383,6 +385,7 @@ writer=controller</pre>
 </table>
 <dl class="pairs">
 <dt>Recovery page</dt><dd>When <code translate="no">/healthz</code> fails for 120 s with no switch or migration, and the version is off probation or has no fallback. Lists the versions Settings shows, numbered from <code translate="no">version-numbers.json</code>, without never-committed candidates. Picking writes <code translate="no">writer=shell</code>. Offers re-seeding code, never over a non-empty <code translate="no">repo/</code>. Needs neither Python nor the worker.</dd>
+<dt>Stopping the worker</dt><dd>Before the page moves <code translate="no">current</code>. POSIX: <code translate="no">SIGTERM</code>. Windows: a <code translate="no">worker.stop</code> request the worker reads, 8 s for an orderly exit, then <code translate="no">taskkill /T /F</code>. A worker still alive after 20 s changes nothing.</dd>
 <dt><code translate="no">shell_compat</code></dt><dd>A range: the shell declares min and max, each new shell accepts the previous compat. <code translate="no">spawnWorker</code> and the recovery and undo lists filter by it.</dd>
 <dt>During a switch</dt><dd><code translate="no">appInstallInProgress()</code> reads <code translate="no">switching</code> on every platform: a live pid inside its deadline makes the shell wait instead of spawning or restarting.</dd>
 <dt>Always available</dt><dd>Native menu item “Go back to a previous version” (File menu on Windows and Linux), needing nothing from the worker</dd>
@@ -458,8 +461,8 @@ writer=controller</pre>
 <tbody>
 <tr><th scope="row">Signed</th><td>Electron, <code translate="no">app.asar</code> (loader, recovery page, node-pty), launcher, macOS helper. Without Developer ID, <code translate="no">local_signing.py</code> gives the helper a stable identity. Files in <code translate="no">versions/</code> and <code translate="no">bases/</code> are unsigned and unquarantined.</td></tr>
 <tr><th scope="row">Seed</th><td><code translate="no">Resources/seed/</code>: <code translate="no">base.tar.zst</code>, <code translate="no">version.tar.zst</code>, <code translate="no">repo.bundle</code>, launcher, helper. <code translate="no">.seeding</code> is written first and removed last; an interrupted seed restarts. A non-empty <code translate="no">repo/</code> is never overwritten.</td></tr>
-<tr><th scope="row">Git</th><td>Pinned dugite-native on macOS and Windows; <code translate="no">&lt;base&gt;/git/bin</code> first on <code translate="no">PATH</code></td></tr>
-<tr><th scope="row">Windows</th><td>Per-user NSIS installs the shell only. <code translate="no">prepare-upgrade.ps1</code> and <code translate="no">installer.nsh</code> stop only processes from the shell's root.</td></tr>
+<tr><th scope="row">Git</th><td>Pinned dugite-native on macOS and Windows; <code translate="no">&lt;base&gt;/git/bin</code> first on <code translate="no">PATH</code>, on Windows <code translate="no">&lt;base&gt;\git\cmd</code></td></tr>
+<tr><th scope="row">Windows</th><td>Per-user NSIS installs the shell only. On an upgrade <code translate="no">prepare-upgrade.ps1</code> stops only processes from the shell's root. On an uninstall <code translate="no">remove-background.ps1</code> also stops the worker and removes its logon task; <code translate="no">&lt;root&gt;</code> and the user's data stay.</td></tr>
 <tr><th scope="row">CLI</th><td><code translate="no">install-release.sh</code>/<code translate="no">.ps1</code> adopt <code translate="no">&lt;root&gt;</code> and <code translate="no">current</code>, migrating <code translate="no">runtime/cli/releases</code></td></tr>
 <tr><th scope="row">Mode flag</th><td><code translate="no">layout.managed()</code> replaces <code translate="no">OPENPROGRAM_IMMUTABLE_RUNTIME</code>; embedded mode keeps it</td></tr>
 </tbody>
@@ -471,8 +474,8 @@ writer=controller</pre>
 <thead class="sr"><tr><th scope="col">State</th><th scope="col">Items</th></tr></thead>
 <tbody>
 <tr><th scope="row">Built</th><td>State machine and schema 2, queue, switch controller and launchers on all platforms, heartbeat, watchdog, held turns, subsystems, sweep, every <code translate="no">self_update</code> action, version store, pointer, launcher, retention, trial engine, release fetch and replay through <code translate="no">openprogram upgrade</code>, thin shell loader, seed, recovery page, handshake, relaunch, CLI seed installers</td></tr>
-<tr><th scope="row">Unverified</th><td>Windows, until a Windows machine or VM runs it</td></tr>
-<tr><th scope="row">Not done</th><td><code translate="no">release.yml</code> still publishes embedded Apps. No real base and seed built or run under real Electron. No signing key for release manifests, so no official release can be accepted. macOS privacy-grant gate needs a human click. Release download into a directory.</td></tr>
+<tr><th scope="row">Unverified</th><td>Windows: no part of the version store has run there. Its branches are tested through stand-ins and a cross-compiled launcher. <code translate="no">windows-desktop</code> runs the shell checks on Windows; <code translate="no">windows-core</code> runs the launcher test only.</td></tr>
+<tr><th scope="row">Not done</th><td>No Windows App or Windows update files are published: the one Release run that built them failed there. Linux thin Apps and signed update files are published; a switch on an installed copy is not yet observed. The macOS App embeds its runtime unless <code translate="no">OPENPROGRAM_RELEASE_MAC_THIN</code> is set. macOS privacy-grant gate needs a human click.</td></tr>
 <tr><th scope="row">Kept for now</th><td><code translate="no">legacy_app</code>, <code translate="no">delivery/bootstrap.py</code>, the App path of <code translate="no">control/supervisor.py</code>, <code translate="no">repair/owner_repair.py</code>, <code translate="no">owner_terminal.py</code>, until published Apps are thin. <code translate="no">package_protocol.py</code> while <code translate="no">native_checks.py</code> and <code translate="no">ui_checks.py</code> read it.</td></tr>
 </tbody>
 </table>

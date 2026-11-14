@@ -20,7 +20,7 @@ def test_read_pin_from_memory(monkeypatch):
     assert sm.ensure_session_chat_model("s1") == ("openai-codex", "gpt-5.6-sol")
 
 
-def test_missing_pin_freezes_new_session_model_once(monkeypatch):
+def test_a_branch_without_its_own_model_follows_the_agent_and_is_never_pinned(monkeypatch):
     import openprogram.interfaces.server.server as server
 
     conv = {}
@@ -36,7 +36,10 @@ def test_missing_pin_freezes_new_session_model_once(monkeypatch):
         ),
     )
     assert sm.ensure_session_chat_model("s2") == ("xai-subscription", "grok-4.6")
-    assert writes == [("s2", "xai-subscription", "grok-4.6")]
+    # Nothing is written: the next turn reads the Agent's model again.
+    assert writes == [] and conv == {}
+    monkeypatch.setattr(sm, "new_session_chat_model", lambda agent_id=None: ("anthropic", "claude-y"))
+    assert sm.ensure_session_chat_model("s2") == ("anthropic", "claude-y")
 
 
 def test_sol_pin_never_falls_back_to_grok(monkeypatch):

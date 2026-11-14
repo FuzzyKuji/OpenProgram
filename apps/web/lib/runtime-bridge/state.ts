@@ -108,10 +108,17 @@ export interface RuntimeState {
     previousMessageStatus?: string;
   }>;
   /** Stops issued while a chat turn still has only its local placeholder.
-   *  `chat_ack` upgrades these to an exact execution cancel command. */
+   *  The stop went out naming the send when its request id was known
+   *  (`commandId`); otherwise `chat_ack` sends it naming the execution.
+   *  This is the composer's stop guard, as Claude Code's `queryGuard`
+   *  (`forceEnd()` bumps its generation): the ack of a send always leaves
+   *  the server before the stop frame is read, so only the page can keep
+   *  a stopped turn from showing as running again when the ack arrives. */
   _optimisticStops: Record<string, {
     messageId?: string;
     previousMessageStatus?: string;
+    /** The stop already sent naming the send (`client_request_id`). */
+    commandId?: string;
   }>;
 }
 

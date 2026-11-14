@@ -79,7 +79,6 @@ _RUNTIME_ENTRYPOINT_PREFIXES = (
             ("internals._turn_lifecycle", "openprogram.runtime.conversation.turn_lifecycle"),
             ("internals._workdir", "openprogram.runtime.conversation.workdir"),
             ("history_ownership", "openprogram.runtime.conversation.history_ownership"),
-            ("workspace_alignment", "openprogram.runtime.conversation.workspace_alignment"),
             ("surface_context", "openprogram.runtime.conversation.surface_context"),
             ("turn_request_context", "openprogram.runtime.conversation.turn_request_context"),
             ("plan_mode", "openprogram.runtime.conversation.plan_mode"),

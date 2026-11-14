@@ -65,6 +65,7 @@ def _merge_result(**overrides):
         failed=False,
         error=None,
         base_peer=None,
+        branch_id=None,
     )
     base.update(overrides)
     return types.SimpleNamespace(**base)
@@ -226,6 +227,7 @@ def test_handle_chat_rejects_while_run_active(monkeypatch, server_events):
     monkeypatch.setattr(_s, "_get_or_create_session",
                         lambda sid, **kw: {"id": sid})
     monkeypatch.setattr(_s, "_is_run_active", lambda sid: True)
+    monkeypatch.setattr(_s, "_is_selected_run_active", lambda sid: True)
     appended: list = []
     monkeypatch.setattr(_s, "_append_msg",
                         lambda conv, msg, **_kw: appended.append(msg))
@@ -317,6 +319,8 @@ def test_get_run_state_does_not_change_socket_focus(monkeypatch):
     ws = _FakeWS()
     ws._focused_session_id = "visible"
     monkeypatch.setattr(_s, "_is_run_active", lambda sid: sid == "background")
+    monkeypatch.setattr(_s, "_is_selected_run_active", lambda sid: sid == "background")
+    monkeypatch.setattr(_s, "_running_branches", lambda sid: [])
 
     asyncio.run(handle_get_run_state(
         ws, {"session_id": "background"},
@@ -326,7 +330,8 @@ def test_get_run_state_does_not_change_socket_focus(monkeypatch):
     assert isinstance(ws.sent[0]["data"].pop("run_seq"), int)
     assert ws.sent == [{
         "type": "run_state",
-        "data": {"session_id": "background", "run_active": True, "run_task": None},
+        "data": {"session_id": "background", "run_active": True, "run_task": None,
+                 "running_branches": []},
     }]
 
 

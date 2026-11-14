@@ -61,14 +61,12 @@ def test_search_on_respects_agent_disabled_policy():
 def test_explicit_search_reaches_cold_provider_request_without_loader():
     from openprogram.runtime.conversation.model_tools import resolve_tools
     from openprogram.programs import (
-        agent_tools, apply_default_deferral, freeze_turn_tools,
-        install_loaded_deferred, release_turn_tools, split_tools_for_dispatch,
+        agent_tools, apply_default_deferral, note_request_loaded, split_tools_for_dispatch,
     )
     apply_default_deferral()
     shared = next(t for t in agent_tools(names=["web_search"]) if t.name == "web_search")
     assert shared._defer
-    install_loaded_deferred()
-    freeze_turn_tools([])
+    note_request_loaded(())
     try:
         for cfg in (
             SessionRunConfig(tools_override=["web_search"], web_search=True),
@@ -81,4 +79,4 @@ def test_explicit_search_reaches_cold_provider_request_without_loader():
             assert "web_search" not in {name for name, _ in catalog}
             assert shared._defer, "Per-chat selection must not mutate the global registry"
     finally:
-        release_turn_tools()
+        note_request_loaded(())

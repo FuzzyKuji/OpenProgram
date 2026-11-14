@@ -85,7 +85,7 @@
 <tr><th scope="row">读取既有会话记录作为上下文<details><summary>证据</summary>我们 read_conversation · openclaw sessions_history · hermes session_search</details></th><td>●</td><td>● openclaw, hermes</td></tr>
 <tr><th scope="row">内置深度研究工作流<details><summary>证据</summary>buddy builtin/workflows/deep-research.workflow.js 使用五个并行分支和三次表决式验证</details></th><td>·</td><td>◐ openclaw · ● buddy</td></tr>
 <tr><th scope="row">读自身文档回答自身问题<details><summary>证据</summary>claude claude-code-guide 子 agent · gm内 get_internal_docs · openclaw docs 命令</details></th><td>·</td><td>● claude, openclaw, cc内, gm内 · ◐ buddy</td></tr>
-<tr><th scope="row">图片与 PDF 输入<details><summary>证据</summary>我们 Web/渠道可收附件；图片进入 ImageContent，PDF 保存到会话工作目录后由 pdf/read 读取；TUI 无同等文件选择入口</details></th><td>◐</td><td>● claude, codex, openclaw, opencode, hermes, pi-mono, cc内, cx内, gm内, buddy · ◐ weclaw</td></tr>
+<tr><th scope="row">图片与 PDF 输入<details><summary>证据</summary>我们 Web/渠道可收附件；图片进入 ImageContent，PDF 保存到会话工作目录后由 pdf/read 读取；TUI 现可通过粘贴或拖入路径、剪贴板和 @path 附加图片与 PDF（评分后已变化）</details></th><td>◐</td><td>● claude, codex, openclaw, opencode, hermes, pi-mono, cc内, cx内, gm内, buddy · ◐ weclaw</td></tr>
 </tbody>
 </table>
 </details>
@@ -142,7 +142,7 @@
 <tr><th scope="row">多模型共识或交叉复核<details><summary>证据</summary>我们 mixture_of_agents · claude /advisor · openclaw oracle 技能</details></th><td>●</td><td>● claude, openclaw, hermes, cc内</td></tr>
 <tr><th scope="row">子 agent 深度预算<details><summary>证据</summary>我们 agent.max_spawn_depth 默认 0，即不限制 · claude 默认 3 · hermes max_spawn_depth</details></th><td>●</td><td>● claude, hermes, cc内 · ◐ buddy</td></tr>
 <tr><th scope="row">并发数与每会话派生总量上限<details><summary>证据</summary>我们 runtime/jobs/resource_governance/ 每会话 live/queued/total 上限加 token、费用与运行时长限额，state.settings 可配并入 usage ledger 计量 · claude 并发 20 加每会话 200 次 · hermes max_concurrent_children 默认 3</details></th><td>●</td><td>● claude, openclaw, hermes, cc内, buddy · ◐ opencode</td></tr>
-<tr><th scope="row">子 agent 支持从持久状态恢复执行<details><summary>证据</summary>我们再次调用 agent(to=…) 可对已存在的持久 branch 继续下一轮；目标繁忙时持久 Job admission 与持久 inbox 写入之间仍有进程崩溃窗口，当前不会自动恢复该 deferred intent，因此按部分确认。buddy 使用 agentId 与 agent-{id}.jsonl，并在后续调用中传入 resume 参数</details></th><td>◐</td><td>● buddy</td></tr>
+<tr><th scope="row">子 agent 支持从持久状态恢复执行<details><summary>证据</summary>我们再次调用 agent(to=…) 可对已存在的持久 branch 继续下一轮。从请求到结果的每次交接都先写意图再动手，并由下一个 Worker 补完：目标繁忙时 inbox 条目随已 admission 的 Job 一起保存，提交方进程已不在的 held spawn 由恢复发布，未发出的结果通知会重放；tests/component/agent/jobs/test_subagent_handoff_crash.py 在每个窗口杀进程验证。buddy 使用 agentId 与 agent-{id}.jsonl，并在后续调用中传入 resume 参数</details></th><td>●</td><td>● buddy</td></tr>
 <tr><th scope="row">函数调用树写进同一张会话图<details><summary>证据</summary>我们 <code translate="no">runtime/agent/call_state.py</code> 写 code 节点，<code translate="no">state/store/session/session_node_writer.py</code> 与 <code translate="no">state/store/session/nodes.py</code> 统一 caller/predecessor 语义</details></th><td>●</td><td>无确认</td></tr>
 <tr><th scope="row">按剩余消息预算限制子 agent 可用工具<details><summary>证据</summary>我们 <code translate="no">runtime/conversation/model_tools.py</code> 在解析工具时读取调用链消息预算；tests/unit/agent/jobs/test_spawn_caller_invariant.py 验证预算耗尽后移除协作工具</details></th><td>●</td><td>无确认</td></tr>
 </tbody>
@@ -199,7 +199,7 @@
 <tr><th scope="row">电话呼入呼出<details><summary>证据</summary>openclaw voice-call 使用 Twilio、Telnyx 或 Plivo，支持 DTMF</details></th><td>·</td><td>● openclaw</td></tr>
 <tr><th scope="row">主题切换<details><summary>证据</summary>我们 Web 设置支持多套持久主题与 auto；TUI /theme 支持 auto、dark/light 及 dim 变体并持久化。OpenClaw Control UI 支持 themes</details></th><td>●</td><td>● claude, codex, openclaw, opencode, hermes, pi-mono, cc内, cx内, gm内, buddy</td></tr>
 <tr><th scope="row">Vim 模式<details><summary>证据</summary>claude 完整模态引擎带文本对象 · buddy /vim · codex /vim</details></th><td>·</td><td>● claude, codex, cc内, cx内, gm内, buddy · ◐ pi-mono</td></tr>
-<tr><th scope="row">快捷键全量可重映射<details><summary>证据</summary>buddy keybindings.json 分 16 个上下文并支持组合键 · claude 约 95 个可绑定动作</details></th><td>·</td><td>● claude, codex, opencode, pi-mono, cc内, cx内, buddy</td></tr>
+<tr><th scope="row">快捷键全量可重映射<details><summary>证据</summary>buddy keybindings.json 分 16 个上下文并支持组合键 · claude 约 95 个可绑定动作 · 我们的 TUI 现从 keybindings.json 读取动作覆盖并在 ? 中列出（评分后已变化）</details></th><td>·</td><td>● claude, codex, opencode, pi-mono, cc内, cx内, buddy</td></tr>
 <tr><th scope="row">独立二进制不装 Node<details><summary>证据</summary>pi-mono bun build --compile · buddy 原生安装器加 Homebrew tap · weclaw 是 Go</details></th><td>·</td><td>● claude, codex, opencode, pi-mono, weclaw, buddy</td></tr>
 <tr><th scope="row">屏幕阅读器与无障碍<details><summary>证据</summary>claude --ax-screen-reader · gm内 --screen-reader</details></th><td>·</td><td>● claude, cc内, gm内</td></tr>
 </tbody>
@@ -306,7 +306,7 @@
 <tr><th scope="row">openclaw</th><td>94.0</td></tr>
 <tr><th scope="row">cc内</th><td>94.0</td></tr>
 <tr><th scope="row">hermes</th><td>92.0</td></tr>
-<tr><th scope="row">我们</th><td>91.5</td></tr>
+<tr><th scope="row">我们</th><td>92.0</td></tr>
 <tr><th scope="row">codex</th><td>73.5</td></tr>
 <tr><th scope="row">cx内</th><td>64.0</td></tr>
 <tr><th scope="row">opencode</th><td>54.0</td></tr>
@@ -330,7 +330,7 @@
 <tr><th scope="row">代码理解</th><td>40%</td><td>25%–60%, 中位数 45%</td></tr>
 <tr><th scope="row">版本控制</th><td>50%</td><td>10%–90%, 中位数 48%</td></tr>
 <tr><th scope="row">任务与规划</th><td>77%</td><td>9%–64%, 中位数 43%</td></tr>
-<tr><th scope="row">多 agent</th><td>68%</td><td>4%–57%, 中位数 23%</td></tr>
+<tr><th scope="row">多 agent</th><td>71%</td><td>4%–57%, 中位数 23%</td></tr>
 <tr><th scope="row">记忆与知识</th><td>50%</td><td>10%–70%, 中位数 48%</td></tr>
 <tr><th scope="row">扩展</th><td>73%</td><td>36%–86%, 中位数 80%</td></tr>
 <tr><th scope="row">界面形态</th><td>54%</td><td>38%–88%, 中位数 60%</td></tr>
@@ -341,7 +341,7 @@
 </tbody>
 </table>
 </figure>
-<div><p class="note">多 agent 为 9.5/14（68%），cc内 为 8.0/14（57%）。任务与规划为 8.5/11（77%），claude、openclaw、cc内、buddy 均为 7.0/11（64%）。会话与历史为 13.0/17（76%），openclaw 为 14.0/17（82%）。 与最高参考差距最大：集成与被集成、版本控制、界面形态。</p></div>
+<div><p class="note">多 agent 为 10.0/14（71%），cc内 为 8.0/14（57%）。任务与规划为 8.5/11（77%），claude、openclaw、cc内、buddy 均为 7.0/11（64%）。会话与历史为 13.0/17（76%），openclaw 为 14.0/17（82%）。 与最高参考差距最大：集成与被集成、版本控制、界面形态。</p></div>
 
 <h2 id="gaps">OpenProgram 未确认、参考列已确认的 59 项</h2>
 <p>OpenProgram 为 ·，且至少一个参考列不为 ·。是设计候选，不是已证实的缺陷。分组依据产品范围：单用户、本机、常驻 worker、通用 harness、自有 TUI、Web 和桌面端。证据见<a href="#matrix">功能全表</a>。</p>
@@ -560,7 +560,7 @@
 <table class="stack fixed">
 <thead><tr><th scope="col">条目</th><th scope="col">状态</th></tr></thead>
 <tbody>
-<tr><th scope="row">功能矩阵、91.5 分、59 个候选差异、6 个版本证据差异</th><td>由本表计算；通用基线为 <code translate="no">integrated candidate@d91c3e66</code>，JSON Schema 用 <code translate="no">2fb471b3</code>，Runtime URL SSRF 用 <code translate="no">be5eaa3c</code>。未按之后的代码重新计分；已变动的行在证据中注明。</td></tr>
+<tr><th scope="row">功能矩阵、92.0 分、59 个候选差异、6 个版本证据差异</th><td>由本表计算；通用基线为 <code translate="no">integrated candidate@d91c3e66</code>，JSON Schema 用 <code translate="no">2fb471b3</code>，Runtime URL SSRF 用 <code translate="no">be5eaa3c</code>。未按之后的代码重新计分；已变动的行在证据中注明。</td></tr>
 <tr><th scope="row">OpenProgram 列的 ◐</th><td>只在部分界面或输入路径确认；限制写在该行证据中</td></tr>
 <tr><th scope="row">分数、类别比例、候选计数</th><td>由矩阵计算，不带质量或重要性权重</td></tr>
 </tbody>

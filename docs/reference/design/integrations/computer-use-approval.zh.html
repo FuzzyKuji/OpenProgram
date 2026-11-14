@@ -93,7 +93,7 @@
 <tr><th scope="row">中途撤销</th><td>回合中途被撤销的授权会让该步骤在后端失败（<code translate="no">_frameworks</code> 会指明辅助功能这项设置）。</td></tr>
 </tbody>
 </table>
-<p>工具在 <code translate="no">DEFAULT_TOOLS</code> 里且常驻：schema 很短，不延迟加载。对话有 Page 时，<code translate="no">_configure_web_use_tools</code> 保留它并移除独立的浏览器工具；<code translate="no">web_use</code> 从不提供给模型。<code translate="no">unsafe_in</code> 在微信、Telegram 渠道和规划模式下隐藏它。</p>
+<p>工具在 <code translate="no">DEFAULT_TOOLS</code> 里且常驻：schema 很短，不延迟加载。对话有 Page 时，<code translate="no">_configure_browser_tool</code> 会把它加进原本没有它的轮次；按名字给定工具的轮次，只有名单里写了它才会有。<code translate="no">unsafe_in</code> 在微信、Telegram 渠道和规划模式下隐藏它。</p>
 
 <h2 id="实现状态">实现状态</h2>
 

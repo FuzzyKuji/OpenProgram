@@ -301,6 +301,7 @@ def branch_session(
     *,
     title: Optional[str] = None,
     store: Any = None,
+    branch_id: Optional[str] = None,
 ) -> str:
     """Copy the chain root→``msg_id`` of ``session_id`` into a new session.
 
@@ -331,7 +332,8 @@ def branch_session(
     # its live nodes while this reads them.
     nodes = [copy.deepcopy(n) for n in store.get_nodes(session_id)]
     by_id = {n.id: n for n in nodes}
-    target = by_id.get(msg_id)
+    hidden = set(source.get("rewind_hidden_nodes") or []) | set(source.get("rewind_hidden_heads") or [])
+    target = None if msg_id in hidden else by_id.get(msg_id)
     if target is None or (target.metadata or {}).get("display") == "root":
         raise BranchSessionError("unknown_message", f"unknown message {msg_id!r} in {session_id!r}")
     if not _is_chain_turn(target):
@@ -376,6 +378,32 @@ def branch_session(
     id_map = _assign_ids(ordered, selected)
     new_session_id = f"local_{uuid.uuid4()}"
 
+    from openprogram.state.store.session.branch_config import config_for_branch
+    refs = source.get("branch_refs") or {}
+    candidates = [key for key, ref in refs.items() if ref.get("head_id") == msg_id]
+    selected_branch = branch_id
+    if selected_branch is not None:
+        # Copying a running branch stops at its last finished turn. Its
+        # settings still belong to the selected branch whose tip is later.
+        cursor = refs.get(selected_branch, {}).get("head_id")
+        visited = set()
+        while cursor and cursor != msg_id and cursor not in visited:
+            visited.add(cursor)
+            node = by_id.get(cursor)
+            cursor = node.predecessor if node is not None else None
+        if cursor != msg_id:
+            raise BranchSessionError("unknown_branch", "The message does not belong to the selected branch.")
+    if selected_branch is None:
+        active = source.get("active_branch_id")
+        if active in candidates:
+            selected_branch = active
+        elif len(candidates) == 1:
+            selected_branch = candidates[0]
+        elif len(candidates) > 1:
+            raise BranchSessionError("branch_selection_required", "Select which branch configuration to copy.")
+    if selected_branch is not None:
+        config = config_for_branch(source, selected_branch)
+        source = {**source, **config, "extra_meta": {**(source.get("extra_meta") or {}), **config}}
     extra_meta = source.get("extra_meta") or {}
 
     def _source_field(key: str) -> Any:

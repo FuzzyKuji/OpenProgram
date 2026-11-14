@@ -119,6 +119,7 @@ export function useFunctionDispatch({
         msg_id: placeholderId,
         func_name: fn.name,
         started_at: startedAt / 1000,
+        client_request_id: requestId,
       });
     }
 

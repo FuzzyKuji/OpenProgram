@@ -303,7 +303,7 @@ def _ensure_git_history(base: Path) -> None:
             if not (base / ".git").exists():
                 subprocess.run(
                     ["git", "init", "-q"], cwd=base, check=True,
-                    capture_output=True, text=True,
+                    capture_output=True, text=True, encoding="utf-8", errors="replace",
                 )
             marker = base / ".git" / "openprogram-memory-ready"
             for key, value in (
@@ -314,7 +314,7 @@ def _ensure_git_history(base: Path) -> None:
                     ["git", "config", "--local", "--get", key],
                     cwd=base,
                     capture_output=True,
-                    text=True,
+                    text=True, encoding="utf-8", errors="replace",
                 )
                 if configured.returncode != 0:
                     subprocess.run(
@@ -322,7 +322,7 @@ def _ensure_git_history(base: Path) -> None:
                         cwd=base,
                         check=True,
                         capture_output=True,
-                        text=True,
+                        text=True, encoding="utf-8", errors="replace",
                     )
             exclude = base / ".git" / "info" / "exclude"
             current_excludes = (
@@ -348,7 +348,7 @@ def _ensure_git_history(base: Path) -> None:
                 ["git", "rev-parse", "--verify", "HEAD"],
                 cwd=base,
                 capture_output=True,
-                text=True,
+                text=True, encoding="utf-8", errors="replace",
             )
             commit = RuntimeStateStore(base).git_commit(
                 "memory: initialize history"
@@ -363,7 +363,7 @@ def _ensure_git_history(base: Path) -> None:
                         cwd=base,
                         check=True,
                         capture_output=True,
-                        text=True,
+                        text=True, encoding="utf-8", errors="replace",
                     )
             marker.write_text("ready\n", encoding="utf-8")
             _git_initialized.add(base)

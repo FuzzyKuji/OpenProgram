@@ -24,6 +24,8 @@ strategy — RuntimeError + message regex loses that information.
 from __future__ import annotations
 
 import enum
+import html
+import re
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -78,6 +80,8 @@ class ErrorReason(str, enum.Enum):
       * ``PROVIDER_INTERNAL`` — retry (transient upstream)
       * ``AUTHENTICATION`` — surface reauth flow
       * ``AUTHORIZATION`` — surface scope / plan error
+      * ``NETWORK_BLOCK`` — a network edge in front of the provider refused
+        the address the request came from; the user changes their route
       * ``INVALID_REQUEST`` — surface to user, don't retry
       * ``CONTEXT_LENGTH`` — trim prompt and retry at upper layer
       * ``CONTENT_POLICY`` — surface or rewrite, don't blindly retry
@@ -90,6 +94,7 @@ class ErrorReason(str, enum.Enum):
     PROVIDER_INTERNAL = "provider"
     AUTHENTICATION = "auth"
     AUTHORIZATION = "authz"
+    NETWORK_BLOCK = "blocked"
     INVALID_REQUEST = "invalid"
     CONTEXT_LENGTH = "context"
     CONTENT_POLICY = "policy"
@@ -122,6 +127,9 @@ class LLMError(Exception):
     model: Optional[str] = None
     last_error_type: Optional[str] = None
     cause: Optional[BaseException] = None
+    # Which limit or refusal the failure was (:func:`failure_cause`), carried
+    # from the failed reply so it survives being re-raised.
+    failure: Optional[dict] = None
 
     def __post_init__(self) -> None:
         # Initialise Exception with the human-readable message so
@@ -251,6 +259,26 @@ _TRANSPORT_EXC_NAMES = frozenset({
 })
 
 
+_WEB_PAGE_START = re.compile(r"<!doctype\s+html|<html[\s>]", re.IGNORECASE)
+_WEB_PAGE_HIDDEN = re.compile(r"<(style|script|head)\b.*?</\1\s*>", re.IGNORECASE | re.DOTALL)
+_WEB_PAGE_TAG = re.compile(r"<[^>]+>")
+WEB_PAGE_TEXT_CHARS = 400
+
+
+def web_page_text(body: str) -> Optional[str]:
+    """The words of a response body that is a web page, or ``None`` when it is not one.
+
+    A block or outage page is markup around one sentence; shown raw it
+    hides that sentence behind its stylesheet.
+    """
+    if not body or not _WEB_PAGE_START.search(body[:2000]):
+        return None
+    start = _WEB_PAGE_START.search(body).start()
+    words = html.unescape(_WEB_PAGE_TAG.sub(" ", _WEB_PAGE_HIDDEN.sub(" ", body[start:])))
+    text = " ".join(words.split())
+    return text if len(text) <= WEB_PAGE_TEXT_CHARS else text[:WEB_PAGE_TEXT_CHARS - 1] + "\u2026"
+
+
 def classify_error(
     exc: BaseException,
     *,
@@ -289,6 +317,11 @@ def classify_error(
         if http_status == 401:
             return ErrorReason.AUTHENTICATION, False
         if http_status == 403:
+            # The provider's API answers in JSON. A web page instead comes
+            # from the network edge in front of it, which refused the
+            # address the request came from: nothing about the account.
+            if getattr(exc, "web_page", False) or web_page_text(error_text or str(exc)) is not None:
+                return ErrorReason.NETWORK_BLOCK, False
             return ErrorReason.AUTHORIZATION, False
         if http_status == 400:
             if any(m in msg for m in _PERMANENT_MARKERS_CONTEXT):
@@ -349,6 +382,10 @@ def taxonomy_fields(exc: BaseException) -> tuple[str | None, bool | None, float 
     """
     if isinstance(exc, LLMError):
         return exc.reason.value, exc.retryable, exc.retry_after_s
+    if type(exc).__name__ == "MemoryPolicyError":
+        # Required memory that failed: no retry helps; ``error_kind`` names
+        # it ``memory_unavailable``.
+        return ErrorReason.UNKNOWN.value, False, None
     reason, retryable = classify_error(
         exc,
         http_status=getattr(exc, "http_status", None) or getattr(exc, "status_code", None),
@@ -358,6 +395,181 @@ def taxonomy_fields(exc: BaseException) -> tuple[str | None, bool | None, float 
     if isinstance(declared_retryable, bool):
         retryable = declared_retryable
     return reason.value, retryable, getattr(exc, "retry_after_s", None)
+
+
+#: Exception classes whose failure has a stable name of its own, beside the
+#: broader ``ErrorReason`` (a stalled stream and a reset connection are both
+#: ``transport``; a benchmark counts only the first as the environment's fault).
+_KINDS = {
+    "StreamIdleTimeout": "stream_idle",
+    "StreamTotalTimeout": "stream_total",
+    "MemoryPolicyError": "memory_unavailable",
+    "ModelUnavailableError": "model_unavailable",
+}
+
+
+def error_kind(exc: BaseException) -> str | None:
+    """The stable category of a failure, or ``None`` when it has none.
+
+    Found on the exception or anything it wraps (``LLMError.cause``,
+    ``__cause__``, ``__context__``), so a stalled stream is ``stream_idle``
+    whichever reader raised it and whatever retry layer gave up on it. A
+    failure with no such class but an authentication reason is ``auth``.
+    """
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        kind = _KINDS.get(type(current).__name__)
+        if kind is None and isinstance(current, LLMError):
+            kind = _KINDS.get(current.last_error_type or "")
+        if kind is not None:
+            return kind
+        current = (getattr(current, "cause", None) if isinstance(current, LLMError) else None) \
+            or current.__cause__ or current.__context__
+    reason, _retryable, _after = taxonomy_fields(exc)
+    return "auth" if reason == ErrorReason.AUTHENTICATION.value else None
+
+
+# What stopped a reply, in the terms a person acts on. Beside the reason
+# (which says how to retry), the cause says which limit or refusal it was:
+# a spent quota (and when it resets), a rejected key, a region or plan that
+# is not served, or a host that could not be reached.
+CAUSE_QUOTA = "quota_exhausted"
+CAUSE_INVALID_KEY = "invalid_key"
+CAUSE_NOT_AVAILABLE = "not_available"
+CAUSE_UNREACHABLE = "unreachable"
+
+_INVALID_KEY_MARKERS = (
+    "invalid api key",
+    "invalid_api_key",
+    "incorrect api key",
+    "invalid x-api-key",
+    "api key not valid",
+    "invalid authentication",
+    "authentication_error",
+)
+_NOT_AVAILABLE_MARKERS = (
+    "unsupported_country",
+    "country, region, or territory",
+    "not available in your region",
+    "not available in your country",
+    "region is not supported",
+    "not supported in your region",
+    "does not have access to model",
+    "not available on your plan",
+    "not included in your plan",
+    "upgrade your plan",
+    "permission_denied",
+    "permission_error",
+)
+_UNREACHABLE_EXC_NAMES = frozenset({
+    "ConnectError", "ConnectTimeout", "APIConnectionError", "ConnectionRefusedError",
+    "gaierror", "SocketUnavailable",
+})
+_UNREACHABLE_MARKERS = (
+    "connection refused",
+    "name or service not known",
+    "nodename nor servname",
+    "getaddrinfo failed",
+    "temporary failure in name resolution",
+    "network is unreachable",
+    "no route to host",
+    "could not resolve host",
+    "connecterror",
+    "connecttimeout",
+    "connection error",
+)
+
+
+def _chain(exc: BaseException) -> list[BaseException]:
+    seen: list[BaseException] = []
+    current: BaseException | None = exc
+    while current is not None and all(current is not s for s in seen) and len(seen) < 6:
+        seen.append(current)
+        current = (getattr(current, "cause", None) if isinstance(current, LLMError) else None) \
+            or current.__cause__ or current.__context__
+    return seen
+
+
+def _body_reset(text: str, now: float) -> tuple[Optional[float], Optional[str]]:
+    """``(resets_at, plan)`` from a spent-quota body (Codex: ``resets_at``,
+    ``resets_in_seconds``, ``plan_type``), when it is JSON that says so."""
+    import json
+    start = text.find("{")
+    if start < 0:
+        return None, None
+    try:
+        body, _end = json.JSONDecoder().raw_decode(text[start:])
+    except (TypeError, ValueError):
+        return None, None
+    error = body.get("error") if isinstance(body, dict) and isinstance(body.get("error"), dict) else body
+    if not isinstance(error, dict):
+        return None, None
+    reset = error.get("resets_at")
+    if not isinstance(reset, (int, float)) or isinstance(reset, bool):
+        seconds = error.get("resets_in_seconds")
+        reset = now + seconds if isinstance(seconds, (int, float)) and not isinstance(seconds, bool) else None
+    plan = error.get("plan_type")
+    return (float(reset) if reset else None), (plan if isinstance(plan, str) else None)
+
+
+def failure_cause(exc: BaseException, *, now: Optional[float] = None) -> Optional[dict]:
+    """Which limit or refusal stopped a call, or ``None`` when it was none of them.
+
+    Returns ``{"cause", "http_status", "provider", "limit", "resets_at"}``:
+    ``cause`` is one of :data:`CAUSE_QUOTA`, :data:`CAUSE_INVALID_KEY`,
+    :data:`CAUSE_NOT_AVAILABLE`, :data:`CAUSE_UNREACHABLE`. For a spent
+    quota ``limit`` names the window when the provider said which (from the
+    last quota it reported) and ``resets_at`` is Unix seconds when known.
+    """
+    import time as _time
+    if isinstance(exc, LLMError) and isinstance(exc.failure, dict):
+        return dict(exc.failure)
+    now = _time.time() if now is None else now
+    chain = _chain(exc)
+    status = next((s for e in chain for s in (getattr(e, "http_status", None), getattr(e, "status_code", None))
+                   if isinstance(s, int)), None)
+    text = " ".join(str(e) + " " + str(getattr(e, "error_text", "") or "") for e in chain)
+    lowered = text.lower()
+    provider = next((getattr(e, "provider", None) for e in chain if getattr(e, "provider", None)), None)
+
+    def result(cause: str, **extra: Any) -> dict:
+        return {"cause": cause, "http_status": status, "provider": provider,
+                "limit": extra.get("limit"), "resets_at": extra.get("resets_at")}
+
+    if status == 402 or any(m in lowered for m in _PERMANENT_MARKERS_QUOTA) \
+            or (status == 429 and "insufficient" in lowered):
+        resets_at, _plan = _body_reset(text, now)
+        retry_after = next((getattr(e, "retry_after_s", None) for e in chain
+                            if isinstance(getattr(e, "retry_after_s", None), (int, float))), None)
+        if resets_at is None and retry_after:
+            resets_at = now + float(retry_after)
+        limit = None
+        if provider:
+            try:
+                from openprogram.models.usage.quota import exhausted_limit
+                spent = exhausted_limit(provider)
+            except Exception:
+                spent = None
+            if spent is not None:
+                limit = spent.label
+                resets_at = resets_at or spent.resets_at
+        return result(CAUSE_QUOTA, limit=limit, resets_at=resets_at)
+    if status == 401 or any(m in lowered for m in _INVALID_KEY_MARKERS):
+        return result(CAUSE_INVALID_KEY)
+    if status == 403:
+        if any(getattr(e, "web_page", False) for e in chain):
+            return None  # the network edge refused the address: ``blocked``
+        return result(CAUSE_NOT_AVAILABLE)
+    if any(m in lowered for m in _NOT_AVAILABLE_MARKERS):
+        return result(CAUSE_NOT_AVAILABLE)
+    if status is None and (
+        any(type(e).__name__ in _UNREACHABLE_EXC_NAMES for e in chain)
+        or any(m in lowered for m in _UNREACHABLE_MARKERS)
+    ):
+        return result(CAUSE_UNREACHABLE)
+    return None
 
 
 def _retry_after_date_seconds(value: str) -> Optional[float]:
@@ -477,12 +689,18 @@ class RetryInfo:
 
 
 __all__ = [
+    "CAUSE_INVALID_KEY",
+    "CAUSE_NOT_AVAILABLE",
+    "CAUSE_QUOTA",
+    "CAUSE_UNREACHABLE",
     "ErrorReason",
     "ExecInterrupt",
     "LLMError",
     "RetryInfo",
     "StreamAborted",
     "classify_error",
+    "error_kind",
+    "failure_cause",
     "parse_retry_after",
     "had_image",
 ]

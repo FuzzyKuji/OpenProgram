@@ -125,6 +125,18 @@ function useLinuxWindowIcon(app, platform = process.platform) {
   app.on("browser-window-created", (_event, win) => win.setIcon?.(icon));
 }
 
+/**
+ * Windows files toasts, the taskbar button and its pin under an application
+ * id. The installer's Start menu shortcut carries this one (`build.appId`);
+ * a process that keeps Electron's default shows no toast and pins a second icon.
+ */
+const WINDOWS_APP_ID = "ai.openprogram.desktop";
+
+function useWindowsAppIdentity(app, platform = process.platform) {
+  if (platform !== "win32") return;
+  app.setAppUserModelId?.(WINDOWS_APP_ID);
+}
+
 function appBundle(executable = process.execPath) {
   return path.resolve(executable, "..", "..", "..");
 }
@@ -206,12 +218,13 @@ async function offerMoveToApplications({ app, dialog }, {
 
 function runShell(
   { app, BrowserWindow, ipcMain, clipboard, Menu, dialog },
-  { shiftHeld: isShiftHeld = shiftHeld } = {},
+  { shiftHeld: isShiftHeld = shiftHeld, platform = process.platform } = {},
 ) {
   if (process.env.OPENPROGRAM_TRIAL === "1" && process.env.OPENPROGRAM_TRIAL_DESKTOP_MAIN) {
     return runDesktopTrial(app, process.env.OPENPROGRAM_TRIAL_DESKTOP_MAIN);
   }
   useLinuxWindowIcon(app);
+  useWindowsAppIdentity(app, platform);
   const shellVersion = app.getVersion();
   const root = store.runtimeRoot();
   const seedDirectory = path.join(process.resourcesPath || "", "seed");
@@ -352,4 +365,7 @@ if (!globalThis.__OPENPROGRAM_SHELL_TEST__) {
   runShell(electron);
 }
 
-module.exports = { addArchiveModules, moveOfferNeeded, offerMoveToApplications, restartShell, runShell, shiftHeld };
+module.exports = {
+  WINDOWS_APP_ID, addArchiveModules, moveOfferNeeded, offerMoveToApplications, restartShell, runShell, shiftHeld,
+  useWindowsAppIdentity,
+};

@@ -24,7 +24,7 @@
 <thead class="sr"><tr><th scope="col">Where</th><th scope="col">What happens</th></tr></thead>
 <tbody>
 <tr><th scope="row">Open windows</th><td>A message in each</td></tr>
-<tr><th scope="row">System notification</th><td>Even while you use the App. The App posts it and a click opens the conversation; with no window open the worker posts it under the same name and icon. A pip-installed worker uses Script Editor on macOS and needs <code translate="no">notify-send</code> on Linux.</td></tr>
+<tr><th scope="row">System notification</th><td>Even while you use the App. The App posts it and a click opens the conversation; with no window open the worker posts it under the same name and icon. A pip-installed worker uses Script Editor on macOS and needs <code translate="no">notify-send</code> on Linux. On Windows the worker posts a toast through Windows PowerShell, under that name.</td></tr>
 <tr><th scope="row"><a href="../integrations/channels.html">Chat channel</a> conversation</th><td>Sent as a message</td></tr>
 <tr><th scope="row">Wake: new turn</th><td>Message begins with ⏰ and the text, under that conversation's permission mode and rules. In a chat channel the answer is also sent there.</td></tr>
 <tr><th scope="row">Wake: conversation busy</th><td>Waits up to 10 minutes for the running turn. Still busy: no turn starts, and a chat channel conversation gets the reminder text.</td></tr>

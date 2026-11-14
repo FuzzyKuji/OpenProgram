@@ -19,7 +19,7 @@ from typing import Any, Literal, Mapping
 _log = logging.getLogger(__name__)
 
 
-AuthorityTier = Literal["owner", "paired", "mcp_browser"]
+AuthorityTier = Literal["owner", "paired"]
 
 # Stamped on every turn node this build persists. Its presence is what
 # separates "written before authority existed" from "written now and
@@ -68,11 +68,9 @@ _PAIRED_CAPABILITIES = frozenset({
     "reply", "memory.read", "memory.source.append",
     "runtime.wait",
 })
-_MCP_BROWSER_CAPABILITIES = frozenset({"browser.control"})
 TIER_CAPABILITIES: Mapping[AuthorityTier, frozenset[str]] = {
     "owner": _OWNER_CAPABILITIES,
     "paired": _PAIRED_CAPABILITIES,
-    "mcp_browser": _MCP_BROWSER_CAPABILITIES,
 }
 
 @dataclass(frozen=True)

@@ -137,7 +137,7 @@ replay:  transform(api, original) -&gt; shared_replay</code></pre>
 <ol>
 <li><code translate="no">RecordingSink</code> 在进程内 <code translate="no">threading.RLock</code> 下序列化并追加每一行。</li>
 <li>每次追加用 <code translate="no">O_WRONLY | O_CREAT | O_APPEND</code>、0600 打开，并取跨进程的排他 <code translate="no">flock</code>。</li>
-<li>header 和下一个 <code translate="no">call_index</code> 在文件锁内分配，靠扫描最大 request 序号。</li>
+<li>header 和下一个 <code translate="no">call_index</code> 在文件锁内分配：最大 request 序号加一。sink 记住读到哪里，每次只读之后追加的行，不论哪个进程写的；文件比读过的短时从头再读。</li>
 <li>完整的 UTF-8 行加换行用 <code translate="no">os.write</code> 循环写出。</li>
 <li>只在 <code translate="no">call_end</code> 后 <code translate="no">fsync</code>；崩溃留下的未完成调用由严格解析器发现。</li>
 <li>事件可以交错；<code translate="no">call_index</code> 和 <code translate="no">event_index</code> 把它们归组。</li>

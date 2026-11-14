@@ -250,7 +250,7 @@ def test_unpaired_group_message_is_not_recorded(monkeypatch) -> None:
 
     assert called == []
     memory_root = get_state_dir() / "projects" / "default" / "memory"
-    assert MemoryBM25Index(memory_root, persist=False).search("group context") == []
+    assert MemoryBM25Index(memory_root).search("group context") == []
 
 
 def test_unpaired_direct_message_is_not_archived() -> None:
@@ -260,7 +260,7 @@ def test_unpaired_direct_message_is_not_archived() -> None:
     ch = _GateChannel()
     ch._dispatch_and_reply(_msg(text="direct private", message_id="m-10"))
     memory_root = get_state_dir() / "projects" / "default" / "memory"
-    assert MemoryBM25Index(memory_root, persist=False).search("direct private") == []
+    assert MemoryBM25Index(memory_root).search("direct private") == []
 
 
 def test_channel_message_cannot_approve_itself(monkeypatch) -> None:

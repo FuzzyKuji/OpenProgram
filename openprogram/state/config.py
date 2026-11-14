@@ -36,8 +36,11 @@ def _document(path, raw: bytes | None) -> dict[str, Any]:
 def read_config() -> dict[str, Any]:
     """The whole config file as a dict, or ``{}`` if it is missing."""
     path = get_config_path()
+    from openprogram.host._platform.filesystem import retry_sharing_violation
+
     try:
-        raw = path.read_bytes()
+        # Unlocked, so on Windows it can meet a writer's replace mid-flight.
+        raw = retry_sharing_violation(path.read_bytes)
     except FileNotFoundError:
         raw = None
     return _document(path, raw)

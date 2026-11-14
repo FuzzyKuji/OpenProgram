@@ -20,7 +20,7 @@ from openprogram.programs._host.execution import ToolReturn
 NAME = "browser"
 
 # Actions that only read, so a failed one changed nothing.
-READS = frozenset({"tabs", "read", "wait", "screenshot", "console", "network"})
+READS = frozenset({"tabs", "read", "wait", "screenshot", "console", "network", "panes"})
 # Choosing the browser; it is not an argument of any action.
 _BROWSER_FIELD = "browser"
 
@@ -190,6 +190,9 @@ def _one(action: str, step: dict, args: dict, session: str = "") -> ToolReturn:
     merged = {**args, **step}
     chosen = user_browser(merged)
     merged.pop(_BROWSER_FIELD, None)
+    if chosen and action in _browser().tabs.video.ACTIONS:
+        return ToolReturn(text=f"Error: {action} records panes of the OpenProgram App; call it without browser.",
+                          json_data={"ok": False, "action_dispatched": False}, is_error=True)
     if chosen:
         return _in_user_browser(chosen, action, merged, session)
     result = _browser().tabs.driver().run(action, merged, session)
@@ -279,6 +282,9 @@ def _steps(steps: list[tuple[str, dict]], args: dict, session: str, check_cancel
         images.extend(result.images)
         results.append(result.json_data)
         texts.append(f"[{number}] {action}: {result.text or ''}")
+        if isinstance(result.json_data, dict) and result.json_data.get("status") == "observation_required":
+            texts.append(f"step {number} requires checking the fresh page; the steps after it did not run")
+            return ToolReturn(text="\n".join(texts), json_data=results, images=images)
         if result.is_error:
             texts.append(f"step {number} failed; the steps after it did not run")
             return ToolReturn(text="\n".join(texts), json_data=results, images=images, is_error=True)

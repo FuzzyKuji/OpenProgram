@@ -150,7 +150,7 @@ class SelfUpdateStore:
                 self._write_json(staged / "iteration-root.json", iteration_config)
             self._write_json(staged / "state.json", state.to_dict())
             self._write_events(staged / "events.jsonl", created_event)
-            os.replace(staged, target)
+            filesystem.replace_file(staged, target)
             self._fsync_directory(self.root)
         finally:
             if staged.exists():

@@ -655,6 +655,6 @@ def test_source_development_installer_adds_to_complete_product() -> None:
     assert "get_program" not in installer
     assert "prompt_programs_menu" not in installer
     assert "--minimal was removed" in installer
-    assert "WITH_STEALTH" in installer
+    assert "WITH_STEALTH" not in installer
     assert "WITH_AGENT_BROWSER" not in installer
 

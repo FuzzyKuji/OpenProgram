@@ -13,7 +13,8 @@ from .bm25 import (
     _query_time_window,
     _normalize_path_prefix,
     event_matches_path_prefix,
-    parse_topic_file,
+    source_line,
+    topic_events,
 )
 from .embedding_model import (
     MODEL_ID,
@@ -88,13 +89,10 @@ class MemoryEmbeddingIndex:
         with self._lock:
             if self._events_cache is not None:
                 return self._events_cache
-            self._events_cache = [
-                event
-                for _relative, path in sorted(
-                    _indexable_files(self.memory_dir, self._visible_files).items()
-                )
-                for event in parse_topic_file(path, self.topics_dir)
-            ]
+            self._events_cache = topic_events(
+                self.memory_dir,
+                _indexable_files(self.memory_dir, self._visible_files),
+            )
         return self._events_cache
 
     @staticmethod
@@ -163,6 +161,7 @@ class MemoryEmbeddingIndex:
                 "date": event.date,
                 "content": event.content,
                 "refs": event.refs,
+                "origin": event.origin,
                 "similarity": float(similarity),
             }
             for event, similarity in zip(candidate_events, similarities)
@@ -183,6 +182,6 @@ def render_search_results(results: list[dict[str, Any]]) -> str:
         f"[date={row['date'] or 'unknown'}; "
         f"similarity={row['similarity']:.4f}]\n"
         f"   {row['content']}\n"
-        f"   refs: {', '.join(row['refs'])}"
+        + source_line(row)
         for rank, row in enumerate(results, start=1)
     )

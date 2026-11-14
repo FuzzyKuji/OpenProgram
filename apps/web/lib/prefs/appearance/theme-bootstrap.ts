@@ -131,6 +131,14 @@ function applyOverlayCss() {
   }
   el.textContent = rewriteCustomCssForOverlay(css);
 }
+// The desktop App reports the OS appearance itself; see theme.systemDark in its preload.
+function systemDark() {
+  try {
+    var value = window.openprogramDesktop?.theme?.systemDark?.();
+    if (typeof value === 'boolean') return value;
+  } catch (_) {}
+  return window.matchMedia('(prefers-color-scheme: dark)').matches;
+}
 function traceTheme(source, previousTheme) {
   try {
     window.openprogramDesktop?.theme?.trace?.({
@@ -138,7 +146,7 @@ function traceTheme(source, previousTheme) {
       previousTheme: previousTheme,
       theme: document.documentElement.getAttribute('data-theme'),
       style: readStyle(), mode: readMode(), storedMode: themeStorageGet('agentic_theme_mode'),
-      systemDark: window.matchMedia('(prefers-color-scheme: dark)').matches
+      systemDark: systemDark()
     });
   } catch (_) {}
 }
@@ -147,7 +155,7 @@ function applyThemePreference(source) {
   var style = readStyle();
   var mode = readMode();
   var resolvedMode = mode === 'auto'
-    ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+    ? (systemDark() ? 'dark' : 'light')
     : mode;
   var theme = PAIRS[style][resolvedMode];
   document.documentElement.setAttribute('data-theme', theme);
@@ -179,9 +187,13 @@ if (window.openprogramDesktop?.theme?.trace) {
     if (change) traceTheme('dom-change', change.attributeName === 'data-theme' ? change.oldValue : undefined);
   }).observe(document.documentElement, { attributes: true, attributeOldValue: true, attributeFilter: ['data-theme', 'data-theme-mode'] });
 }
-window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function () {
-  if (readMode() === 'auto') applyThemePreference('system');
-});
+function followSystem() {
+  if (readMode() !== 'auto') return;
+  var resolved = systemDark() ? 'dark' : 'light';
+  if (document.documentElement.getAttribute('data-theme-mode') !== resolved) applyThemePreference('system');
+}
+window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', followSystem);
+try { window.openprogramDesktop?.theme?.onSystemChange?.(followSystem); } catch (_) {}
 window.addEventListener('storage', function (event) {
   if (event.key === EFFECTS_KEY || event.key === null) applyVisualEffectsPreference();
   if (

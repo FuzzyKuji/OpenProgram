@@ -206,6 +206,10 @@ jobs:
       - name: Enforce unit coverage floor
         run: uv run --locked --extra dev coverage report --show-missing --precision=6 --fail-under=40
 
+  # The released launchers start Python with -X utf8, which is what PYTHONUTF8=1
+  # stands for here. The third leg runs the same tests in the system code page:
+  # helper processes the product starts with -I, and the App's short commands,
+  # still run that way.
   windows-core:
     timeout-minutes: 45
     strategy:
@@ -214,11 +218,16 @@ jobs:
         include:
           - runner: windows-2025
             arch: x64
+            utf8: "1"
           - runner: windows-11-vs2026-arm
             arch: arm64
+            utf8: "1"
+          - runner: windows-2025
+            arch: x64
+            utf8: "0"
     runs-on: ${{ matrix.runner }}
     env:
-      PYTHONUTF8: "1"
+      PYTHONUTF8: ${{ matrix.utf8 }}
       PYTHONUNBUFFERED: "1"
     steps:
       - uses: actions/checkout@v5
@@ -239,6 +248,7 @@ jobs:
           tests/component/config/test_windows_install_contract.py
           tests/component/config/test_conversational_update_capability.py
           tests/component/config/test_windows_cli_launchers.py
+          tests/component/self_update/versions/test_launcher_windows.py
           tests/component/config/test_windows_release_transaction.py
           tests/component/runtime/test_windows_process.py
           tests/component/config/test_windows_release.py
@@ -273,7 +283,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: windows-regression-${{ matrix.arch }}
+          name: windows-regression-${{ matrix.arch }}-utf8-${{ matrix.utf8 }}
           path: |
             windows-unit.log
             windows-unit-traceback.txt

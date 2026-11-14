@@ -777,3 +777,39 @@ def test_scheduler_rest_api_crud_omits_frozen_execution_spec(scheduler_env):
     assert stored["execution"]["signature"]
     assert client.delete(f"/api/scheduler/tasks/{task['id']}").status_code == 200
     assert client.get("/api/scheduler/tasks").json() == []
+
+
+def test_scheduler_creates_a_task_without_memory_refs_while_memory_is_off(
+    scheduler_env, monkeypatch,
+):
+    """A task that names no memory needs no memory access: the Agent's
+    memory being off must not refuse it. Refs, when given, still are."""
+    from openprogram.runtime.permissions.authority import local_owner_authority
+    from openprogram.runtime.scheduler import service
+    from openprogram.state.memory import policy, store
+
+    def memory_off(**_kw):
+        raise policy.MemoryPolicyError("Memory is off for this execution")
+
+    monkeypatch.setattr(policy, "check", memory_off)
+    tmp_path, _schedule = scheduler_env
+    task = service.create_task(
+        title="Echo once",
+        task_type="once",
+        command="echo hi",
+        run_at="2026-08-15T09:00:00+08:00",
+        cwd=str(tmp_path),
+        authority=local_owner_authority(),
+    )
+    assert task["title"] == "Echo once"
+    assert [row["title"] for row in service.list_tasks()] == ["Echo once"]
+    with pytest.raises(policy.MemoryPolicyError):
+        service.create_task(
+            title="Uses memory",
+            task_type="recurring",
+            prompt="Use memory.",
+            cron="0 * * * *",
+            memory_refs=[{"workspace_id": store.workspace_id(), "memory_id": "m1"}],
+            cwd=str(tmp_path),
+            authority=local_owner_authority(),
+        )

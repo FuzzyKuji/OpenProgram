@@ -94,6 +94,10 @@ def _settle_terminal(executions: Any, execution: Any) -> None:
     from openprogram.programs.tools.planning.goal import chat
 
     chat.after_terminal(executions, execution)
+    # However the run ended (finished, failed, stopped by the user, cut off): its own pages go with it.
+    from openprogram.runtime.scheduler import run_finish
+
+    run_finish.close_run_tabs(str(getattr(execution, "execution_id", "") or ""))
 
 
 def _close_ownerless_run(executions: Any, execution: Any) -> None:

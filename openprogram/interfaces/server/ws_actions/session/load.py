@@ -46,7 +46,7 @@ def _session_todos(session_id: str) -> list:
 def _session_todo_plans(session_id: str) -> list:
     try:
         from openprogram.programs.tools.planning.todo import shared as _todos
-        return _todos.load_plans(session_id)
+        return _todos.load_all_plans(session_id)
     except Exception:
         return []
 
@@ -116,25 +116,64 @@ def _context_stats_for_load(conv: dict):
     return _stats, refresh_context_after_load
 
 
-async def _send_session_loaded(ws, _s, cmd: dict, conv: dict, session_id, transcript: dict, head, spawned_branch):
+class _SelectionChanged(Exception):
+    """A read raced an explicit branch selection; retry its entire snapshot."""
+
+
+def _load_selection(db, session_id):
+    row = db.ensure_branch_config(session_id) if hasattr(db, "ensure_branch_config") else db.get_session(session_id)
+    row = row or {}
+    return row.get("active_branch_id"), row.get("head_version", 0)
+
+
+def _capture_load_settings(db, session_id, selection, head):
+    from contextlib import nullcontext
+    from copy import deepcopy
+    pair = db._open(session_id) if hasattr(db, "_open") else None
+    lock = db._head_file_lock(pair[0]) if pair else nullcontext()
+    with lock:
+        row = db.get_session(session_id) or {}
+        if selection is not None:
+            identity, version = selection
+            if row.get("active_branch_id") != identity or (
+                row.get("head_version", 0) != version and row.get("head_id") != head
+            ):
+                raise _SelectionChanged
+        return deepcopy(row)
+
+
+def _resolved_settings(session_id: str, branch_id) -> dict:
+    from openprogram.interfaces.server.branch_settings import resolved_settings
+    try:
+        return resolved_settings(session_id, branch_id)
+    except Exception:  # noqa: BLE001 - the controls show the stored values instead
+        return {}
+
+
+async def _send_session_loaded(ws, _s, cmd: dict, conv: dict, session_id, transcript: dict, head, spawned_branch, selection=None):
     """Send the ``session_loaded`` frame: ``transcript``'s fields, settings and run state; returns ``(run_task, refresh_context_after_load)``."""
     from openprogram.runtime.context.session_db import default_db as _ddb
     from openprogram.runtime.conversation.session_config import (
-        load_session_run_config,
+        _config_from_row,
         permission_from_config,
         project_defaults,
     )
     from openprogram.host.sandbox import ui_state as _sandbox_ui
-    run_cfg = load_session_run_config(conv["id"])
-    from openprogram.runtime.permissions import permission_state
-    _permission_state = permission_state(session_id)
+    db = _ddb()
+    _db_sess = await _session_io(_capture_load_settings, db, session_id, selection, head)
+    run_cfg = _config_from_row(_db_sess)
+    from openprogram.runtime.permissions.state import permission_state_from_row
+    from openprogram.interfaces.server.runtime_management import _provider_info_from_snapshot
+    _permission_state = permission_state_from_row(session_id, _db_sess)
     _effective_permission = permission_from_config(
         run_cfg, default=project_defaults(conv["id"]).get("permission_mode"))
     _run_seq = _s._next_run_seq()
-    _run_active = _s._is_run_active(conv["id"])
+    # ``run_active`` / ``run_task`` keep meaning the selected branch's turn;
+    # ``running_branches`` names every running turn with its branch.
+    _run_active = _s._is_selected_run_active(conv["id"])
     _run_task = _s._run_identity(conv["id"]) if _run_active else None
+    _running_branches = _s._running_branches(conv["id"])
     _stats, refresh_context_after_load = _context_stats_for_load(conv)
-    _db_sess = _ddb().get_session(session_id) or {}
     from openprogram.programs.tools.planning.goal.presentation import history_projection
     tree_data = {}  # tree Context retired — execution trace lives in SessionDB DAG nodes
     await ws.send_text(json.dumps({
@@ -144,6 +183,10 @@ async def _send_session_loaded(ws, _s, cmd: dict, conv: dict, session_id, transc
             "action": "load_session",
             "id": conv["id"],
             "title": _db_sess.get("title", ""),
+            "agent_id": _db_sess.get("agent_id"),
+            "active_branch_id": _db_sess.get("active_branch_id"),
+            # The branch a person's message last went to.
+            "last_branch_id": _db_sess.get("last_branch_id"),
             **transcript,
             # The DAG panel reads the graph from branches_list.
             "graph": [],
@@ -153,7 +196,7 @@ async def _send_session_loaded(ws, _s, cmd: dict, conv: dict, session_id, transc
             # the transcript's "Copied from" banner.
             "branched_from": _branched_from(_db_sess),
             "context_tree": tree_data,
-            "provider_info": _s._get_provider_info(session_id),
+            "provider_info": _provider_info_from_snapshot(_db_sess),
             "context_stats": _stats or None,
             "channel": _db_sess.get("channel"),
             "account_id": _db_sess.get("account_id"),
@@ -170,14 +213,21 @@ async def _send_session_loaded(ws, _s, cmd: dict, conv: dict, session_id, transc
             "todo_plans": _session_todo_plans(session_id),
             "settings": {
                 "tools_override": run_cfg.tools_override,
+                "web_search": run_cfg.web_search,
+                "service_tier": _db_sess.get("service_tier"),
                 "thinking_effort": run_cfg.thinking_effort,
                 "permission_mode": _effective_permission,
                 "permission_version": _permission_state["version"],
                 "additional_working_dirs": run_cfg.additional_working_dirs,
                 **_sandbox_ui(run_cfg.sandbox_enabled),
+                # Each setting as it resolves, where from, and what the
+                # branch has when it sets nothing (the menus' "Agent default").
+                "resolved": await _session_io(_resolved_settings, session_id,
+                                              _db_sess.get("active_branch_id")),
             },
             "run_active": _run_active,
             "run_task": _run_task,
+            "running_branches": _running_branches,
             "run_seq": _run_seq,
             "status": (_ddb().get_session(session_id) or {}).get("status", "idle"),
         },
@@ -192,8 +242,15 @@ async def _send_running_task_state(ws, _s, session_id, _run_task) -> None:
     _followup_seq = _s._next_run_seq()
     with _s._running_tasks_lock:
         task = _s._running_tasks.get(session_id)
+        # A reservation's release always sends the clear that names it, so
+        # this client can hold it as its running task.
         task_info = dict(task) if task else None
+    slot_info = task_info
     task_info = _s._canonical_foreground_task(session_id) or task_info
+    if slot_info and task_info is not slot_info and slot_info.get("msg_id") == task_info.get("msg_id"):
+        # The turn of a retry, an edit or a function run keeps its operation's kind and id.
+        task_info = {**task_info, **{key: slot_info[key] for key in ("op_id", "op_kind", "op_version")
+                                     if key in slot_info}}
     if _run_task and not task_info:
         # The turn this load reported ended while the load was in
         # flight; its broadcast clear may have reached the client before
@@ -201,11 +258,14 @@ async def _send_running_task_state(ws, _s, session_id, _run_task) -> None:
         await ws.send_text(json.dumps({
             "type": "running_task_clear",
             "data": {"session_id": session_id, "run_seq": _followup_seq, **{
-                key: value for key, value in _run_task.items() if value}},
+                key: value for key, value in _run_task.items()
+                if value and key in ("msg_id", "execution_id", "op_id")}},
         }))
     if task_info:
         from openprogram.interfaces.server.server_runtime.session_persistence import reply_row_id
+        from openprogram.interfaces.server.server_runtime.session_lifecycle import operation_identity
 
+        identity = operation_identity(task_info)
         # Live partial-tree dump retired with the tree-Context
         # event system. The DAG nodes the function has produced so
         # far are already queryable via the GraphStore.
@@ -217,7 +277,11 @@ async def _send_running_task_state(ws, _s, session_id, _run_task) -> None:
                 "reply_id": reply_row_id(task_info),
                 "func_name": task_info["func_name"],
                 "execution_id": task_info.get("execution_id"),
-                "status_version": task_info.get("status_version"),
+                "status_version": identity.get("status_version", task_info.get("status_version")),
+                # What the operation is (a reply, /compact, a rewind ...) and
+                # the id a Stop of an operation with no execution names.
+                "op_kind": identity["op_kind"],
+                "op_id": identity.get("op_id"),
                 "started_at": task_info["started_at"],
                 "display_params": task_info.get("display_params", ""),
                 "partial_tree": None,
@@ -312,16 +376,18 @@ async def _mirror_branch(_s, db, conv: dict, session_id, head, load_started_head
             conv["head_id"] = head
 
 
-async def _serve_transcript(ws, _s, cmd: dict, conv: dict, session_id, is_history_page: bool, load_started_head, end_parking) -> None:
+async def _serve_transcript(ws, _s, cmd: dict, conv: dict, session_id, is_history_page: bool, load_started_head, end_parking, _attempt=0) -> None:
     """Answer a protocol 3 read: turns and window straight from the store."""
     from openprogram.interfaces.server.transcript import publisher, reader
     from openprogram.interfaces.server.transcript.turn_index import get_view
     from openprogram.interfaces.server.ws_errors import OperationError
     from openprogram.runtime.context.session_db import default_db
     db = default_db()
+    selection = await _session_io(_load_selection, db, session_id)
     publisher.hold(ws, session_id)
     try:
         view = await _session_io(get_view, db, session_id, load_started_head)
+        publisher.read_view(session_id, view)
         if is_history_page:
             turns, window = await _read_transcript_page(db, view, cmd)
         else:
@@ -339,33 +405,56 @@ async def _serve_transcript(ws, _s, cmd: dict, conv: dict, session_id, is_histor
         }}, ensure_ascii=False, default=str))
         end_parking()
         return
-    await _mirror_branch(_s, db, conv, session_id, view.head_id, load_started_head)
-    run_task, refresh_context_after_load = await _send_session_loaded(
-        ws, _s, cmd, conv, session_id, {"turns": turns, "window": window}, view.head_id, view.spawned_branch,
-    )
+    # The publisher can advance the shared view after the page's lock is
+    # released. Use the head captured with its rows, not that mutable view.
+    head = window["head_id"]
+    await _mirror_branch(_s, db, conv, session_id, head, load_started_head)
+    try:
+        run_task, refresh_context_after_load = await _send_session_loaded(
+            ws, _s, cmd, conv, session_id, {"turns": turns, "window": window}, head, view.spawned_branch, selection,
+        )
+    except _SelectionChanged:
+        if _attempt:
+            raise OperationError("session_read_failed", scope="session", retryable=True)
+        return await _serve_transcript(ws, _s, cmd, conv, session_id, is_history_page,
+                                       conv.get("head_id"), end_parking, _attempt=1)
     end_parking()
     await _after_session_loaded(ws, _s, session_id, run_task, refresh_context_after_load)
 
 
-async def _serve_flat_rows(ws, _s, cmd: dict, conv: dict, session_id, load_started_head) -> None:
+def _flat_read_snapshot(db, view, byte_limit):
+    from copy import deepcopy
+    from openprogram.interfaces.server.transcript.flat_rows import flat_rows
+    with view.lock:
+        rows = flat_rows(db, view, byte_limit=byte_limit)
+        return rows, view.head_id, deepcopy(view.spawned_branch)
+
+
+async def _serve_flat_rows(ws, _s, cmd: dict, conv: dict, session_id, load_started_head, _attempt=0) -> None:
     """Answer a client that is not the web: the branch as plain rows.
 
     A reply sink with ``flat_row_byte_limit`` (the HTTP command route) gets
     the newest rows that fit; sockets get the whole branch.
     """
-    from openprogram.interfaces.server.transcript.flat_rows import flat_rows
     from openprogram.interfaces.server.transcript.turn_index import get_view
     from openprogram.runtime.context.session_db import default_db
     db = default_db()
+    selection = await _session_io(_load_selection, db, session_id)
     try:
         view = await _session_io(get_view, db, session_id, load_started_head)
-        rows = await _session_io(flat_rows, db, view, byte_limit=getattr(ws, "flat_row_byte_limit", None))
+        rows, head, spawned_branch = await _session_io(_flat_read_snapshot, db, view, getattr(ws, "flat_row_byte_limit", None))
     except Exception as exc:
         raise _read_failed(session_id, exc) from exc
-    await _mirror_branch(_s, db, conv, session_id, view.head_id, load_started_head)
-    run_task, refresh_context_after_load = await _send_session_loaded(
-        ws, _s, cmd, conv, session_id, {"messages": rows}, view.head_id, view.spawned_branch,
-    )
+    await _mirror_branch(_s, db, conv, session_id, head, load_started_head)
+    try:
+        run_task, refresh_context_after_load = await _send_session_loaded(
+            ws, _s, cmd, conv, session_id, {"messages": rows}, head, spawned_branch, selection,
+        )
+    except _SelectionChanged:
+        from openprogram.interfaces.server.ws_errors import OperationError
+        if _attempt:
+            raise OperationError("session_read_failed", scope="session", retryable=True)
+        return await _serve_flat_rows(ws, _s, cmd, conv, session_id, conv.get("head_id"), _attempt=1)
     await _after_session_loaded(ws, _s, session_id, run_task, refresh_context_after_load)
 
 

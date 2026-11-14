@@ -133,7 +133,7 @@ def _provider_tool_decision(hook, snapshot, index, *, result_text=None):
         "content": [{
             "type": "toolCall",
             "id": tool_call_id,
-            "name": "web_use",
+            "name": "page_tool",
             "arguments": {"n": index},
         }],
         "api": "fake",

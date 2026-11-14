@@ -101,6 +101,14 @@ SEARCH_SPEC: dict[str, Any] = {
 }
 
 
+#: What a hit that cites nothing says about where it came from, so a model
+#: can weigh a person's own note above another tool's file.
+SOURCE_LINES = {
+    "outside": "source: outside file",
+    "person": "source: added by person",
+}
+
+
 def memory_search(
     query: str | None = None,
     exact: bool = False,
@@ -133,9 +141,11 @@ def memory_search(
             chat_refs.link(ref) for ref in hit.get("refs") or []
             if chat_refs.split(ref) is not None
         ]
+        origin = SOURCE_LINES.get(str(hit.get("origin") or ""))
         lines.append(
             f"--- {where}{f'#^{block}' if block else ''}"
             + (f"\ncites: {', '.join(cites)}" if cites else "")
+            + (f"\n{origin}" if origin else "")
             + f"\n{sanitize_context(str(hit.get('content') or ''))}"
         )
     return "\n\n".join(lines)
@@ -194,6 +204,10 @@ def memory_get(
 ) -> str:
     target = (path or "").strip()
     try:
+        if not target and not block_id:
+            return _overview()
+        if not target and block_id:
+            target = _derived_path(block_id) or ""
         if not target:
             return _overview()
         cited = chat_refs.from_target(target)
@@ -205,6 +219,20 @@ def memory_get(
     except TransactionError as exc:
         return _fail(exc)
     return sanitize_context(found.get("content", "")) or "(empty)"
+
+
+def _derived_path(block_id: str) -> str | None:
+    """The file a derived paragraph ID was read from, found by the path
+    key inside the ID, in whichever memory layer holds it."""
+    from openprogram.state.memory.markdown.parser import file_for_derived_id
+
+    memory = _memory()
+    for layer in getattr(memory, "layers", None) or [memory.default]:
+        found = file_for_derived_id(layer.root / "topics", block_id.lstrip("^"))
+        if found is not None:
+            relative = found.relative_to(layer.root).as_posix()
+            return relative if memory.single else memory.qualify(layer, relative)
+    return None
 
 
 def _cited_chat(ref: str) -> str:
@@ -383,7 +411,10 @@ def memory_update(
         current_ref = (
             chat_refs.ref(session_id, turn_id) if session_id and turn_id else None
         )
-        from openprogram.state.memory.project_layer import PROJECT, use
+        from openprogram.state.memory.project_layer import (
+            PROJECT, first_write_root,
+        )
+        from openprogram.state.memory.retrieval.layers import Layer
 
         memory = _memory()
         try:
@@ -395,10 +426,17 @@ def memory_update(
                 "INVALID_ARGUMENT",
                 "this conversation has no project memory",
             )
+        # A project whose memory is still empty is not read yet, but a new
+        # record goes there, as the background writer's do. Edits of what
+        # exists stay with the personal memory that holds it.
+        if memory.single and not layer and _creates_only(memory_changes):
+            first = first_write_root(session_id or None)
+            if first is not None:
+                target = Layer(PROJECT, first)
         # The workspace stages a copy of memory under the temp directory;
         # dropped without closing, one copy is left behind per call.
         with (
-            use(target.root, write=True)
+            _project_layer(target.root)
             if target.name == PROJECT else _no_layer()
         ), closing(MemoryWorkspace(
             target.root, config=load_memory_config(),
@@ -422,7 +460,10 @@ def memory_update(
         return _fail(exc)
     return _dump({
         "ok": True,
-        **({} if memory.single else {"layer": target.name}),
+        **(
+            {} if memory.single and target.name != PROJECT
+            else {"layer": target.name}
+        ),
         "revision": result.revision,
         "block_ids": result.block_ids,
         "evidence_ids": result.evidence_ids,
@@ -445,9 +486,30 @@ def _session_refs(session_id: str) -> set[str]:
     }
 
 
+def _creates_only(memory_changes: list[dict[str, Any]]) -> bool:
+    """Whether the changes only add records, anchored to nothing existing."""
+    return all(
+        isinstance(change, dict)
+        and change.get("op") == "create_record"
+        and not (change.get("destination") or {}).get("anchor_memory_id")
+        for change in memory_changes
+    )
+
+
 @contextmanager
 def _no_layer():
     yield
+
+
+@contextmanager
+def _project_layer(root):
+    """Select the project workspace, creating it on its first edit as the
+    background writer does."""
+    from openprogram.state.memory.project_layer import use
+
+    with use(root, write=True):
+        store.ensure()
+        yield
 
 
 __all__ = [

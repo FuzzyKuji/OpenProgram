@@ -75,11 +75,14 @@
 /* Chat mask in two layers at z 4: above the transcript, below the
    composer components and every popup. ::before is solid from the
    env-chip row down (hides transcript text behind the chips, box and
-   controls); ::after is the short fade above the chips. */
+   controls); ::after is the short fade above the chips. With the rows
+   tucked both start --composer-tuck-shift lower, 12px above the box
+   (use-tuck-backdrop.ts moves it on the rows' spring), so the strip the
+   tucked row leaves empty shows the transcript. */
 .inputArea::before {
   content: "";
   position: absolute;
-  inset: 12px 0 0;
+  inset: calc(12px + var(--composer-tuck-shift, 0px)) 0 0;
   background: var(--bg-primary);
   pointer-events: none;
   z-index: 4;
@@ -89,7 +92,7 @@
   position: absolute;
   left: 0;
   right: 0;
-  top: -16px;
+  top: calc(-16px + var(--composer-tuck-shift, 0px));
   height: 28px;
   background: linear-gradient(to bottom, transparent, var(--bg-primary));
   pointer-events: none;

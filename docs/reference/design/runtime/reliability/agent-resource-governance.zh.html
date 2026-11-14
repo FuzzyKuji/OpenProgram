@@ -49,7 +49,7 @@
 <table class="stack">
 <thead><tr><th scope="col">限制</th><th scope="col">是否存在</th><th scope="col">原因</th></tr></thead>
 <tbody>
-<tr><th scope="row"><code translate="no">max_live_global</code></th><td>否</td><td><code translate="no">OPENPROGRAM_JOB_WORKERS</code>（默认 4）已决定进程级 <code translate="no">ThreadPoolExecutor</code>，再加一项可能冲突。界面只读展示。</td></tr>
+<tr><th scope="row"><code translate="no">max_live_global</code></th><td>否</td><td><code translate="no">OPENPROGRAM_JOB_WORKERS</code>（默认 8）已决定进程级 <code translate="no">ThreadPoolExecutor</code>，再加一项可能冲突。界面只读展示。</td></tr>
 <tr><th scope="row"><code translate="no">max_live_per_session</code></th><td>是</td><td>防止一个会话占满 worker。只计正在运行或尚未确认停止的工作。</td></tr>
 <tr><th scope="row"><code translate="no">max_queued_per_session</code></th><td>是</td><td>限制持久队列长度。</td></tr>
 <tr><th scope="row"><code translate="no">max_jobs_per_session</code></th><td>是</td><td>限制会话生命周期内成功 admission 的数量。</td></tr>
@@ -63,8 +63,8 @@
 <table class="stack">
 <thead><tr><th scope="col">限制</th><th scope="col">计什么</th><th scope="col">达到上限</th></tr></thead>
 <tbody>
-<tr><th scope="row"><code translate="no">agent.max_spawn_depth</code></th><td>执行上下文中的代数。只有创建分支的 <code translate="no">agent(...)</code> 加一。</td><td>拒绝新分支（<code translate="no">quota.spawn_depth</code>）。已有分支仍可接收工作。</td></tr>
-<tr><th scope="row"><code translate="no">agent.max_messages</code></th><td>按路径：spawn、<code translate="no">agent(to=...)</code> 和 <code translate="no">send_message</code> 把目标设为发送方加一。自动回送沿用已完成 Job 的计数。同一轮的并行调用不共享计数。</td><td>拒绝新投递并隐藏 <code translate="no">agent</code>。不取消任何工作。</td></tr>
+<tr><th scope="row"><code translate="no">agent.max_spawn_depth</code></th><td>执行上下文中的代数，默认 1。只有创建分支的 <code translate="no">agent(...)</code> 加一。</td><td>拒绝新分支（<code translate="no">quota.spawn_depth</code>）。已有分支仍可接收工作。</td></tr>
+<tr><th scope="row"><code translate="no">agent.max_messages</code></th><td>按路径：spawn 和 <code translate="no">send_message</code> 把目标设为发送方加一。自动回送沿用已完成 Job 的计数。同一轮的并行调用不共享计数。</td><td>拒绝新投递并隐藏 <code translate="no">agent</code>。不取消任何工作。</td></tr>
 <tr><th scope="row"><code translate="no">agent.max_spawn_fanout</code></th><td>按调用方 <code translate="no">(session_id, turn_id)</code> 统计新分支（<code translate="no">creates_agent=true</code>）。</td><td>拒绝本轮更多分支（<code translate="no">quota.spawn_fanout</code>）。子执行完成不返还。</td></tr>
 <tr><th scope="row"><code translate="no">max_jobs_per_session</code></th><td>目标会话（<code translate="no">parent_session_id</code>）成功 admission 的累计数，含新分支和已有分支。调用方来源另行记录。</td><td><code translate="no">quota.jobs_exhausted</code>，不可重试。</td></tr>
 <tr><th scope="row"><code translate="no">max_queued_per_session</code></th><td>目标会话处于 <code translate="no">preparing</code> 或 <code translate="no">queued</code> 的 admission。</td><td><code translate="no">quota.queue_full</code>，可重试。不创建 Job。</td></tr>
@@ -80,11 +80,11 @@
 </tbody>
 </table>
 <ul>
-<li>Job 的 <code translate="no">id</code> 就是 canonical <code translate="no">execution_id</code>；<code translate="no">job_output(job_id=...)</code> 接收这个标识。</li>
-<li><code translate="no">agent(to=...)</code> 不建分支但建新执行：检查消息限制并申请目标会话 admission。</li>
+<li>Job 的 <code translate="no">id</code> 就是 canonical <code translate="no">execution_id</code>；<code translate="no">read_conversation(execution_id)</code> 和 <code translate="no">close_agent</code> 接收这个标识。</li>
+<li><code translate="no">send_message</code> 不建分支但建新执行：检查消息和跳数限制并申请目标会话 admission。</li>
 <li><code translate="no">send_message</code> 发给空闲目标时，通过 <code translate="no">run_agent_turn_async</code> 创建 <code translate="no">creates_agent=false</code> 的 Job，消耗目标会话 admission。</li>
-<li>消息限制只约束新投递。已归属执行的 <code translate="no">job_output</code>、<code translate="no">list_jobs</code> 和取消仍可用。</li>
-<li>已注册工具是 <code translate="no">agent</code>、<code translate="no">list_jobs</code>、<code translate="no">job_output</code>。没有 <code translate="no">job_stop</code>；取消走执行控制和内部的 <code translate="no">JobRunner.cancel_execution</code>。</li>
+<li>消息限制只约束新投递。对已归属执行的 <code translate="no">read_conversation</code>、<code translate="no">list_agents</code> 和 <code translate="no">close_agent</code> 仍可用。</li>
+<li>模型看到 <code translate="no">agent</code>、<code translate="no">send_message</code>、<code translate="no">list_agents</code>、<code translate="no">read_conversation</code> 和 <code translate="no">close_agent</code>；<code translate="no">list_jobs</code> 和 <code translate="no">job_output</code> 仍为程序注册但隐藏。<code translate="no">close_agent</code> 通过 <code translate="no">JobRunner._cancel_cascade</code> 取消；界面和 API 走执行控制。</li>
 </ul>
 <p class="note">操作与消息计数：<a href="../collaboration/agent-collaboration.zh.html">Agent 协作设计 §5</a>。</p>
 
@@ -112,7 +112,7 @@
 </table>
 
 <h2 id="admission">Admission</h2>
-<p>每次创建 Job 都调用 <code translate="no">ResourceGovernor.admit_job</code>：同步和异步 <code translate="no">agent()</code>、<code translate="no">agent(to=...)</code> 忙目标预创建、<code translate="no">run_agent_turn_async</code>、WebSocket 和 API spawn、模型工具，以及任何直接的 <code translate="no">JobRunner.spawn_job</code>。模型工具另有进程内 fan-out 预检查。</p>
+<p>每次创建 Job 都调用 <code translate="no">ResourceGovernor.admit_job</code>：同步和异步 <code translate="no">agent()</code>、<code translate="no">send_message</code> 忙目标预创建、<code translate="no">run_agent_turn_async</code>、WebSocket 和 API spawn、模型工具，以及任何直接的 <code translate="no">JobRunner.spawn_job</code>。模型工具另有进程内 fan-out 预检查。</p>
 <ol>
 <li>生成 <code translate="no">job_id</code>、<code translate="no">admission_id</code> 和请求指纹。校验参数、目标和权限，不做修改。</li>
 <li>在 run table 事务中检查深度、fan-out、队列和累计数，写入预算 scope 和 <code translate="no">preparing</code> admission。所有并发检查都能看到它。</li>
@@ -211,7 +211,7 @@
 <tr><th scope="row">Web</th><td>Job 和资源状态、队列位置、会话 live/队列/累计、四类剩余预算、成本已知或未知、原因。</td><td>沿用现有 Job 卡片和取消。没有后台会话 UI 或独立 Tasks 面板。</td><td><code translate="no">job_status</code> 增加可选资源字段。</td></tr>
 <tr><th scope="row">TUI</th><td>紧凑的会话容量、所选 Job 的剩余预算、停止原因。</td><td>沿用列表、详情、停止。</td><td>缺失字段按旧任务显示，不当作零。</td></tr>
 <tr><th scope="row">CLI</th><td>表格和稳定 JSON：有效限制、用量、预占、原因、retryable。</td><td>沿用查询和取消命令。</td><td>新字段只增不改；状态枚举不变。</td></tr>
-<tr><th scope="row">模型工具</th><td><code translate="no">list_jobs</code>、<code translate="no">job_output</code> 和执行控制返回相同原因和简化预算。</td><td>拒绝是结构化工具结果，不虚构 Job 记录。</td><td>保留文本结果，增加机器可读字段。</td></tr>
+<tr><th scope="row">模型工具</th><td><code translate="no">read_conversation</code>、<code translate="no">close_agent</code> 和执行控制返回相同原因和简化预算。</td><td>拒绝是结构化工具结果，不虚构 Job 记录。</td><td>保留文本结果，增加机器可读字段。</td></tr>
 </tbody>
 </table>
 

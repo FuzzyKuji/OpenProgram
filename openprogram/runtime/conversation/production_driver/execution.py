@@ -197,6 +197,16 @@ class ExecutionOperations:
                         set_chain_messages(int(chain.get("messages") or 0)),
                         set_chain_generations(int(chain.get("generations") or 0)),
                     ))
+                # A helper forked with the conversation keeps its parent's
+                # tool list (shared prompt cache); depth.forked_turn tells
+                # the agent tool to stay listed and refuse at run time.
+                from openprogram.programs.tools.agents.send_message.send_message.depth import (
+                    set_forked_turn,
+                )
+                job_tokens.append(set_forked_turn(
+                    bool(job.creates_agent) and job.context_mode == "inherit"
+                    and job.parent_msg_id is not None
+                ))
                 worktree_id = job_context.get("worktree_id")
                 if isinstance(worktree_id, str) and worktree_id:
                     from openprogram.state.worktree.context import set_worktree

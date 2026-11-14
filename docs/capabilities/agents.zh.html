@@ -61,15 +61,16 @@
 <tr><th scope="row">决策</th><td>用 <code translate="no">Agent.choose()</code> 从给定选项中选一项</td><td>一次模型回合，无工具，不自动重选</td></tr>
 <tr><th scope="row">轻量助手</th><td>提取、分类、格式转换、摘要、预测下一句</td><td>无工具</td></tr>
 <tr><th scope="row">统筹规划</th><td>规划依赖、委派已授权任务、核对结果</td><td>读取、搜索、Agent 协调</td></tr>
+<tr><th scope="row">Explorer</th><td>替其他 Agent 搜索和阅读代码、文件和网页，并报告发现</td><td>读取、搜索、网页；从不写入</td></tr>
 </tbody>
 </table>
-<p class="note">后三个没有自己的提示词，任务来自调用及其 Context。记忆、Skills 和 MCP 初始关闭。请为轻量助手选低成本模型，为统筹规划选强推理模型，名称不保证价格或质量。预测的消息只是建议，不构成授权；仅规划的请求不授权委派执行。</p>
+<p class="note">决策、轻量助手和统筹规划没有自己的提示词，任务来自调用及其 Context。记忆、Skills 和 MCP 初始关闭。请为轻量助手选低成本模型，为统筹规划选强推理模型，名称不保证价格或质量。预测的消息只是建议，不构成授权；仅规划的请求不授权委派执行。</p>
 <h3>离开时继续工作，常驻开启</h3>
 <p><strong>管家</strong>是通用的<a href="always-on-agents.zh.html">常驻</a> Agent：全部工具，记忆读写。告诉它要关注或持续推进什么；那个会话会在有事到期时醒来，没有安排时按<a href="always-on-agents.zh.html#check-ins">检查节奏</a>醒来，只汇报值得注意的内容。</p>
 <table class="stack">
 <thead><tr><th scope="col">任务 Agent</th><th scope="col">职责</th><th scope="col">工具</th><th scope="col">记忆</th><th scope="col">醒来时主动查看</th></tr></thead>
 <tbody>
-<tr><th scope="row">统筹助理</th><td>推动未完成事项，把任务分给其他 Agent，汇报</td><td>读取、网页、会话、未完成事项、交接、提醒、目标</td><td>读写</td><td>是</td></tr>
+<tr><th scope="row">统筹助理</th><td>推动未完成事项，把任务分给其他 Agent，汇报</td><td>读取、网页、会话、未完成事项、给其他 Agent 发消息、提醒、目标</td><td>读写</td><td>是</td></tr>
 <tr><th scope="row">需求规格</th><td>把需求写成带验收标准的规格</td><td>读取、网页、会话、写文件</td><td>只读</td><td>否</td></tr>
 <tr><th scope="row">缺陷复现</th><td>找到最小失败用例，固定为失败测试</td><td>读取、Shell、代码导航、worktree</td><td>关闭</td><td>否</td></tr>
 <tr><th scope="row">实现</th><td>在 worktree 里实现指定改动并写测试</td><td>读取、Shell、编辑、worktree</td><td>关闭</td><td>否</td></tr>
@@ -85,7 +86,7 @@
 <ul>
 <li>实现和评审分开，写改动的 Agent 不能自己通过。</li>
 <li>处理邮件或帖子的 Agent 止于草稿，提示词禁止发送。</li>
-<li>它们通过<a href="always-on-agents.zh.html#hand-work-to-another-conversation">交接</a>协作：每个 Agent 一个会话，标题清楚；告诉负责规划的会话谁做什么。</li>
+<li>它们按 Agent 名称或会话标题<a href="always-on-agents.zh.html#hand-work-to-another-conversation">互相发消息</a>协作：每个 Agent 一个会话，标题清楚；告诉负责规划的会话谁做什么。</li>
 </ul>
 <details>
 <summary>从 Python 调用</summary>
@@ -143,12 +144,18 @@ selected = selector.choose("Classify this message.", {"A": "Question", "B": "Sta
 <table class="stack fixed">
 <thead class="sr"><tr><th scope="col">设置</th><th scope="col">限制</th></tr></thead>
 <tbody>
-<tr><th scope="row"><code translate="no">agent.max_spawn_depth</code></th><td>新 Agent 的代数；<code translate="no">1</code> 表示 worker 亲自完成工作</td></tr>
-<tr><th scope="row"><code translate="no">agent.max_messages</code></th><td>一条链上的消息数</td></tr>
-<tr><th scope="row"><code translate="no">agent.max_spawn_fanout</code></th><td>一个回合可创建的 Agent 数</td></tr>
+<tr><th scope="row"><code translate="no">agent.max_spawn_depth</code></th><td><code translate="no">1</code>：你的 Agent 可以启动助手，助手亲自完成工作</td></tr>
+<tr><th scope="row"><code translate="no">agent.max_running_agents</code></th><td>一个对话同时运行 <code translate="no">6</code> 个助手，其余等待</td></tr>
+<tr><th scope="row"><code translate="no">agent.max_tree_usd</code></th><td>一次请求委派出去的全部工作共 <code translate="no">2</code> 美元，超出后其助手停止</td></tr>
+<tr><th scope="row"><code translate="no">agent.stall_minutes</code></th><td>安静 <code translate="no">10</code> 分钟后报告助手卡住</td></tr>
+<tr><th scope="row"><code translate="no">agent.max_agent_hours</code></th><td>助手运行 <code translate="no">2</code> 小时后停止</td></tr>
+<tr><th scope="row"><code translate="no">agent.max_hops</code></th><td>一条消息最多被转交 <code translate="no">4</code> 次</td></tr>
+<tr><th scope="row"><code translate="no">agent.max_sends_per_hour</code></th><td>一个对话每小时发送 <code translate="no">20</code> 条消息</td></tr>
+<tr><th scope="row"><code translate="no">agent.max_messages</code></th><td>一条链上的消息数；默认关闭</td></tr>
+<tr><th scope="row"><code translate="no">agent.max_spawn_fanout</code></th><td>一个回合可创建的 Agent 数；默认关闭</td></tr>
 </tbody>
 </table>
-<p class="note">默认都是 <code translate="no">0</code>，不限制；并发由任务池约束。超限的调用会被拒绝，并给出设置名称。</p>
+<p class="note"><code translate="no">0</code> 关闭该限制。超限的调用会被拒绝，并给出设置名称；被停止或卡住的助手会在启动它的对话里报告。</p>
 
 <h2 id="未完成事项">未完成事项</h2>
 <details>

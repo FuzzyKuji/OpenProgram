@@ -3,7 +3,7 @@ from __future__ import annotations
 from . import shared
 
 
-def _is_conversation_node(node) -> bool:
+def _is_conversation_node(node, hidden=()) -> bool:
     """Whether a node is part of the conversation a chat or transcript reads."""
     metadata = node.metadata or {}
     # ``context/*`` nodes record what the context pipeline sent
@@ -15,7 +15,8 @@ def _is_conversation_node(node) -> bool:
     # that stands in for the range it covers), so it is painted
     # and read like any other turn.
     return (
-        metadata.get("display") != "root"
+        node.id not in hidden
+        and metadata.get("display") != "root"
         and not metadata.get("rewound")
         and not metadata.get("structural")
         and not shared._is_hidden_context_node(node)
@@ -41,7 +42,9 @@ class MessagesOperations:
             # every append would pay a filesystem round-trip.
             if (not isinstance(text, str)
                     or len(text) <= _spill.NODE_RENDER_CAP
-                    or not _spill.SPILL_ENABLED):
+                    or not _spill.SPILL_ENABLED
+                    or _spill.bounded_when_made(node)
+                    or _spill.never_cut(node)):
                 return
             stamp = spill_if_large(
                 text,
@@ -92,10 +95,12 @@ class MessagesOperations:
         """Every logged change of a session's run state, oldest first."""
         return shared.SessionLog(self._session_dir(session_id)).read_run_rows()
 
-    def read_turn_records(self, session_id: str, execution_id: str) -> list[dict[str, shared.Any]]:
-        """Every progress line one execution wrote to the session's log."""
+    def read_turn_records(self, session_id: str, execution_id: str | None,
+                          record_type: str | None = None) -> list[dict[str, shared.Any]]:
+        """Every progress line one execution (``None``: every execution)
+        wrote to the session's log; ``record_type`` keeps one kind."""
         pair = self._open(session_id)
-        return [] if pair is None else pair[0].read_turn_records(execution_id)
+        return [] if pair is None else pair[0].read_turn_records(execution_id, record_type)
 
     def append_message(
         self, session_id: str, msg: dict[str, shared.Any], *, advance_head: bool = True,
@@ -106,7 +111,8 @@ class MessagesOperations:
 
     def append_after_head(self, session_id: str, msg: dict[str, shared.Any]) -> None:
         """Append ``msg`` chained onto the head as it stands under the write
-        lock, so a writer that reads the head first cannot fork the chain."""
+        lock, so a writer that reads the head first cannot fork the chain.
+        With no head yet it starts the main line at ROOT."""
         self._append(session_id, msg, after_head=True, advance_head=True)
 
     def _append(
@@ -132,7 +138,10 @@ class MessagesOperations:
             if node.id in idx.nodes_by_id:
                 return
             if after_head:
-                node.predecessor = idx.head_id
+                # No head yet (only a background run's branch, which never
+                # moves it): the message starts the main line at ROOT, as a
+                # first chat turn does.
+                node.predecessor = idx.head_id or "ROOT"
             predecessor = shared._node_conv_predecessor(node)
             caller = shared._node_caller(node)
             shared._check_append_invariant(session_id, idx, node, predecessor, caller)
@@ -147,16 +156,30 @@ class MessagesOperations:
         # moves go through set_head (context/compaction.md §5).
             advanced = (advance_head and not caller
                         and (idx.head_id is None or predecessor == idx.head_id))
-            if advanced:
-                idx.set_head(node.id)
+            durable = None
+            if advanced or not caller:
+                # The branch records move on the record as it is on disk,
+                # read inside this lock; the cache takes the result.
+                from ..branch_config import BRANCH_CONFIG_FIELDS, advance_branch, carry_branch
+                durable = session_log.read_meta()
+                if advanced:
+                    advance_branch(durable, session_id, node.id, idx.nodes_by_id)
+                else:
+                    carry_branch(durable, predecessor, node.id)
+                with idx._lock:
+                    for key in (*shared.BRANCH_RECORD_KEYS,
+                                *(BRANCH_CONFIG_FIELDS if advanced else ())):
+                        if key in durable:
+                            idx.meta[key] = durable[key]
+                        else:
+                            idx.meta.pop(key, None)
+                if advanced:
+                    idx.set_head(node.id)
             activity_at = shared.time.time()
             idx.set_meta(updated_at=activity_at)
             # Persist activity time while the same session lock is held.
             with idx._persist_lock:
-                with idx._lock:
-                    meta = dict(idx.meta)
-                    meta["head_id"] = idx.head_id
-                session_log.write_meta(meta)
+                session_log.write_meta(self._meta_for_write(session_log, idx, durable))
         # Registry: every appended message bumps updated_at（最新一次聊天
         # 时间，侧栏排序键）；user 消息顺带刷新 preview（debounced to disk）。
         fields: dict[str, shared.Any] = {"updated_at": activity_at}
@@ -209,6 +232,8 @@ class MessagesOperations:
         if isinstance(metadata, dict):
             current = node.metadata if isinstance(node.metadata, dict) else {}
             node.metadata = {**current, **metadata}
+            if metadata:
+                idx.metadata_patched(node)
         idx.reindex_edges(
             node_id,
             old_predecessor=old_predecessor,
@@ -243,6 +268,7 @@ class MessagesOperations:
                 continue
             current = node.metadata if isinstance(node.metadata, dict) else {}
             node.metadata = {**current, **patch}
+            idx.metadata_patched(node)
             with self._head_file_lock(session_log):
                 session_log.patch_node(node_id, {}, patch)
 
@@ -260,7 +286,7 @@ class MessagesOperations:
         if pair is None:
             return None
         idx = pair[1]
-        return (idx.token, len(idx.nodes_by_seq), idx.next_seq, idx.head_id, idx.edge_version)
+        return (idx.token, len(idx.nodes_by_seq), idx.next_seq, idx.head_id, idx.shape_version)
 
     def transcript_appended(self, session_id: str, start: int, stop: int) -> list[dict[str, shared.Any]]:
         """The conversation rows among the nodes stored at positions ``start`` to ``stop``."""
@@ -268,7 +294,8 @@ class MessagesOperations:
         if pair is None:
             return []
         nodes = pair[1].nodes_by_seq[start:stop]
-        return [shared._node_to_msg(n, session_id) for n in nodes if _is_conversation_node(n)]
+        hidden = set(pair[1].meta.get("rewind_hidden_nodes") or [])
+        return [shared._node_to_msg(n, session_id) for n in nodes if _is_conversation_node(n, hidden)]
 
     def transcript_rows(self, session_id: str, ids) -> list[dict[str, shared.Any]]:
         """The conversation rows among these ids; a hidden or unknown id is skipped."""
@@ -276,7 +303,8 @@ class MessagesOperations:
         if pair is None:
             return []
         nodes = (pair[1].nodes_by_id.get(row_id) for row_id in ids)
-        return [shared._node_to_msg(n, session_id) for n in nodes if n is not None and _is_conversation_node(n)]
+        hidden = set(pair[1].meta.get("rewind_hidden_nodes") or [])
+        return [shared._node_to_msg(n, session_id) for n in nodes if n is not None and _is_conversation_node(n, hidden)]
 
     def transcript_children(self, session_id: str, parent_id: str) -> list[dict[str, shared.Any]]:
         """The conversation rows hanging from ``parent_id`` by either edge."""
@@ -284,9 +312,10 @@ class MessagesOperations:
         if pair is None:
             return []
         idx = pair[1]
+        hidden = set(pair[1].meta.get("rewind_hidden_nodes") or [])
         ids = dict.fromkeys([*idx.children_by_predecessor.get(parent_id, ()), *idx.children_by_caller.get(parent_id, ())])
         nodes = (idx.nodes_by_id.get(child) for child in ids)
-        return [shared._node_to_msg(n, session_id) for n in nodes if n is not None and _is_conversation_node(n)]
+        return [shared._node_to_msg(n, session_id) for n in nodes if n is not None and _is_conversation_node(n, hidden)]
 
     def get_messages_by_id(self, session_id: str, ids: tuple[str, ...] | list[str]) -> list[dict[str, shared.Any]]:
         """These rows as messages, in the order asked; an unknown id is skipped."""
@@ -294,14 +323,17 @@ class MessagesOperations:
         if pair is None:
             return []
         nodes = pair[1].nodes_by_id
-        return [shared._node_to_msg(nodes[row_id], session_id) for row_id in ids if row_id in nodes]
+        hidden = set(pair[1].meta.get("rewind_hidden_nodes") or [])
+        return [shared._node_to_msg(nodes[row_id], session_id) for row_id in ids
+                if row_id in nodes and row_id not in hidden]
 
     def get_messages(self, session_id: str, *, limit: shared.Optional[int] = None) -> list[dict[str, shared.Any]]:
         pair = self._open(session_id)
         if pair is None:
             return []
         _session_log, idx = pair
-        msgs = [shared._node_to_msg(n, session_id) for n in idx.all_nodes() if _is_conversation_node(n)]
+        hidden = set(pair[1].meta.get("rewind_hidden_nodes") or [])
+        msgs = [shared._node_to_msg(n, session_id) for n in idx.all_nodes() if _is_conversation_node(n, hidden)]
         if limit is not None:
             msgs = msgs[-limit:]
         return msgs

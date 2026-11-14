@@ -59,7 +59,7 @@
 <thead class="sr"><tr><th scope="col">方面</th><th scope="col">规则</th></tr></thead>
 <tbody>
 <tr><th scope="row">Agent 页面的弹窗</th><td>在后台加载，登记到打开者的会话、分支和执行（<code translate="no">webtab_popup</code>）</td></tr>
-<tr><th scope="row">告知 Agent</th><td>在打开者下一次 observe 或 act 结果中以 <code translate="no">opened_pages</code> 出现一次；通过 <code translate="no">list_pages</code> 访问</td></tr>
+<tr><th scope="row">告知 Agent</th><td>列在打开它的那次动作的结果里；Agent 按标签页 id 操作它</td></tr>
 <tr><th scope="row">跟随</th><td>只有操作指向弹窗时才切换</td></tr>
 <tr><th scope="row">用户页面的弹窗</th><td>在前台打开，不被接管</td></tr>
 <tr><th scope="row">桌面端</th><td>在 Chromium 创建的 WebContents 上构建弹窗页面，因此 <code translate="no">window.opener</code> 继续可用</td></tr>
@@ -73,11 +73,9 @@
 <tbody>
 <tr><th scope="row">互斥呈现</th><td>页面显示为实时标签或聊天预览，二者不并存：一个原生 <code translate="no">WebContentsView</code> 无法占据两个矩形。不在页面旁或页面上放截图，不变暗，不加阻挡层。</td></tr>
 <tr><th scope="row">预览图</th><td>只读：绝不转发点击、按键或滚动。不为放大而裁剪或缩放。</td></tr>
-<tr><th scope="row">请求让出</th><td>在真实页面按下指针、操作页面的按键和输入、滚动、用户导航</td></tr>
-<tr><th scope="row">不请求</th><td>查看、聚焦（包括 Tab 移动焦点和修饰键）、悬停、只读预览控件。悬停引起的页面变化仍使旧观察失效。</td></tr>
-<tr><th scope="row">人输入时</th><td>该输入范围内之后的 Agent 派发关闭，排队的旧帧操作作废。人的点击绝不复制或重放。</td></tr>
-<tr><th scope="row">范围</th><td>页面；原生窗口仅在验证过独立输入时按窗口，否则按进程或主机输入域；桌面按主机输入域；虚拟机按客机</td></tr>
-<tr><th scope="row">不作承诺</th><td>零重叠：已派发的操作可能无法撤回，迟到结果会被记录并重新观察。不撤销人的改动，Agent 也不会自行恢复。</td></tr>
+<tr><th scope="row">人的使用</th><td>在真实页面里点击、输入、滚动和导航直接作用于页面，不暂停 Agent。只有任务的暂停和停止会。</td></tr>
+<tr><th scope="row">旧观察</th><td>人改动过的页面（包括悬停引起的变化）使 Agent 之前的观察失效；它在操作前重新观察。</td></tr>
+<tr><th scope="row">不作承诺</th><td>零重叠：已派发的操作可能无法撤回，迟到结果会被记录并重新观察。不撤销人的改动。</td></tr>
 </tbody>
 </table>
 
@@ -198,7 +196,7 @@
 <table class="stack fixed">
 <thead class="sr"><tr><th scope="col">部分</th><th scope="col">状态</th></tr></thead>
 <tbody>
-<tr><th scope="row">已实现</th><td>类型分组、点击预览、在会话中预览、自动和固定预览、关闭语义、互斥呈现、人输入隔离、原生窗口画面、边缘提示、显示操作、回执历史</td></tr>
+<tr><th scope="row">已实现</th><td>类型分组、点击预览、在会话中预览、自动和固定预览、关闭语义、互斥呈现、原生窗口画面、边缘提示、显示操作、回执历史</td></tr>
 <tr><th scope="row">计划：同时显示</th><td>网页标签与小聊天预览同时显示，在同一页面上同步</td></tr>
 <tr><th scope="row">计划：适配器</th><td>原生应用和虚拟机控制，各自经真实目标验收后才宣称；零重叠自动接管</td></tr>
 <tr><th scope="row">计划：学习</th><td>演示录制、轨迹回看</td></tr>

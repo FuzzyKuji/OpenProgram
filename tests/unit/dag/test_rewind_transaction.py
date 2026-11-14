@@ -78,7 +78,8 @@ def test_rewind_folds_three_turns_into_one_target_state(store, tmp_path):
     assert store.get_session("s-fold")["head_id"] == "ROOT"
     _git, index = store._open("s-fold")
     refs = index.meta["branch_refs"]
-    assert refs[result["source_branch_id"]]["head_id"] == "a3"
+    assert result["source_branch_id"] == result["target_branch_id"]
+    assert len(refs) == 1
     assert refs[result["target_branch_id"]]["head_id"] == "ROOT"
     assert index.meta["active_branch_id"] == result["target_branch_id"]
     assert not any((node.metadata or {}).get("rewound") for node in index.all_nodes())

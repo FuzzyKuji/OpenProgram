@@ -119,6 +119,20 @@ def test_a_removed_verb_as_a_whole_span_is_an_error():
     assert [f.rule for f in found] == ["claims.command"] and found[0].severity == "error"
 
 
+def test_a_removed_top_level_verb_counts_only_where_it_is_written_as_a_command():
+    change = ParserChange(frozenset(), frozenset(), frozenset({((), "browser")}), frozenset({"browser"}),
+                          frozenset({"programs", "mcp"}))
+
+    def lines(html):
+        return [f.line for f in _removed_cli_tokens(FakeRepository(change), "docs/x.html", read(html))]
+    # The word names an application or a target here, not the command.
+    assert lines('<p>target <code>app</code>, <code>browser</code> or <code>vm</code></p>') == []
+    assert lines('<p>sources <code>mcp</code> and <code>browser</code></p>') == []
+    # In a list of top-level verbs, or written out as a command elsewhere on the page.
+    assert lines('<p><code>programs</code>, <code>mcp</code>, <code>browser</code></p>') == [1]
+    assert lines('<p><code>browser</code></p>\n<pre><code>openprogram browser status</code></pre>') == [1]
+
+
 def test_a_removed_flag_on_a_page_about_that_command_is_an_error():
     change = parser_change(cli(), cli(flag="-Y"))
     page = read('<code>openprogram backup restore x</code><code>-y</code>')

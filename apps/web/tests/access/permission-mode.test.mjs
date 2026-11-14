@@ -14,6 +14,9 @@ registerHooks({
       "@/lib/i18n": "export const useTranslation = () => ({text: en => en});",
     };
     if (specifier in sources) return { url: `data:text/javascript,${encodeURIComponent(sources[specifier])}`, shortCircuit: true };
+    if (specifier === "@/lib/agents/branch-target") return {
+      url: new URL("../../lib/agents/branch-target.ts", import.meta.url).href, shortCircuit: true,
+    };
     if (specifier === "@/lib/session-store/permission-state") return {
       url: new URL("../../lib/session-store/permission-state.ts", import.meta.url).href, shortCircuit: true,
     };
@@ -55,7 +58,7 @@ test("confirmed selector sends bypass immediately and waits for write confirmati
   await mounted(async ({ h, requests, hook }) => {
     await act(async () => hook().set("bypass"));
     assert.equal(requests.length, 1);
-    assert.deepEqual(requests[0].payload, { session_id: "session-one", mode: "bypass", expected_version: 4 });
+    assert.deepEqual(requests[0].payload, { session_id: "session-one", expected_branch_id: null, mode: "bypass", expected_version: 4 });
     assert.equal(hook().pending, true);
     assert.equal(hook().mode, "ask");
     await act(async () => requests.shift().resolve({ mode: "bypass", version: 5 }));
@@ -94,7 +97,7 @@ test("a stale selector preserves the authoritative conflict without retrying", a
 test("unconfirmed sessions read before writing and ignore stale completion after switching sessions", async () => {
   await mounted(async ({ h, requests, hook, root, Probe }) => {
     await act(async () => hook().set("bypass"));
-    assert.deepEqual(requests[1].payload, { session_id: "session-one" });
+    assert.deepEqual(requests[1].payload, { session_id: "session-one", expected_branch_id: null });
     await act(async () => requests.splice(1, 1)[0].resolve({ mode: "ask", version: 2 }));
     assert.equal(requests[1].payload.expected_version, 2);
     h.sid = "session-two";
@@ -123,5 +126,22 @@ test("a missing acknowledgement leaves the previous mode effective", async () =>
     assert.equal(hook().mode, "ask");
     assert.equal(hook().pending, false);
     assert.ok(hook().error);
+  });
+});
+
+
+test("a branch switch invalidates an in-flight permission write in the same session", async () => {
+  await mounted(async ({ h, requests, hook, root, Probe }) => {
+    h.settings.active_branch_id = "a";
+    await act(async () => root.render(createElement(Probe)));
+    await act(async () => requests.shift().resolve({mode: "ask", version: 4}));
+    await act(async () => hook().set("bypass"));
+    const old = requests.shift();
+    assert.equal(old.payload.branch_id, "a");
+    h.settings = {active_branch_id: "b", permission_mode: "plan", effective_permission: "plan", permission_version: 1};
+    await act(async () => root.render(createElement(Probe)));
+    await act(async () => old.resolve({mode: "bypass", version: 5}));
+    assert.equal(hook().mode, "plan");
+    assert.equal(h.settings.permission_version, 1);
   });
 });

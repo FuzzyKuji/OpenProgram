@@ -18,6 +18,8 @@ the running turn reach it, and claims the core's cancellation check
 ## Files in this directory
 
 - **`bound_reply.py`** — Deliver a bound chat's assistant replies to its channel conversation
+- **`branch_config.py`** — Bind execution settings to a branch before an input becomes durable
+- **`branch_fork.py`** — Where a retry or an edit starts its new branch, decided without the server
 - **`chat.py`** — Conversation policy on the public Agent execution contract
 - **`checkpoint.py`** — Resuming an Agent turn from its journal
 - **`context_registration.py`** — What the conversation package adds to the context the model sees
@@ -26,6 +28,7 @@ the running turn reach it, and claims the core's cancellation check
 - **`execution_hooks.py`** — The Agent engine's registrations with the execution control plane
 - **`history_ownership.py`** — Resolve owned child change sets for file-history operations
 - **`inbox.py`** — Per-session send_message inbox
+- **`local_commands.py`** — Slash commands a surface answers itself, without a model turn
 - **`memory_agent.py`** — Synchronous memory-writer adapter over OpenProgram's normal Agent
 - **`memory_execution.py`** — Bind a turn's memory policy for the length of its execution
 - **`merge.py`** — Merge N peer sessions into one target reply
@@ -40,16 +43,18 @@ the running turn reach it, and claims the core's cancellation check
 - **`revert.py`** — Safe single-turn Undo/Revert and Redo/Reapply
 - **`rewind.py`** — Plan and apply rewinds in three modes: code and conversation, conversation, code
 - **`rewind_marks.py`** — What a rewind leaves behind: Undo and Redo marks and the note to the model
+- **`run_note.py`** — What an unattended turn is told about the run it is in
 - **`session_config.py`** — Per-session run configuration shared by TUI, web, and channels
 - **`session_context.py`** — Unified per-turn session context
 - **`session_model.py`** — Single source of truth for which chat model a session runs
+- **`side_work.py`** — Background work a finished turn starts beside itself
 - **`sub_agent_run.py`** — Run an agent turn that can be inherited (sibling branch) or clean
 - **`surface_context.py`** — Turn-scoped awareness of a visible OpenProgram desktop surface
 - **`topics.py`** — Sort a conversation's messages into topics, for Activity's time chart
+- **`turn_input.py`** — A chat message someone typed, as the turn request it becomes
 - **`turn_lifecycle.py`** — Assistant-turn lifecycle helpers
 - **`turn_request_context.py`** — The TurnRequest in force, plus the owner's original input
 - **`workdir.py`** — Default chat-runtime workdir resolution
-- **`workspace_alignment.py`** — Conversation-branch and workspace alignment state
 
 ## Sub-packages
 

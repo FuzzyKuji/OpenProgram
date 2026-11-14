@@ -2,7 +2,34 @@
 <meta name="description" content="computer_use_agent 工具的目标、指南和代码，以及各后端的页面。">
 <h1>操控电脑与浏览器</h1>
 
-<p>一个屏幕工具 <code translate="no">computer_use_agent</code>：macOS、Linux、Windows 上的应用；App 内置浏览器和无头 Chromium 里的网页；远程虚拟机。</p>
+<p>模型通过一个工具操作 macOS、Linux、Windows 上的应用、网页和远程虚拟机。</p>
+
+<figure>
+<svg class="fig-wide" viewBox="0 0 680 276" role="img" aria-label="一个入口。模型只有一个屏幕工具 computer_use_agent，每次调用选三个目标之一。app 操作应用的窗口，在用户的工作后面进行。browser 操作 App 里的标签页；够不到 App 窗口时用它自己的无窗口浏览器；点名时用用户的 Chrome 或 Edge。vm 操作虚拟机的屏幕。">
+  <defs><marker id="oe-a" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path class="head" d="M0 0L8 4L0 8z"/></marker></defs>
+  <text class="t-big" x="0" y="130" translate="no">computer_use_agent</text>
+  <text class="t-soft" x="0" y="154">一个屏幕工具，</text>
+  <text class="t-soft" x="0" y="174">每次调用一个目标</text>
+  <path class="ln" d="M212 123H280" marker-end="url(#oe-a)"/>
+  <path class="ln" d="M246 123V23H280" marker-end="url(#oe-a)"/>
+  <path class="ln" d="M246 123V235H280" marker-end="url(#oe-a)"/>
+  <text class="t-big" x="292" y="30" translate="no">app</text>
+  <text class="t-soft" x="292" y="54">应用的窗口，</text>
+  <text class="t-soft" x="292" y="74">在用户的工作后面</text>
+  <text class="t-big" x="292" y="130" translate="no">browser</text>
+  <text class="t-soft" x="292" y="154">App 里的标签页</text>
+  <text class="t-soft" x="292" y="174">够不到 App 窗口：它自己的浏览器</text>
+  <text class="t-soft" x="292" y="194">点名 chrome 或 edge：用户的 Chrome、Edge</text>
+  <text class="t-big" x="292" y="242" translate="no">vm</text>
+  <text class="t-soft" x="292" y="266">虚拟机的屏幕</text>
+</svg>
+<ol class="flow fig-narrow">
+  <li><strong><code translate="no">computer_use_agent</code></strong><small>一个屏幕工具，每次调用一个目标</small></li>
+  <li><strong><code translate="no">app</code></strong><small>应用的窗口，在用户的工作后面</small></li>
+  <li><strong><code translate="no">browser</code></strong><small>App 里的标签页；够不到 App 窗口时用它自己的浏览器；点名时用用户的 Chrome、Edge</small></li>
+  <li class="flow-end"><strong><code translate="no">vm</code></strong><small>虚拟机的屏幕</small></li>
+</ol>
+</figure>
 
 <h2 id="页面">页面</h2>
 <table class="stack fixed">
@@ -13,7 +40,7 @@
 <tr><th scope="row"><a href="computer-use-macos.zh.html">macOS 投递</a></th><td>后台输入、文件对话框、桌面空间、应用正忙和拒绝</td></tr>
 <tr><th scope="row"><a href="computer-use-linux-windows.zh.html">Linux 与 Windows 后端</a></th><td>各平台用什么，以及 cua-driver</td></tr>
 <tr id="界面工作"><th scope="row"><a href="computer-use-interface.zh.html">操控电脑的界面</a></th><td>Agent 光标、窗口标识、卡片、设置和指向目标</td></tr>
-<tr id="浏览器应用"><th scope="row"><a href="browser-application.zh.html">浏览器应用</a><span id="web_use-运行时"></span></th><td>服务和 web_use 运行时</td></tr>
+<tr id="浏览器应用"><th scope="row"><a href="browser-application.zh.html">浏览器应用</a></th><td>模块、服务和程序的网页标签</td></tr>
 <tr id="浏览器目标标签页驱动"><th scope="row"><a href="browser-tab-driver.zh.html">浏览器标签页驱动</a></th><td>标签页、多个 agent、只发一次的写、坐标和预览</td></tr>
 <tr><th scope="row"><a href="browser-tab-actions.zh.html">浏览器标签页动作</a></th><td>读取、ref、操作、上传和页面脚本</td></tr>
 </tbody>
@@ -71,7 +98,7 @@
 <thead><tr><th scope="col">目标</th><th scope="col">后端</th><th scope="col">打开时返回</th></tr></thead>
 <tbody>
 <tr><th scope="row"><code translate="no">app</code></th><td><code translate="no">openprogram/programs/tools/computer_use/computer_use_agent/desktop/</code>（macOS、Linux X11、Windows）</td><td>给了 <code translate="no">args.app</code>：它的状态（树和截图）；否则应用列表</td></tr>
-<tr><th scope="row"><code translate="no">browser</code></th><td>操作 App 内置标签页的标签页驱动；<code translate="no">args.browser</code> 为 <code translate="no">chrome</code> 或 <code translate="no">edge</code> 时，是连接到用户浏览器的扩展模式 Playwright MCP</td><td>标签页列表</td></tr>
+<tr><th scope="row"><code translate="no">browser</code></th><td><a href="browser-tab-driver.zh.html">标签页驱动</a>：网页开成 App 里的标签页，够不到 App 窗口时开在驱动自己的无窗口浏览器里；<code translate="no">args.browser</code> 为 <code translate="no">chrome</code> 或 <code translate="no">edge</code> 时，是连接到用户浏览器的扩展模式 Playwright MCP</td><td>标签页列表</td></tr>
 <tr><th scope="row"><code translate="no">vm</code></th><td><code translate="no">computer_use.vm_url</code> 指向的 OSWorld 兼容服务</td><td>一张截图</td></tr>
 </tbody>
 </table>
@@ -95,7 +122,7 @@
 <tr><th scope="row">先选浏览器</th><td>与 Codex 一样，先选浏览器，动作不随浏览器改变。</td></tr>
 <tr><th scope="row">按次生成指南</th><td>浏览器指南每次送达时按同一项检查生成：只列出装了扩展的用户浏览器，一个都没有时指明其中的页面用 <code translate="no">app</code> 目标操作。</td></tr>
 <tr><th scope="row">无扩展</th><td>点名了没装扩展的浏览器的调用会立刻得到这条建议，不询问审批，也不启动服务器。</td></tr>
-<tr><th scope="row">服务进程</th><td>对装了扩展的，<code translate="no">targets/browser.py</code> 把每一步交给 <code translate="no">workflow/browser/extension_browser.py</code>，它通过 <code translate="no">_SyncMCPClient</code> 运行 <code translate="no">@playwright/mcp --extension --browser chrome|msedge</code>（与 <code translate="no">web_use</code> 固定的版本相同），每个会话、每个浏览器一个服务器，在调用之间保持。</td></tr>
+<tr><th scope="row">服务进程</th><td>对装了扩展的，<code translate="no">targets/browser.py</code> 把每一步交给浏览器应用的 <code translate="no">extension.py</code>，它通过自己的 MCP 客户端运行固定版本的 <code translate="no">@playwright/mcp --extension --browser chrome|msedge</code>，每个会话、每个浏览器一个服务器，在调用之间保持。</td></tr>
 <tr><th scope="row">连接</th><td>服务器在该浏览器里打开带有其中继地址的 <code translate="no">chrome-extension://&lt;id&gt;/connect.html</code>，Playwright Extension 回连，并为用户共享的标签页中继 CDP；设置了 <code translate="no">computer_use.chrome_extension_token</code> 时，服务器传入 <code translate="no">PLAYWRIGHT_MCP_EXTENSION_TOKEN</code>，扩展不再询问直接连接。</td></tr>
 <tr><th scope="row">动作映射</th><td><code translate="no">tabs</code>、<code translate="no">read</code>（<code translate="no">tab</code> 为序号时会选中那个标签页）、<code translate="no">open</code>、<code translate="no">close</code>、<code translate="no">screenshot</code>、<code translate="no">upload</code>、<code translate="no">evaluate</code> 和日志映射到服务器的标签页、快照、截图、文件、evaluate 和日志工具；所有元素和指针动作都经过 <code translate="no">OfficialMCPPageBackend._action_call</code>，即 <code translate="no">playwright_mcp</code> 后端对 App Page 使用的同一套翻译。</td></tr>
 <tr><th scope="row">ref</th><td>ref 是服务器快照里的 ref。</td></tr>

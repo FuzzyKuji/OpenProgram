@@ -1,4 +1,5 @@
-"""One user message can compact completed tool results before the next call."""
+"""One user message whose tool rounds outgrow the window is checkpointed
+before the next call; tool results are never summarised one by one."""
 
 import asyncio
 
@@ -16,6 +17,7 @@ from openprogram.models.providers.types import (
     ToolCall,
     UserMessage,
 )
+from tests.support.summary_stream import install_summary_reply
 
 
 @pytest.mark.parametrize("requested,expected", [(None, 739), (100, 100), (900, None)])
@@ -81,6 +83,10 @@ def test_one_user_message_multiple_tool_rounds(monkeypatch):
     )
     requests = []
     summaries = []
+    # A result is bounded to WINDOW_SHARE of the window when it is made, so
+    # no single round fills it: the growth over many rounds of one message
+    # is what has to be compacted.
+    rounds = 12
 
     def answer(content, stop="stop"):
         return AssistantMessage(
@@ -102,7 +108,7 @@ def test_one_user_message_multiple_tool_rounds(monkeypatch):
             ]
         )
 
-    monkeypatch.setattr("openprogram.models.providers.complete_simple", summary)
+    install_summary_reply(monkeypatch, summary)
 
     async def execute(*_args):
         return AgentToolResult(content=[TextContent(text=payload)])
@@ -111,8 +117,9 @@ def test_one_user_message_multiple_tool_rounds(monkeypatch):
         requests.append(context.model_copy(deep=True))
         i = len(requests)
         result = (
-            answer([ToolCall(id=f"c{i}", name="check", arguments={})], "toolUse")
-            if i < 4
+            # Each round checks another part, so it is not the same call repeated.
+            answer([ToolCall(id=f"c{i}", name="check", arguments={"part": i})], "toolUse")
+            if i <= rounds
             else answer([TextContent(text="analysis done")])
         )
         yield EventDone(reason=result.stop_reason, message=result)
@@ -143,14 +150,21 @@ def test_one_user_message_multiple_tool_rounds(monkeypatch):
 
     raw = asyncio.run(run())
     assert summaries, "same-message tool growth must trigger request compaction"
-    assert len(requests) == 4
+    assert len(requests) == rounds + 1
     assert all(estimate_history_tokens(r.messages) < 11000 for r in requests)
     assert all(
         r.messages[0].content == "Only analyze. Ask before editing." for r in requests
     )
-    assert (
-        sum(m.role == "toolResult" and m.content[0].text == payload for m in raw) == 3
-    )
+    # The turn keeps each result as the model read it: the payload bounded to
+    # its share of the window (measured by weight, not characters), never
+    # the summary that replaced it in a later request.
+    from openprogram.state.store.session.spill import WINDOW_SHARE
+    from openprogram.state.store.session.weight import weight
+
+    kept = [m.content[0].text for m in raw if m.role == "toolResult"]
+    assert len(kept) == rounds
+    assert all(k.startswith(payload[:1000]) and len(k) < len(payload)
+               and weight(k) <= 12000 * WINDOW_SHARE for k in kept)
     for request in requests:
         calls = {
             b.id
@@ -162,198 +176,6 @@ def test_one_user_message_multiple_tool_rounds(monkeypatch):
         assert {
             m.tool_call_id for m in request.messages if m.role == "toolResult"
         } == calls
-
-
-def test_complete_groups_cache_and_original_evidence(monkeypatch):
-    from openprogram.runtime.context.compaction.request import RequestCompactor
-    from openprogram.models.providers.types import (
-        Context,
-        SimpleStreamOptions,
-        ToolResultMessage,
-    )
-
-    model = Model(
-        id="fixture",
-        name="fixture",
-        api="openai-completions",
-        provider="openai",
-        base_url="https://example.invalid",
-        context_window=6000,
-        max_tokens=512,
-    )
-    calls = []
-    credential_keys = []
-
-    async def summary(_model, context, options):
-        assert (
-            estimate_history_tokens(context.messages) + options.max_tokens
-            < model.context_window
-        )
-        calls.append(context)
-        credential_keys.append(options.api_key)
-        return AssistantMessage(
-            content=[TextContent(text="Evidence remains unverified.")],
-            api=model.api,
-            provider=model.provider,
-            model=model.id,
-            timestamp=0,
-        )
-
-    monkeypatch.setattr("openprogram.models.providers.complete_simple", summary)
-    owner = AssistantMessage(
-        content=[
-            ToolCall(id="a", name="check", arguments={}),
-            ToolCall(id="b", name="check", arguments={}),
-        ],
-        api=model.api,
-        provider=model.provider,
-        model=model.id,
-        timestamp=0,
-    )
-    result = ToolResultMessage(
-        tool_call_id="a",
-        tool_name="check",
-        is_error=True,
-        content=[TextContent(text="evidence 1234567 " * 7000)],
-        timestamp=0,
-    )
-    other = result.model_copy(update={"tool_call_id": "b"})
-    user = UserMessage(content="Do not edit.", timestamp=0)
-    raw = Context(messages=[user, owner, result, other])
-    compactor = RequestCompactor()
-
-    async def run():
-        opts = SimpleStreamOptions(max_tokens=512)
-
-        async def get_key(provider):
-            assert provider == "openai"
-            return "fixture-callback-key"
-
-        first = await compactor.prepare(raw, model, opts, get_api_key=get_key)
-        assert credential_keys and set(credential_keys) == {"fixture-callback-key"}
-        count = len(calls)
-        second = await compactor.prepare(raw, model, opts)
-        assert len(calls) == count
-        assert second.messages == first.messages
-        assert first.messages[0] == user and first.messages[1] == owner
-        assert all(m.is_error for m in first.messages[2:])
-        assert raw.messages[2] == result
-        # A partial tool group must not be summarized, even under pressure.
-        import pytest
-
-        with pytest.raises(ValueError, match="Protected request"):
-            await compactor.prepare(
-                Context(messages=[user, owner, result]), model, opts
-            )
-        assert len(calls) == count
-        changed = result.model_copy(
-            update={"content": [TextContent(text="updated evidence " * 7000)]}
-        )
-        await compactor.prepare(
-            Context(messages=[user, owner, changed, other]), model, opts
-        )
-        assert len(calls) > count
-
-    asyncio.run(run())
-
-
-def test_function_runtime_compacts_its_tool_continuation(monkeypatch):
-    from openprogram.runtime.agent import Runtime
-    from openprogram import Agent
-
-    model = Model(
-        id="fixture",
-        name="fixture",
-        api="openai-completions",
-        provider="openai",
-        base_url="https://example.invalid",
-        context_window=12000,
-        max_tokens=1000,
-    )
-    requests, executed, summaries = [], [], []
-
-    def answer(content, stop="stop"):
-        return AssistantMessage(
-            content=content,
-            api=model.api,
-            provider=model.provider,
-            model=model.id,
-            stop_reason=stop,
-            timestamp=0,
-        )
-
-    async def summary(_model, context, options):
-        summaries.append(context)
-        return answer([TextContent(text="Analysis evidence; no edits performed.")])
-
-    monkeypatch.setattr("openprogram.models.providers.complete_simple", summary)
-
-    async def execute(*_args):
-        executed.append(True)
-        return AgentToolResult(
-            content=[TextContent(text="record evidence 1234567 " * 12000)]
-        )
-
-    async def stream(_model, context, options=None):
-        requests.append(context.model_copy(deep=True))
-        result = (
-            answer([ToolCall(id="inner-call", name="check", arguments={})], "toolUse")
-            if len(requests) == 1
-            else answer([TextContent(text="done")])
-        )
-        yield EventDone(reason=result.stop_reason, message=result)
-
-    runtime = Runtime(model="default")
-    runtime.api_model = model
-
-    class InspectAgent(Agent):
-        method_options = {
-            "inspect": {"name": "inspect", "tool": True},
-        }
-
-        def inspect(self, runtime=None):
-            return runtime.exec(
-                "Analyze only; retain evidence.",
-                stream_fn=stream,
-                tools=[
-                    AgentTool(
-                        name="check",
-                        label="check",
-                        description="check",
-                        parameters={"type": "object"},
-                        execute=execute,
-                    )
-                ],
-            )
-
-    inspect = InspectAgent().inspect
-    from openprogram.runtime.permissions.authority import owner_authority
-    from openprogram.runtime.agent.turn_request import TurnRequest
-    from openprogram.runtime.agent.turn_request import (
-        set_turn_request,
-        reset_turn_request,
-    )
-
-    request = TurnRequest(
-        session_id="compaction-fixture",
-        user_text="Analyze fixture evidence",
-        agent_id="main",
-        source="python",
-        permission_mode="bypass",
-        **owner_authority("owner/install/" + "a" * 16),
-    )
-    token = set_turn_request(request)
-    try:
-        assert inspect(runtime=runtime) == "done"
-    finally:
-        reset_turn_request(token)
-        runtime.close()
-    assert len(executed) == 1 and len(requests) == 2 and summaries
-    assert estimate_history_tokens(requests[-1].messages) < 11000
-    assert any(
-        m.role == "toolResult" and "Tool evidence summary" in m.content[0].text
-        for m in requests[-1].messages
-    )
 
 
 def test_native_schema_is_part_of_fixed_input_budget():
@@ -418,11 +240,15 @@ def test_cancelled_summary_never_changes_raw_messages(monkeypatch, mode):
         content=[TextContent(text="evidence 1234567 " * 800)],
         timestamp=0,
     )
+    # A second round makes the first a complete prefix the checkpoint reads.
+    later = call.model_copy(update={"content": [ToolCall(id="y", name="check", arguments={})]})
     context = Context(
         messages=[
             UserMessage(content="Only analyze. " * 450, timestamp=0),
             call,
             result,
+            later,
+            result.model_copy(update={"tool_call_id": "y", "content": [TextContent(text="ok")]}),
         ]
     )
     before = context.model_dump_json()
@@ -447,7 +273,7 @@ def test_cancelled_summary_never_changes_raw_messages(monkeypatch, mode):
             stop_reason="aborted" if mode == "aborted" else "stop",
         )
 
-    monkeypatch.setattr("openprogram.models.providers.complete_simple", summary)
+    install_summary_reply(monkeypatch, summary)
     with pytest.raises(asyncio.CancelledError):
         asyncio.run(
             compactor.prepare(
@@ -455,7 +281,7 @@ def test_cancelled_summary_never_changes_raw_messages(monkeypatch, mode):
             )
         )
     assert context.model_dump_json() == before
-    assert not compactor._cache
+    assert compactor._checkpoint is None
     assert len(calls) == 1
 
 
@@ -707,3 +533,55 @@ def test_whole_prefix_request_summary_keeps_the_summary_rules(monkeypatch):
     monkeypatch.setattr(bounded_summary, "summarize_text", capture)
     asyncio.run(RequestCompactor().prepare(Context(messages=messages), model, SimpleStreamOptions()))
     assert any(prompts.SUMMARY_RULES in instruction for instruction in seen)
+
+
+def test_whole_prefix_request_summary_reads_no_opaque_payloads(monkeypatch):
+    """A finished turn renders with its reasoning items (to the model that
+    wrote them), and its prefix is still summarized: the summarizer reads
+    what the turn said and did and the reasoning summary, but not a
+    reasoning item's encrypted content, a message id or a thought
+    signature, which mean nothing to it. The turn in progress keeps its
+    signed reasoning (test_checkpoint_rejects_protected_prefix)."""
+    import json as _json
+
+    from openprogram.models.providers.types import (
+        Context, SimpleStreamOptions, ThinkingContent, ToolResultMessage)
+    from openprogram.runtime.context.compaction import bounded_summary
+    from openprogram.runtime.context.compaction.request import RequestCompactor
+
+    model = Model(id="fixture", name="fixture", api="openai-codex", provider="openai-codex",
+                  base_url="https://example.invalid", context_window=6000, max_tokens=512)
+    messages = [UserMessage(content="Only analyze.", timestamp=0)]
+    for index in range(12):
+        tool_id = f"x{index}"
+        item = {"type": "reasoning", "summary": [{"type": "summary_text", "text": f"plan {index}"}],
+                "encrypted_content": "gAAAA" + "Z" * 2000}
+        messages.append(AssistantMessage(content=[
+            ThinkingContent(thinking=f"plan {index}", thinking_signature=_json.dumps(item)),
+            ThinkingContent(thinking="", thinking_signature="opaque-redacted", redacted=True),
+            TextContent(text=f"checking {index}", text_signature=f"msg_secret_{index}"),
+            ToolCall(id=tool_id, name="check", arguments={"text": "large input " * 300},
+                     thought_signature="sig-secret"),
+        ], api=model.api, provider=model.provider, model=model.id, timestamp=0))
+        messages.append(ToolResultMessage(tool_call_id=tool_id, tool_name="check",
+                                          content=[TextContent(text="evidence")], timestamp=0))
+    messages.append(UserMessage(content="Go on.", timestamp=0))
+    messages.append(AssistantMessage(content=[TextContent(text="Current step.")],
+                                     api=model.api, provider=model.provider, model=model.id, timestamp=0))
+    sources = []
+
+    async def capture(source, used_model, options, *, instruction, max_tokens, remaining=None):
+        sources.append(source)
+        return "short"
+
+    monkeypatch.setattr(bounded_summary, "summarize_text", capture)
+    prepared = asyncio.run(RequestCompactor().prepare(Context(messages=messages), model, SimpleStreamOptions()))
+    assert any(m.role == "assistant" and "[Earlier execution summary]" in m.content[0].text
+               for m in prepared.messages)
+    assert [m.content for m in prepared.messages if m.role == "user"] == ["Only analyze.", "Go on."]
+    assert prepared.messages[-1].content == messages[-1].content
+    whole = [source for source in sources if "Only analyze." in source]
+    assert whole, "the whole-prefix summary ran"
+    for opaque in ("gAAAA", "msg_secret_", "sig-secret", "opaque-redacted"):
+        assert opaque not in whole[0], opaque
+    assert "plan 0" in whole[0] and "checking 0" in whole[0] and "large input" in whole[0]

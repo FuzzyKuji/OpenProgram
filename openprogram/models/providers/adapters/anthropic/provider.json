@@ -90,5 +90,11 @@
    "api.anthropic.com"
   ],
   "max_breakpoints": 4
+ },
+ "tool_search": {
+  "anthropic-messages": "anthropic-reference",
+  "models_off": [
+   "haiku"
+  ]
  }
 }

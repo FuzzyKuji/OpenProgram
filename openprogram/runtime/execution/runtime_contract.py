@@ -44,10 +44,58 @@ def json_safe(value: Any) -> Any:
         return None
 
 
+def system_prompt_sha256(text: str) -> str:
+    import hashlib
+
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _prompt_reference(digest: str) -> str:
+    return f"<prompt sha256 {digest}>"
+
+
+def _with_prompt_from_ref(expected: Mapping[str, Any], actual: Mapping[str, Any]) -> Mapping[str, Any]:
+    """``expected`` with the prompt it names by hash put back as text.
+
+    A checkpoint may keep only a reference to the prompt
+    (``system_prompt_sha256``) when the branch's record holds the text: the
+    prompt the resumed turn sends is accepted when its hash matches, and is
+    reported as changed otherwise.
+    """
+    digest = expected.get("system_prompt_sha256")
+    if "system_prompt" in expected or not isinstance(digest, str):
+        return expected
+    kept = {key: value for key, value in expected.items() if key != "system_prompt_sha256"}
+    sent = actual.get("system_prompt") if isinstance(actual, Mapping) else None
+    matches = isinstance(sent, str) and system_prompt_sha256(sent) == digest
+    kept["system_prompt"] = sent if matches else _prompt_reference(digest)
+    return kept
+
+
+def _prompt_as_reference(contract: Any) -> Any:
+    """A contract that names its prompt by hash, with that reference in the
+    ``system_prompt`` field; any other value unchanged.
+
+    Two contracts that both name their prompt by hash (a checkpoint checked
+    against itself when it is loaded) then compare by that hash.
+    """
+    if not isinstance(contract, Mapping) or "system_prompt" in contract:
+        return contract
+    digest = contract.get("system_prompt_sha256")
+    if not isinstance(digest, str):
+        return contract
+    kept = {key: value for key, value in contract.items() if key != "system_prompt_sha256"}
+    kept["system_prompt"] = _prompt_reference(digest)
+    return kept
+
+
 def validate_runtime_contract(
     expected: Mapping[str, Any], actual: Mapping[str, Any], *, durable_function_names=(),
 ) -> None:
     """Reject runtime drift except implementations with durable function state."""
+    actual = _prompt_as_reference(actual)
+    if isinstance(expected, Mapping):
+        expected = _with_prompt_from_ref(expected, actual)
     if durable_function_names and isinstance(expected, Mapping) and isinstance(actual, Mapping):
         before = expected.get("tools")
         after = actual.get("tools")

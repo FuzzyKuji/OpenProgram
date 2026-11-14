@@ -565,3 +565,36 @@ def test_title_supports_provider_without_verified_native_schema(monkeypatch):
     _install_title_runtime(monkeypatch, runtime)
     assert title_module._generate_llm_title('自动命名功能验收', '已记录') == '会话自动命名'
     assert runtime.closed
+
+
+def test_trigger_compaction_runs_on_the_model_the_turns_run_on(
+    tmp_db: SessionDB, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A branch with no model of its own follows its Agent or the model the
+    person ran last, for /compact exactly as for a reply."""
+    tmp_db.create_session("c2", "main")
+    last = None
+    for i in range(6):
+        tmp_db.append_message("c2", {
+            "id": f"n{i}", "role": "user" if i % 2 == 0 else "assistant",
+            "content": f"turn {i}", "timestamp": float(i), "predecessor": last,
+        })
+        last = f"n{i}"
+    tmp_db.set_head("c2", last)
+    monkeypatch.setattr(
+        "openprogram.runtime.conversation.session_model.new_session_chat_model",
+        lambda agent_id=None: ("fallback-provider", "fallback-model"),
+    )
+    seen: list = []
+
+    class _Stop(Exception):
+        pass
+
+    def _resolve(profile, override):
+        seen.append(override)
+        raise _Stop
+
+    monkeypatch.setattr(title_module, "_resolve_model", _resolve)
+    with pytest.raises(_Stop):
+        D.trigger_compaction("c2", agent_id="main", on_event=lambda event: None)
+    assert seen == ["fallback-provider/fallback-model"]

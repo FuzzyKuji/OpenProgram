@@ -40,25 +40,36 @@ def test_surfaces_send_execution_cancel_and_use_cancel_copy():
         ROOT / "openprogram/runtime/conversation/turn_runtime/forced_tool.py"
     ).read_text(encoding="utf-8")
 
-    assert 'action: "execution.cancel"' in composer
+    # The web builds every cancel frame in one helper; a stop names its
+    # execution, so it goes out once.
+    web_cancel = (
+        ROOT / "apps/web/lib/execution/cancel-execution.ts"
+    ).read_text(encoding="utf-8")
+    assert 'action: "execution.cancel"' in web_cancel
+    assert "command_id: commandId" in web_cancel
+    assert "expected_version: expectedVersion" in web_cancel
     assert "const commandId = crypto.randomUUID()" in composer
-    assert "command_id: commandId" in composer
-    assert "expected_version: expectedVersion" in composer
+    assert "sendExecutionCancel(send, executionId, typeof expectedVersion === \"number\" ? expectedVersion : 0, commandId)" in composer
     assert 'text("Cancel execution", "取消运行")' in index
     assert 'text("Cancelling…", "正在取消")' in index
-    assert 'action: "execution.cancel"' in strip
-    assert "command_id: crypto.randomUUID()" in strip
-    assert "expected_version: expectedVersion" in strip
+    assert "sendExecutionCancel(sendRuntimeCommand, executionId, expectedVersion)" in strip
     assert 'text("Cancel execution", "取消运行")' in strip
-    assert 'action: "execution.cancel"' in attach
-    assert "command_id: crypto.randomUUID()" in attach
-    assert "expected_version: expectedVersion" in attach
+    assert "sendExecutionCancel(sendRuntimeCommand, executionId, expectedVersion)" in attach
     assert "mode: 'force'" not in tui
     assert "mode=\"force\"" not in tui
-    assert "Cancel execution" in tui
-    assert "action: 'execution.cancel'" in tui
-    assert "command_id: randomLocalId()" in tui
-    assert "expected_version: expectedVersion" in tui
+    # The TUI builds its cancel frame in one helper, which also resends a
+    # stop refused for a stale version; Ctrl-C and Esc both stop through
+    # ``stopForeground``, which writes the one system line.
+    tui_cancel = (
+        ROOT / "apps/cli/src/screens/repl/cancelExecution.ts"
+    ).read_text(encoding="utf-8")
+    assert "pushSystem('Cancel execution')" in tui_cancel
+    assert "action: 'execution.cancel' as const" in tui_cancel
+    assert "command_id: commandId" in tui_cancel
+    assert "expected_version: version" in tui_cancel
+    assert "stopForeground({" in tui
+    assert "cancelCurrentExecution(" in tui_cancel
+    assert "newCommandId: randomLocalId," in tui
     assert "execution_id: streaming.id" not in tui
     assert "executionIdRef.current" in tui
     assert "execution.updated" in tui_events
@@ -101,7 +112,7 @@ def test_surfaces_send_execution_cancel_and_use_cancel_copy():
     assert "_pause_event" not in run_control
     assert "msg_id}_reply" not in composer
     assert '"execution_id": task.get("execution_id")' in read_server_source(ROOT)
-    assert '"status_version": task.get("status_version")' in read_server_source(ROOT)
+    assert '"status_version": identity.get("status_version", task.get("status_version"))' in read_server_source(ROOT)
     assert "cancelling: true" not in composer
     stop_body = composer.split("export function stopSession", 1)[1]
     assert "stopOverlay" in stop_body

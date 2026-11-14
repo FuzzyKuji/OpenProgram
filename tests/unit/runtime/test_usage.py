@@ -362,3 +362,39 @@ def test_recorder_never_raises_on_bad_input(ledger, monkeypatch):
     monkeypatch.setattr(_recorder, "default_ledger", ledger)
     assert _recorder.record_message(None, None) is None
     assert _recorder.record_message(_FakeModel(), _FakeMsg(None)) is None
+
+
+def test_recorder_names_the_execution_the_call_is_made_in(ledger, monkeypatch):
+    """A model call made while an execution is bound to the context is
+    recorded under that execution, so a run's usage can be read by its
+    execution tree; one made on a thread of its own (the title the Worker
+    writes beside a finished turn) is not."""
+    import contextvars
+
+    from openprogram.state import execution_facts
+
+    bound: contextvars.ContextVar = contextvars.ContextVar("bound_execution", default=None)
+    monkeypatch.setitem(execution_facts._providers, "current_execution_id", bound.get)
+    monkeypatch.setattr(_recorder, "default_ledger", ledger)
+    bound.set("exec_run")
+    with usage_scope(call_kind="chat", session_id="s1"):
+        turn = _recorder.record_message(_FakeModel(), _FakeMsg(_FakeUsage(10, 1)))
+        failed = _recorder.record_failed_request(_FakeModel())
+        # A new thread starts from an empty context, as this one does.
+        beside = contextvars.Context().run(
+            _recorder.record_message, _FakeModel(), _FakeMsg(_FakeUsage(5, 1)), session_id="s1")
+
+    assert (turn.execution_id, failed.execution_id) == ("exec_run", "exec_run")
+    assert beside.execution_id is None
+
+
+def test_a_query_by_execution_counts_those_executions_only(ledger):
+    ledger.append(_ev(execution_id="run", input_tokens=10))
+    ledger.append(_ev(execution_id="child", input_tokens=20))
+    ledger.append(_ev(execution_id="other_branch", input_tokens=400))
+    ledger.append(_ev(execution_id=None, input_tokens=8000))
+
+    assert ledger.query(execution_ids={"run", "child"})[0].input_tokens == 30
+    assert ledger.query(execution_ids=set())[0].events == 0
+    calls = ledger.calls(call_kinds=["chat"], execution_ids=["child"])
+    assert [(c["execution_id"], c["input_tokens"]) for c in calls] == [("child", 20)]

@@ -95,9 +95,14 @@ def test_doctor_exposes_stable_check_ids(monkeypatch):
     monkeypatch.setattr(doctor, "runtime_http_checks", lambda: [(True, "runtime-http-registry", "checked")])
     monkeypatch.setattr("openprogram.host._platform.environment.platform_environment_advisories", lambda _: [(True, "platform-check", "checked")])
     monkeypatch.setattr("openprogram.host.system_access.doctor_rows", lambda: list(system_access_rows))
+    # The command shell row is advice: it comes last, so the ids before it
+    # keep their order, and a failed round trip only changes its status.
+    monkeypatch.setattr(doctor, "_check_command_shell", lambda: (False, "command shell", "round trip failed"))
     assert doctor.run_checks() == [
         {"id": "healthy", "ok": True, "label": "Healthy", "detail": "checked"},
         {"id": "runtime_http:runtime-http-registry", "ok": True, "label": "runtime-http-registry", "detail": "checked"},
         {"id": "platform:platform-check", "ok": True, "label": "platform-check", "detail": "checked"},
         *system_access_rows,
+        {"id": "command_shell", "ok": True, "label": "command shell", "detail": "round trip failed",
+         "optional": True, "status": "failed"},
     ]

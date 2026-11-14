@@ -122,6 +122,7 @@
 <ul>
 <li><code translate="no">import openprogram</code> and a full <code translate="no">Runtime(call=...).exec()</code> round trip do not pull in <code translate="no">webui</code>, FastAPI, Uvicorn or Textual.</li>
 <li>With <code translate="no">SessionStore(root_path=...)</code> + <code translate="no">session_scope(store, session_id)</code> the run never consults <code translate="no">openprogram.state.paths</code>; with no store it persists nothing.</li>
+<li>A standalone run starts with a principal drawn once per process and never stored, with the <code translate="no">owner</code> tier. It becomes the profile's owner when it is handed a profile runtime or sends a request to the profile's model. A run on a host-supplied <code translate="no">call=</code>, wherever the host creates it, reads no <code translate="no">owner.json</code>.</li>
 </ul>
 <table class="stack">
 <thead><tr><th scope="col">Seam</th><th scope="col">Core default</th><th scope="col">Platform registration</th></tr></thead>

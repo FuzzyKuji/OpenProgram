@@ -274,3 +274,63 @@ def test_powershell_invocation_preserves_unicode_arguments(
     data = json.loads(result.stdout)
     assert data["python"] == str(python)
     assert data["args"] == arguments
+
+
+def test_windows_on_arm_falls_back_to_the_x64_package_and_says_so() -> None:
+    installer = _read("scripts/release/install-release.ps1").replace("\r\n", "\n")
+    select = installer[installer.index("function Select-PackageArchitecture"):installer.index("$SeedName =")]
+    # Only Windows 11 on Arm emulates x64, and its own package wins when the release has one.
+    assert 'if ($Native -ne "arm64" -or $WindowsBuild -lt 22000) {\n        return $Native' in select
+    assert 'foreach ($Candidate in @("arm64", "x86_64"))' in select
+    assert '"seed-windows-$Candidate.tar.gz", "runtime-windows-$Candidate.zip"' in select
+    assert "has no Windows on Arm package. Installing the x64 one" in select
+    assert select.index("Write-Host") < select.index("$Arch = $Selected")
+    # A package handed over on disk is installed as it is.
+    assert "if (-not $env:OPENPROGRAM_SEED_ARCHIVE -and -not $env:OPENPROGRAM_RUNTIME_ARCHIVE) {\n    $Selected =" in select
+    assert installer.index("$Arch = $Selected") < installer.index('$SeedName = "OpenProgram-$Version-seed-windows-$Arch.tar.gz"')
+    assert installer.index("$Arch = $Selected") < installer.index('$ArchiveName = "OpenProgram-$Version-runtime-windows-$Arch.zip"')
+
+    bootstrap = _read("docs/_static_root/install.ps1")
+    refusal = bootstrap[bootstrap.index("$Listed ="):bootstrap.index("has no command-line package")]
+    assert '$Emulated = $Arch -eq "arm64" -and [Environment]::OSVersion.Version.Build -ge 22000 -and (' in refusal
+    assert '$Manifest.Contains("OpenProgram-$Version-seed-windows-x86_64.tar.gz"))' in refusal
+    assert "if (-not $Listed -and -not $Emulated) {" in refusal
+    # The installer is the release's own. One published before it could pick
+    # the x64 package would stop on the missing Arm one, so that release is
+    # refused here, before anything is downloaded for it.
+    bootstrap = bootstrap.replace("\r\n", "\n")
+    tagged = bootstrap[bootstrap.index("if (-not $Listed -and $Emulated) {"):bootstrap.index("if (-not $Listed -and -not $Emulated) {")]
+    assert '"https://raw.githubusercontent.com/$Repository/v$Version/scripts/release/install-release.ps1"' in tagged
+    assert '$Emulated = $LASTEXITCODE -eq 0 -and $Tagged.Contains("function Select-PackageArchitecture")' in tagged
+    assert "\nfunction Select-PackageArchitecture {" in installer
+    # The wrapper the bootstrap starts hands over to that same tagged file.
+    assert '"https://raw.githubusercontent.com/$Repository/v$Version/scripts/release/install-release.ps1"' in _read("scripts/install-release.ps1")
+
+
+@NATIVE_WINDOWS
+@pytest.mark.parametrize(("native", "build", "published", "expected"), [
+    ("arm64", 26100, ["seed-windows-x86_64.tar.gz"], "x86_64"),
+    ("arm64", 26100, ["runtime-windows-x86_64.zip"], "x86_64"),
+    ("arm64", 26100, ["runtime-windows-x86_64.zip", "seed-windows-arm64.tar.gz"], "arm64"),
+    ("arm64", 26100, [], "arm64"),
+    ("arm64", 19045, ["seed-windows-x86_64.tar.gz"], "arm64"),  # Windows 10 on Arm has no x64 emulation.
+    ("x86_64", 26100, ["seed-windows-arm64.tar.gz"], "x86_64"),
+])
+def test_package_architecture_selection(tmp_path: Path, native: str, build: int, published: list[str], expected: str) -> None:
+    source = _read("scripts/release/install-release.ps1")
+    start = source.index("function Select-PackageArchitecture")
+    function = source[start : source.index("if (-not $env:OPENPROGRAM_SEED_ARCHIVE", start)]
+    names = ",".join(_ps(f"OpenProgram-1.2.3-{name}") for name in published) or "''"
+    driver = tmp_path / "select.ps1"
+    driver.write_text(
+        "$ErrorActionPreference='Stop'\nSet-StrictMode -Version Latest\n" + function +
+        f"\n$Published = @({names})\n"
+        f"Select-PackageArchitecture {_ps(native)} {build} '1.2.3' {{ param($Name) $Published -contains $Name }}\n",
+        encoding="utf-8-sig",
+    )
+    result = subprocess.run(
+        [shutil.which("powershell.exe"), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(driver)],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    assert result.stdout.strip() == expected

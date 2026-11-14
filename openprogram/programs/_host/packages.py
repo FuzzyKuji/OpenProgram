@@ -46,6 +46,7 @@ import traceback
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
+from openprogram.host._platform.filesystem import replace_file
 
 logger = logging.getLogger(__name__)
 
@@ -515,7 +516,7 @@ def _last_good(cache: Path) -> str:
 def _remember_good(cache: Path, commit: str) -> None:
     scratch = cache / f".{_GOOD_FILE}-{os.getpid()}-{threading.get_ident()}"
     scratch.write_text(commit, encoding="utf-8")
-    os.replace(scratch, cache / _GOOD_FILE)
+    replace_file(scratch, cache / _GOOD_FILE)
 
 
 def _prune(cache: Path, keep: set[str]) -> None:

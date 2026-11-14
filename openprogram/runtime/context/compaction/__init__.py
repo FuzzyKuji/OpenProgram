@@ -6,7 +6,6 @@
 - ``view``: the frozen DAG input a compaction works from.
 - ``reactive``: recovering when the provider reports a context overflow.
 - ``hold``: pausing automatic compaction that keeps failing.
-- ``cache_aware_microcompact``: Anthropic context-editing cache edits.
 
 The engine (``runtime.context.engine``) decides when each one runs;
 ``docs/reference/design/context/compaction.html`` describes the design.

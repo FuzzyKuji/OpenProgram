@@ -242,7 +242,7 @@ def test_agent_async_passes_caller_and_depth(store, monkeypatch):
         lambda: _agent_impl(prompt="go", start_from="clean", run_in_background=True),
         session_id="p1", turn_id="a1",
     )
-    assert "agent spawned async" in out
+    assert out.startswith("[agent started in background]")
     assert cap["caller_msg_id"] == "a1"
     assert cap["chain_messages"] == 1
     # The child IS the new generation; the reply turn back on this lane
@@ -288,8 +288,16 @@ def test_agent_refuses_at_max_spawn_depth(store, captured_run, monkeypatch):
     assert "spawn_caller" not in captured_run  # never reached the spawn
 
 
-def test_a_spawned_agent_can_delegate_by_default(store, captured_run):
-    """No budget is set out of the box: the job pool bounds concurrency."""
+def test_a_spawned_agent_cannot_delegate_by_default(store, captured_run):
+    """Delegation depth is 1 out of the box (Codex ``agent_max_depth``):
+    the user's agent may start helpers, a helper may not start its own."""
+    out = _spawn_at({"generations": 1, "messages": 50})
+    assert "[blocked by setting]" in out and "max_spawn_depth" in out
+    assert "spawn_caller" not in captured_run
+
+
+def test_a_deeper_spawn_depth_lets_a_helper_delegate(store, captured_run, monkeypatch):
+    _set_config(monkeypatch, max_spawn_depth=2)
     out = _spawn_at({"generations": 1, "messages": 50})
     assert "[blocked by setting]" not in out
     assert captured_run["spawn_caller"] == "a1"

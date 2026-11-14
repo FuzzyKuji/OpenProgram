@@ -90,9 +90,16 @@ def match_rule(rules, tool_name: str, args: dict) -> tuple[str | None, str | Non
     """
     if rules is None:
         return None, None
-    from openprogram.runtime.permissions.rule import parse_rule, parse_command, pattern_matches
+    from openprogram.runtime.permissions.rule import (
+        parse_command, parse_rule, pattern_matches, unread_powershell_targets,
+    )
     cmd = None  # 惰性求值：只在遇到 per-pattern 规则时解析命令
+    # A deny rule for rm, mv or cp meets a PowerShell command it cannot read
+    # but that may run one of them: asked about, not refused (as Codex does).
+    unread = None
     for behavior, ruleset in (("deny", rules.deny), ("ask", rules.ask), ("allow", rules.allow)):
+        if behavior == "ask" and unread is not None:
+            return "ask", unread
         for raw in ruleset:
             rv = parse_rule(raw)
             if rv.tool_name != tool_name and rv.tool_name not in _RULE_ALIASES.get(tool_name, ()):
@@ -105,6 +112,9 @@ def match_rule(rules, tool_name: str, args: dict) -> tuple[str | None, str | Non
                 rv.pattern, cmd, allow=(behavior == "allow"),
             ):
                 return behavior, raw
+            if behavior == "deny" and unread is None and cmd is not None \
+                    and unread_powershell_targets(rv.pattern, cmd):
+                unread = raw
     return None, None
 
 
@@ -145,23 +155,41 @@ def can_approve(req) -> bool:
         is_owner = authority.get("principal_id") == owner_principal_id()
     except Exception:
         is_owner = False
-    return bool(
-        authority
-        and is_owner
-        and authority.get("authority_tier") == "owner"
-        and authority.get("speaker_kind") == "owner"
-        and authority.get("interaction") == "interactive"
-        and has_capability(authority, "approval.request")
-    )
+    if not (authority and is_owner and authority.get("authority_tier") == "owner"
+            and has_capability(authority, "approval.request")):
+        return False
+    if asks_through_caller(req):
+        # A foreground sub-agent: the owner waiting on it in the caller's
+        # conversation answers its card (lifecycle.spawn_question_route).
+        return True
+    return authority.get("speaker_kind") == "owner" and authority.get("interaction") == "interactive"
+
+
+def asks_through_caller(req) -> bool:
+    """Whether this turn's questions are shown in the conversation of the turn that waits on it."""
+    route = getattr(req, "asks_through", None)
+    return (isinstance(route, dict) and bool(route.get("session_id"))
+            and getattr(req, "source", None) == "agent_spawn")
+
+
+def nobody_answers(req) -> bool:
+    """Whether no person is behind this turn to answer a question it asks: a
+    scheduled run, a check-in, a sub-agent or follow-up the runtime started, an
+    MCP client. A person in a chat app is asked there, whatever their tier."""
+    from openprogram.state.authority import normalize_authority
+
+    authority = normalize_authority(req)
+    return bool(authority) and authority.get("interaction") != "interactive" and (
+        authority.get("speaker_kind") != "human")
 
 
 def surface_grant_applies(name: str, req, args) -> bool:
     """Whether the conversation's grant over its own browser Pages covers this call."""
-    if name != "web_use" and not (name == "computer_use_agent" and isinstance(args, dict)
-                                  and args.get("target") == "browser" and not _user_browser(args)):
+    if not (name == "computer_use_agent" and isinstance(args, dict)
+            and args.get("target") == "browser" and not _user_browser(args)):
         return False
     from openprogram.runtime.permissions.session_facts import facts
-    return facts().web_use_available(getattr(req, "surface_context", None))
+    return facts().browser_pages_available(getattr(req, "surface_context", None))
 
 
 def _allow(layer: str, code: str, rule: str | None = None) -> Decision:
@@ -176,6 +204,16 @@ def _ask_or_nobody(agent_tool, req, args, code: str, layer: str, rule: str | Non
     """Ask, where there is someone to ask; otherwise refuse now, so no card is left waiting."""
     if can_approve(req):
         return Decision("ask", code, layer, rule=rule)
+    if getattr(req, "run_note", None):
+        # A run no one watches (``--print``): refused with the fixed note
+        # that tells the model to go on without the call.
+        return _deny(refusal.non_interactive(agent_tool.name, args, layer=layer, wanted=code),
+                     rule=rule)
+    if getattr(req, "source", None) == "agent_spawn":
+        # A sub-agent nobody waits on (background, a delivered message):
+        # refused now with what to do, never left waiting on a card.
+        return _deny(refusal.helper_cannot_ask(agent_tool.name, args, layer=layer, wanted=code,
+                                               mode=req.permission_mode, rule=rule), rule=rule)
     from openprogram.runtime.permissions.rule import rule_origin
     return _deny(refusal.no_one_to_approve(
         agent_tool.name, args, source=req.source, mode=req.permission_mode,
@@ -215,6 +253,10 @@ def _mode_decision(agent_tool, req, args) -> Decision:
         return _allow("mode", "MODE_UNRESTRICTED")
     if mode == "plan" and name == "exit_plan_mode":
         return _ask_or_nobody(agent_tool, req, args, "PLAN_EXIT", "mode")
+    if name == "exit_plan_mode":
+        # In the array in every mode (the array does not follow the mode);
+        # outside Plan mode there is no plan to leave.
+        return _deny(refusal.not_in_plan(name, args))
     free = _free_code(agent_tool, req, args)
     if free:
         return _allow("mode", free)
@@ -249,7 +291,8 @@ def permission_decision(agent_tool, req, args: dict) -> Decision:
     verdict, rule = match_rule(getattr(req, "permission_rules", None), name, args)
     if verdict == "deny":
         return _deny(refusal.rule_deny(name, args, rule, rule_origin(req.session_id, rule, "deny")), rule=rule)
-    # Plan's read-only promise outranks the owner's ask and allow rules.
+    # Plan's read-only promise outranks the owner's ask and allow rules. The
+    # tools stay in the array in every mode; the call is what is refused.
     if req.permission_mode == "plan" and "plan" in _unsafe_in_for(name):
         return _deny(refusal.plan(name, args))
     if verdict == "ask":

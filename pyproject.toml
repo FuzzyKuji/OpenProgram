@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "openprogram"
-version = "1.1.0"
+version = "1.2.0"
 description = "OpenProgram: Self-Programming AI Agent Framework"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -212,14 +212,6 @@ channels = [
 browser = [
     "playwright>=1.45.0",
 ]
-# Stealth-patched browser backends for sites with bot protection
-# (Cloudflare Turnstile, DataDome, etc.). After install also run
-# `patchright install chromium` and/or `camoufox fetch`.
-browser-stealth = [
-    "playwright>=1.45.0",
-    "patchright>=1.40",
-    "camoufox>=0.4.0",
-]
 all = [
     # LLM provider SDKs are in base `dependencies` now — not repeated here.
     # Channels
@@ -276,7 +268,7 @@ include = ["openprogram", "openprogram.*"]
     "programs/_host/framework/interface_commands.json",
     "host/sandbox/shims/*.cjs",
     "host/sandbox/shims/*.py",
-    "programs/applications/browser/web_use/*.cjs",
+    "programs/applications/browser/*.cjs",
     # computer_use_agent target guides, sent on a target's first call.
     "programs/tools/computer_use/computer_use_agent/guides/*.md",
     # Base prompt and on-demand channel guides (runtime/context/components.py).

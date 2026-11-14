@@ -23,6 +23,7 @@ Unknown types are skipped by the fold, so runtime records can share the file.
 """
 from __future__ import annotations
 
+import base64
 import copy
 import json
 import logging
@@ -57,6 +58,14 @@ _META_CACHE_CAPACITY = 1024
 
 def encode_record(timestamp: int, record_type: str, data: Any) -> bytes:
     """One log line: the record, then a CRC of the bytes before the CRC field."""
+    if record_type == "node.patch":
+        metadata = data.get("metadata") or {}
+        extra = metadata.get("extra")
+        if isinstance(extra, str) and len(extra) >= 8192:
+            packed = base64.b64encode(zlib.compress(extra.encode("utf-8"), level=1)).decode("ascii")
+            if len(packed) < len(extra):
+                data = {**data, "metadata": {k: v for k, v in metadata.items() if k != "extra"},
+                        "extra_zlib": packed}
     body = json.dumps(
         {"ts": timestamp, "type": record_type, "data": data},
         ensure_ascii=False, default=str, separators=(",", ":"),
@@ -79,8 +88,13 @@ def decode_line(line: bytes) -> Optional[dict]:
     if zlib.crc32(body) & 0xFFFFFFFF != expected:
         return None
     try:
-        return json.loads(body + b"}")
-    except ValueError:
+        record = json.loads(body + b"}")
+        data = record.get("data")
+        if record.get("type") == "node.patch" and isinstance(data, dict) and "extra_zlib" in data:
+            packed = base64.b64decode(data.pop("extra_zlib"), validate=True)
+            data.setdefault("metadata", {})["extra"] = zlib.decompress(packed).decode("utf-8")
+        return record
+    except (ValueError, TypeError, zlib.error):
         return None
 
 
@@ -498,15 +512,21 @@ class SessionLog:
         self._append("file.put", {"name": name, "content": content}, durable=False)
         self._mark_own_write(was_synced)
 
-    def read_turn_records(self, execution_id: str) -> list[dict]:
-        """The turn progress lines of one execution, in written order."""
+    def read_turn_records(self, execution_id: str | None,
+                          record_type: str | None = None) -> list[dict]:
+        """The turn progress lines of one execution (``None``: of every
+        execution), in written order; ``record_type`` keeps one kind."""
         records: list[dict] = []
+        containing = f'"type":"{record_type}"'.encode() if record_type else None
         for path in (self.main_path, *self._agent_files()):
             if not path.exists():
                 continue
-            for record in read_log_file(path):
-                if (str(record.get("type", "")).startswith(TURN_RECORD_PREFIX)
-                        and (record.get("data") or {}).get("execution_id") == execution_id):
+            for record in read_log_file(path, containing=containing):
+                kind = str(record.get("type", ""))
+                if (kind.startswith(TURN_RECORD_PREFIX)
+                        and (record_type is None or kind == record_type)
+                        and (execution_id is None
+                             or (record.get("data") or {}).get("execution_id") == execution_id)):
                     records.append(record)
         records.sort(key=lambda record: record["ts"])
         return records

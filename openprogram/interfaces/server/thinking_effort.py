@@ -122,7 +122,8 @@ def get_thinking_config_for_model(provider: str, model_id: str | None) -> dict:
     spec = get_thinking_spec(provider)
     emap = spec.get("effort_map") or spec.get("budget_map")
     if emap:
-        return _build(list(emap.keys()), get_default_effort(provider), None)
+        # ``off`` in a map is how "no thinking" is sent, not a level.
+        return _build([k for k in emap if k != "off"], get_default_effort(provider), None)
     return {"label": label, "options": [], "default": None, "variant": None}
 
 

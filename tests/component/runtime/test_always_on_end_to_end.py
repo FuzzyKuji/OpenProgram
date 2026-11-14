@@ -246,28 +246,29 @@ class _RoutedProvider:
             yield event
 
 
-def test_handoff_runs_in_the_other_conversation_and_the_answer_comes_back(world, monkeypatch):
+def test_send_message_reaches_the_other_conversation_by_its_title(world, monkeypatch):
+    """The always-on hand-off is send_message now: a conversation reaches
+    another by its title, and the message is admitted there as a Job whose
+    reply routes back to the sender (the reply notice itself is covered by
+    the job notice tests; this world runs no Job dispatcher)."""
     from openprogram.models.providers.catalog import api_registry
     from openprogram.runtime.permissions import classifier
 
     async def allow(*_a, **_kw):
-        # Auto mode reviews a handoff like any action; the reviewer approves here.
+        # Auto mode reviews a message like any action; the reviewer approves here.
         return classifier.ReviewResult(False, "", "")
     monkeypatch.setattr(classifier, "auto_classify_tool", allow)
     from openprogram.runtime.context.session_db import default_db
     from openprogram.runtime.conversation.owner_turn import start_owner_turn
-    from tests.component.providers.scripted_provider import ScriptedText, ScriptedToolCall
+    from openprogram.runtime.jobs.store import list_jobs
+    from tests.component.providers.scripted_provider import ScriptedToolCall
 
     planner, docs = "ao-" + uuid.uuid4().hex[:8], "ao-" + uuid.uuid4().hex[:8]
 
     def route(told):
-        if "📨 Message from" in told:
-            return (ScriptedText("All 12 links work."),)
-        if "↩️ Reply from" in told:
-            return (ScriptedText("Noted."),)
         if "LOOP" in told:
-            return (ScriptedToolCall("handoff", {"to": planner, "message": "me again"}, "self-1"),)
-        return (ScriptedToolCall("handoff", {"to": "docs bot", "message": "Check the links"}, "h-1"),)
+            return (ScriptedToolCall("send_message", {"to": planner, "message": "me again"}, "self-1"),)
+        return (ScriptedToolCall("send_message", {"to": "docs bot", "message": "Check the links"}, "h-1"),)
     provider = _RoutedProvider(route)
     api_registry.register_api_provider(_API, provider)
     world.manager.update(world.agent_id, {"always_on": {"enabled": True}})
@@ -275,22 +276,20 @@ def test_handoff_runs_in_the_other_conversation_and_the_answer_comes_back(world,
     default_db().create_session(docs, "main", title="Docs bot")
 
     start_owner_turn(planner, world.agent_id, "PING: ask the docs bot")
-    wait_until(lambda: any("↩️ Reply from" in told for told in provider.seen), timeout=30)
-    wait_until(lambda: _idle(planner) and _idle(docs), timeout=30)
+    wait_until(lambda: _idle(planner) and provider.tool_results, timeout=30)
 
-    assert provider.tool_results[0].startswith(f"Sent to “Docs bot” ({docs}), hop 1 of 4.")
-    handed = next(told for told in provider.seen if "📨 Message from" in told)
-    assert f"“Planner” ({planner})" in handed and "Check the links" in handed
-    reply = next(told for told in provider.seen if "↩️ Reply from" in told)
-    assert f"“Docs bot” ({docs})" in reply and "All 12 links work." in reply
+    assert provider.tool_results[0].startswith("[delivered] execution_id=")
+    (job,) = list_jobs(docs)
+    assert job.caller_session_id == planner and job.agent_id == "main"
+    assert "Check the links" in job.prompt and "not from your user" in job.prompt
+    assert job.context_mode == "clean"  # the first turn of an empty conversation
 
-    # A conversation cannot message itself.
-    provider.seen.clear()
+    # A conversation cannot message its own running turn.
     provider.tool_results.clear()
     start_owner_turn(planner, world.agent_id, "LOOP")
     wait_until(lambda: _idle(planner) and provider.tool_results, timeout=30)
-    assert provider.tool_results == ["[handoff refused] A conversation cannot hand work to itself."]
-    assert not any("📨 Message from" in told for told in provider.seen)
+    assert provider.tool_results[0].startswith("[send_message refused]")
+    assert len(list_jobs(docs)) == 1
 
 
 def test_the_owner_can_type_while_a_check_in_runs(world):

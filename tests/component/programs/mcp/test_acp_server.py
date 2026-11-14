@@ -913,7 +913,9 @@ def test_not_found_cancel_requires_placeholder_absence(
         ),
     )
     existing_store = SimpleNamespace(
-        get_nodes=lambda _session_id: [SimpleNamespace(id=execution_id)],
+        get_nodes=lambda _session_id: [
+            SimpleNamespace(id=execution_id, metadata={}, caller=None),
+        ],
     )
     monkeypatch.setattr(
         "openprogram.runtime.context.session_db.default_db", lambda: existing_store,
@@ -944,11 +946,13 @@ def test_prompt_rejects_session_reserved_by_mcp_without_replacing_token(
     sid = c.call("session/new", {
         "cwd": str(tmp_path), "mcpServers": [],
     })["sessionId"]
-    result = c.call("session/prompt", {
-        "sessionId": sid,
-        "prompt": [{"type": "text", "text": "hi"}],
-    })
-    assert result["stopReason"] in {"end_turn", "refusal"}
+    # No stream is scripted here, so the turn fails on the model call; a
+    # failed turn answers the prompt with a JSON-RPC error naming why.
+    with pytest.raises(AssertionError, match="No stream function registered"):
+        c.call("session/prompt", {
+            "sessionId": sid,
+            "prompt": [{"type": "text", "text": "hi"}],
+        })
 
 
 def test_editor_context_reaches_the_model(tmp_db, client, tmp_path) -> None:
@@ -1176,16 +1180,20 @@ def test_non_approval_questions_are_not_forwarded(
     sid = c.call("session/new",
                  {"cwd": str(tmp_path), "mcpServers": []})["sessionId"]
     execution, attempt = bind_durable_question_execution(sid)
+    store = __import__("openprogram.runtime.execution", fromlist=["default_store"]).default_store()
+    from openprogram.runtime.execution.waits import DurableWaitStore
+    waits = DurableWaitStore(store)
     _open_acp_question(
-        __import__("openprogram.runtime.execution", fromlist=["default_store"]).default_store(),
-        execution, attempt, wait_id="wait_acp_ask", kind="ask", options=["red"],
+        store, execution, attempt, wait_id="wait_acp_ask", kind="ask", options=["red"],
     )
     c.server._on_question(SimpleNamespace(payload={
         "id": "wait_acp_ask", "session_id": sid,
         "execution_id": execution.execution_id, "kind": "ask",
         "prompt": "what colour?", "wait_generation": 0,
     }))
-    time.sleep(0.3)
+    # Nobody in the editor is shown it, so it is declined rather than left
+    # for the turn to wait on.
+    assert c.pump(lambda: waits.get_wait("wait_acp_ask").status.value == "declined")
     assert c.permission_requests == []
 
 

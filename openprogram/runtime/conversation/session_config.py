@@ -45,14 +45,203 @@ class SessionRunConfig:
     sandbox_enabled: Optional[bool] = None
 
 
-def load_session_run_config(session_id: str) -> SessionRunConfig:
-    try:
-        from openprogram.runtime.context.session_db import default_db
-        row = default_db().get_session(session_id) or {}
-    except Exception:
-        row = {}
+@dataclass
+class BranchSettings:
+    """One branch's effective settings: what ``resolve_branch_settings`` answers.
 
-    return _config_from_row(row)
+    ``config`` is the branch's own run configuration (``None`` where the
+    branch leaves a setting unset); ``values`` holds each setting as it
+    resolves through ``FALLBACK_ORDER`` and ``sources`` the layer it came
+    from: ``branch`` (the branch's own record), ``agent`` (the branch's
+    Agent as it is now), ``project`` or ``global`` (nothing set anywhere:
+    the product default, ``None`` for most settings).
+    """
+
+    branch_id: Optional[str]
+    config: SessionRunConfig
+    values: dict[str, Any]
+    sources: dict[str, str]
+    #: What each setting would be if the branch did not set it: the value
+    #: "Agent default" in a menu puts back, and the value a switch compares
+    #: with before it writes (equal: nothing is stored).
+    inherited: dict[str, Any] = field(default_factory=dict)
+
+
+#: Where each setting falls back when the branch leaves it unset, in order.
+#: Permission and Sandbox describe what may happen in a folder, so they
+#: follow the project; the model, effort, tools and Fast describe how the
+#: assistant works, so they follow the Agent (Claude Code's split: an
+#: Agent's effort applies, its permission mode yields to the environment).
+FALLBACK_ORDER: dict[str, tuple[str, ...]] = {
+    "agent_id": ("global",),
+    "model": ("agent", "global"),
+    "thinking_effort": ("agent", "project", "global"),
+    "web_search": ("agent", "global"),
+    "tools_override": ("agent",),
+    "service_tier": ("agent", "global"),
+    "permission_mode": ("project", "global"),
+    "permission_rules": ("global",),
+    "sandbox_enabled": ("project", "global"),
+}
+
+#: Settings a project can supply (``FALLBACK_ORDER`` lists where).
+PROJECT_FALLBACK_FIELDS = tuple(name for name, order in FALLBACK_ORDER.items() if "project" in order)
+
+
+def _agent_settings(agent_id: Optional[str]) -> dict[str, Any]:
+    """What the Agent supplies now, read live from the registry: a branch
+    that sets nothing follows its Agent's later edits."""
+    try:
+        from openprogram.runtime.agent_registry import manager
+        spec = manager.get(agent_id) if agent_id else manager.get_default()
+    except Exception:
+        spec = None
+    if spec is None:
+        return {}
+    provider = (spec.model.provider or "").strip()
+    model = (spec.model.id or "").strip()
+    from openprogram.runtime.conversation.model_tools import agent_web_search_choice
+    choice = agent_web_search_choice(spec.tools)
+    return {
+        "agent_id": spec.id,
+        "model": f"{provider}/{model}" if provider and model else (model or None),
+        "thinking_effort": _normalize_thinking(spec.thinking_effort),
+        # An automatic tool policy offers web search.
+        "web_search": True if choice is None else choice,
+    }
+
+
+def _global_settings(name: str) -> Any:
+    """The product default of a setting nobody set."""
+    if name == "agent_id":
+        try:
+            from openprogram.runtime.agent_registry import manager
+            spec = manager.get_default()
+            return spec.id if spec is not None else "main"
+        except Exception:
+            return "main"
+    if name == "model":
+        try:
+            from openprogram.models.providers.catalog.last_used import read_last_used_model
+            pair = read_last_used_model()
+        except Exception:
+            pair = None
+        return f"{pair[0]}/{pair[1]}" if pair and pair[0] and pair[1] else None
+    if name == "permission_mode":
+        return resolve_mode(None, None)
+    return None
+
+
+def _project_value(session_id: str, name: str, defaults: dict) -> Any:
+    if name == "sandbox_enabled":
+        return sandbox_override_from_config(SessionRunConfig(), session_id)
+    return _normalize_thinking(defaults.get(name)) if name == "thinking_effort" else defaults.get(name)
+
+
+def resolve_branch_settings(
+    session_id: str,
+    branch_id: Optional[str] = None,
+    *,
+    row: Optional[dict] = None,
+) -> BranchSettings:
+    """The one answer to "what is this setting on this branch, and from where".
+
+    ``branch_id`` ``None`` resolves the selected branch. Every branch,
+    selected or not, reads its own record in ``branch_refs`` (the top-level
+    fields are the selected branch's projection); a conversation with no
+    branch recorded yet reads its own fields. A named branch with no record
+    raises ``BranchConfigConflict('branch_gone')``.
+
+    Unset settings fall back layer by layer through ``FALLBACK_ORDER``, the
+    same for every entry (web, channels, scheduled runs, always-on, Goals,
+    ``--print``). ``config`` keeps the branch's own values.
+    """
+    if row is None:
+        try:
+            from openprogram.runtime.context.session_db import default_db
+            row = default_db().get_session(session_id) or {}
+        except Exception:
+            row = {}
+    target = branch_id or row.get("active_branch_id")
+    merged = row
+    if row and target:
+        from openprogram.state.store.session.branch_config import BranchConfigConflict, config_for_branch
+        try:
+            merged = {**row, **config_for_branch(row, target)}
+        except BranchConfigConflict:
+            if branch_id:
+                raise
+            merged = row
+    config = _config_from_row(merged)
+    provider, model = merged.get("provider_override"), merged.get("model_override")
+    own: dict[str, Any] = {
+        "agent_id": merged.get("agent_id"),
+        "model": f"{provider}/{model}" if provider and model else (model or None),
+        "thinking_effort": config.thinking_effort,
+        "web_search": config.web_search,
+        "tools_override": config.tools_override,
+        "service_tier": merged.get("service_tier") or None,
+        "permission_mode": config.permission_mode,
+        "permission_rules": config.permission_rules,
+        "sandbox_enabled": config.sandbox_enabled,
+    }
+    values: dict[str, Any] = {}
+    sources: dict[str, str] = {}
+    layers: dict[str, Any] = {}
+
+    def layer(name: str) -> Any:
+        if name not in layers:
+            if name == "agent":
+                layers[name] = _agent_settings(own["agent_id"])
+            elif name == "project":
+                layers[name] = project_defaults(session_id) if session_id else {}
+        return layers.get(name)
+
+    inherited: dict[str, Any] = {}
+    for name, order in FALLBACK_ORDER.items():
+        value, source = None, order[-1]
+        for fallback in order:
+            if fallback == "agent":
+                value = layer("agent").get(name)
+            elif fallback == "project":
+                value = _project_value(session_id, name, layer("project")) if session_id else None
+            else:
+                value = _global_settings(name)
+            source = fallback
+            if value is not None:
+                break
+        inherited[name] = value
+        if own[name] is not None:
+            value, source = own[name], "branch"
+        values[name], sources[name] = value, source
+    # The stored pair, for callers that pass an explicit override on.
+    values["provider_override"], values["model_override"] = provider, model
+    sources["provider_override"] = sources["model_override"] = sources["model"]
+    return BranchSettings(branch_id=target, config=config, values=values, sources=sources,
+                          inherited=inherited)
+
+
+def fallback_value(session_id: str, name: str, *, agent: Any = None) -> tuple[Any, str]:
+    """The fallback of one setting a turn left unset, past the branch:
+    ``(value, source)`` through ``FALLBACK_ORDER``. ``agent`` is the
+    Agent profile's value when the caller already holds it (a trial's
+    frozen profile), so the same order applies without a registry read."""
+    for fallback in FALLBACK_ORDER[name]:
+        if fallback == "agent":
+            value = agent
+        elif fallback == "project":
+            value = _project_value(session_id, name, project_defaults(session_id)) if session_id else None
+        else:
+            value = _global_settings(name)
+        if value is not None:
+            return value, fallback
+    return None, FALLBACK_ORDER[name][-1]
+
+
+def load_session_run_config(session_id: str, branch_id: Optional[str] = None) -> SessionRunConfig:
+    """The run configuration of a branch (the selected one by default),
+    through ``resolve_branch_settings``."""
+    return resolve_branch_settings(session_id, branch_id).config
 
 
 def _config_from_row(row: dict) -> SessionRunConfig:
@@ -67,10 +256,16 @@ def _config_from_row(row: dict) -> SessionRunConfig:
     )
 
 
+_BRANCH_UNSET = object()
+
+
+VALID_SERVICE_TIER = {"", "priority", "flex", "auto", "default"}
+
+
 def save_session_run_config(
     session_id: str,
     *,
-    agent_id: str,
+    agent_id: str | None = None,
     tools: Any = None,
     web_search: Any = None,
     thinking_effort: Any = None,
@@ -78,7 +273,17 @@ def save_session_run_config(
     permission_rules: Any = None,
     additional_working_dirs: Any = None,
     sandbox_enabled: Any = None,
+    service_tier: Any = None,
+    expected_branch_id: Any = _BRANCH_UNSET,
+    branch_id: Any = _BRANCH_UNSET,
 ) -> SessionRunConfig:
+    """Store the given settings; ``None`` leaves a setting as it is.
+
+    Branch settings go to ``branch_id`` (a named branch, whatever is
+    selected) or, without one, to the selected branch, guarded by
+    ``expected_branch_id`` when given. ``agent_id`` is written only when
+    given: the Agent changes through its own switch, never as a side effect.
+    """
     fields: dict[str, Any] = {}
 
     override = _as_tools_override(tools)
@@ -113,6 +318,9 @@ def save_session_run_config(
     if sandbox is not None:
         fields["sandbox_enabled"] = sandbox
 
+    if isinstance(service_tier, str) and service_tier in VALID_SERVICE_TIER:
+        fields["service_tier"] = service_tier
+
     from openprogram.runtime.context.session_db import default_db
     db = default_db()
     row = db.get_session(session_id)
@@ -121,9 +329,26 @@ def save_session_run_config(
         project = projects.project_for_session(session_id)
         if project and project.source_folders:
             fields["additional_working_dirs"] = list(project.source_folders)
+    if agent_id:
+        fields["agent_id"] = agent_id
     if fields and row is not None:
-        db.update_session(session_id, agent_id=agent_id, **fields)
+        from openprogram.state.store.session.branch_config import BRANCH_CONFIG_FIELDS, check_branch
+        branch_fields = {k: v for k, v in fields.items() if k in BRANCH_CONFIG_FIELDS}
+        session_fields = {k: v for k, v in fields.items() if k not in BRANCH_CONFIG_FIELDS}
+        if branch_id is _BRANCH_UNSET:
+            guard = {} if expected_branch_id is _BRANCH_UNSET else {"expected_branch_id": expected_branch_id}
+            db.update_session(session_id, **fields, **guard)
+        else:
+            if expected_branch_id is not _BRANCH_UNSET:
+                check_branch(row, expected_branch_id)
+            if session_fields:
+                db.update_session(session_id, **session_fields)
+            if branch_fields:
+                db.update_branch_config(session_id, branch_id, branch_fields)
         row = db.get_session(session_id)
+        if branch_id is not _BRANCH_UNSET and branch_id and branch_id != (row or {}).get("active_branch_id"):
+            from openprogram.state.store.session.branch_config import config_for_branch
+            row = {**row, **config_for_branch(row, branch_id)}
     # An unsent draft has no session row. Return its normalized settings to
     # admission; the first message persists them without creating a ghost.
     return _config_from_row({**(row or {}), **fields})
@@ -146,10 +371,9 @@ def tools_override_from_config(cfg: SessionRunConfig) -> ToolsOverride:
 
 
 def reasoning_from_config(cfg: SessionRunConfig) -> Optional[str]:
-    effort = _normalize_thinking(cfg.thinking_effort)
-    if not effort or effort == "off":
-        return None
-    return effort
+    # ``off`` stays ``off``: the request layer decides whether the provider
+    # has a wire value for it (OpenAI Responses sends ``effort: "none"``).
+    return _normalize_thinking(cfg.thinking_effort) or None
 
 
 def permission_from_config(cfg: SessionRunConfig, *, default: str | None = None) -> str:
@@ -157,9 +381,23 @@ def permission_from_config(cfg: SessionRunConfig, *, default: str | None = None)
     return resolve_mode(cfg.permission_mode, default)
 
 
-def conversation_permission(session_id: str) -> dict[str, Any]:
+def resolved_permission_mode(cfg: SessionRunConfig, session_id: str) -> str:
+    """A branch's permission mode, else its fallback through ``FALLBACK_ORDER``
+    (the project's, then the product default)."""
+    if cfg.permission_mode:
+        return resolve_mode(cfg.permission_mode, None)
+    return fallback_value(session_id, "permission_mode")[0]
+
+
+def conversation_permission(session_id: str, *, branch_id: str | None = None) -> dict[str, Any]:
     """The ``permission_mode`` and ``permission_rules`` of a turn the runtime starts in this conversation."""
     from openprogram.runtime.permissions.rule import load_merged_rules
+    if branch_id:
+        from openprogram.runtime.permissions.state import permission_state
+        return {
+            "permission_mode": permission_state(session_id, branch_id=branch_id)["mode"],
+            "permission_rules": load_merged_rules(session_id, branch_id=branch_id),
+        }
     return {
         "permission_mode": permission_from_config(
             load_session_run_config(session_id), default=project_defaults(session_id).get("permission_mode")),

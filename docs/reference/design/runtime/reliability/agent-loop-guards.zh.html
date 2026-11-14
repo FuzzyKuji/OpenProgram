@@ -9,6 +9,7 @@
 <tr><th scope="row">重复工具轮次</th><td><code translate="no">tool_loop_guard.ToolLoopGuard</code></td><td>每个工具轮次之后，<code translate="no">loop.py</code></td><td>以一条提示结束本轮</td></tr>
 <tr><th scope="row">写成文字的工具调用</th><td><code translate="no">text_tool_calls.recover_text_tool_calls</code></td><td>回复结束时，<code translate="no">streaming.py</code></td><td>写出的调用变成真的调用</td></tr>
 <tr><th scope="row">反复失败的调用</th><td><code translate="no">failure_policy</code> 和工具执行器</td><td>每次工具调用，<code translate="no">tool_dispatch.py</code></td><td>第三次相同的失败不再执行，用一条提示回应</td></tr>
+<tr><th scope="row">长时间没有任何可见内容</th><td><code translate="no">progress_note.QuietStretch</code></td><td>有人在看的轮次里，每个工具轮次之后，<code translate="no">loop.py</code></td><td>连续 6 轮只有工具调用后，给本轮加一条提示，请模型用几个字说明进度；不结束任何东西</td></tr>
 </tbody>
 </table>
 <p class="note">正常的轮次不受影响。这里不限制输出长度、轮数或耗时。</p>

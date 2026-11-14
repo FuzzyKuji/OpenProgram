@@ -173,8 +173,10 @@ def _adapter(target, action: str, call_args: dict, session: str, operator: str) 
         if target is app_target and name == "get_app_state":
             # Code parses what it reads, so a read is the whole tree, not the change since the last one.
             step.setdefault("full", True)
+            step.setdefault("include", "tree")
         # Application windows are read per agent (see tool.operator); the browser keeps the conversation's tabs.
-        result = target.run([(name, step)], call_args, operator if target is app_target else session)
+        target_args = {**call_args, "_code_text_only": True} if target is app_target else call_args
+        result = target.run([(name, step)], target_args, operator if target is app_target else session)
         # Code reads text and data; screenshots come back to a model through action calls.
         return ToolReturn(text=result.text, json_data=result.json_data, is_error=result.is_error)
     return method
@@ -321,7 +323,11 @@ def _stopped_text(exc: Exception, timeout: float, unreported: int) -> str:
         lines.append("The step that was running may or may not have been applied: read the current state before "
                      "repeating it.")
     lines.append("The interpreter starts again on the next code call, without the variables of this one.")
-    return " ".join(lines)
+    text = " ".join(lines)
+    partial = getattr(exc, "stdout", "").strip()
+    if partial:
+        text += "\n\nOutput collected before stopping:\n" + partial
+    return text
 
 
 __all__ = ["MAX_TIMEOUT", "close", "examples", "guide", "run"]

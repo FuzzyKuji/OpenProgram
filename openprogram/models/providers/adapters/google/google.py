@@ -11,6 +11,7 @@ import time
 from typing import Any, AsyncGenerator
 
 from ...shared.google import (
+    convert_messages,
     google_search_applies,
     grounding_citations,
     grounding_search_blocks,
@@ -52,68 +53,20 @@ from ...types import (
 # Message conversion
 # ---------------------------------------------------------------------------
 
-def _build_contents(context: Context) -> list[Any]:
-    """Convert Context messages to google.genai Content objects."""
+def _build_contents(context: Context, model: Model) -> list[Any]:
+    """Convert Context messages to google.genai Content objects.
+
+    The messages go through the shared Gemini conversion
+    (``shared.google.convert_messages``), the one the subscription
+    adapter sends too: it runs ``transform_messages`` (kept media and its
+    size bound, instructions after tool results, tool call ids) and puts
+    a tool result's pictures in its function response, so a request built
+    from history carries what the turn carried. The SDK reads its
+    camelCase dicts and base64 data as they are.
+    """
     from google.genai import types as gtypes
 
-    result: list[Any] = []
-
-    for msg in context.messages:
-        if isinstance(msg, UserMessage):
-            if isinstance(msg.content, str):
-                result.append(gtypes.Content(role="user", parts=[gtypes.Part(text=msg.content)]))
-            else:
-                parts: list[Any] = []
-                for block in msg.content:
-                    if isinstance(block, TextContent):
-                        parts.append(gtypes.Part(text=block.text))
-                    elif isinstance(block, ImageContent):
-                        parts.append(gtypes.Part(
-                            inline_data=gtypes.Blob(
-                                mime_type=block.mime_type,
-                                data=block.data,
-                            )
-                        ))
-                result.append(gtypes.Content(role="user", parts=parts))
-
-        elif isinstance(msg, AssistantMessage):
-            parts = []
-            for block in msg.content:
-                if isinstance(block, TextContent):
-                    parts.append(gtypes.Part(text=block.text))
-                elif isinstance(block, ToolCall):
-                    fc_kwargs: dict[str, Any] = {
-                        "function_call": gtypes.FunctionCall(
-                            name=block.name,
-                            args=block.arguments,
-                        )
-                    }
-                    # Restore thought_signature (required when thinking mode was on)
-                    if block.thought_signature:
-                        import base64
-                        try:
-                            fc_kwargs["thought_signature"] = base64.b64decode(block.thought_signature)
-                        except Exception:
-                            fc_kwargs["thought_signature"] = block.thought_signature.encode("utf-8")
-                    parts.append(gtypes.Part(**fc_kwargs))
-            if parts:
-                result.append(gtypes.Content(role="model", parts=parts))
-
-        elif isinstance(msg, ToolResultMessage):
-            content_text = " ".join(
-                b.text for b in msg.content if isinstance(b, TextContent)
-            )
-            result.append(gtypes.Content(
-                role="user",
-                parts=[gtypes.Part(
-                    function_response=gtypes.FunctionResponse(
-                        name=msg.tool_name,
-                        response={"output": content_text},
-                    )
-                )],
-            ))
-
-    return result
+    return [gtypes.Content.model_validate(content) for content in convert_messages(model, context)]
 
 
 def _build_config(
@@ -248,7 +201,7 @@ async def stream_simple(
     )
     client = genai.Client(api_key=api_key, http_options=http_options)
 
-    contents = _build_contents(context)
+    contents = _build_contents(context, model)
     config = _build_config(model, context, opts)
 
     partial = AssistantMessage.empty(model)
@@ -281,6 +234,9 @@ async def stream_simple(
     def _merge_terminal_reason(current: str, new: str) -> str:
         priority = {"stop": 0, "length": 1, "error": 2}
         return new if priority.get(new, 0) > priority.get(current, 0) else current
+
+    from ...recording.capture import GOOGLE, capture_request
+    capture_request(model, {"model": model.id, "contents": contents, "config": config}, wire=GOOGLE)
 
     yield EventStart(type="start", partial=partial)
 
@@ -469,9 +425,14 @@ async def stream_simple(
             yield EventDone(type="done", reason=stop_reason, message=final)
 
     except Exception as e:
+        if not _cancelled():
+            # Raise so the classification layer (the re-send of a dropped
+            # connection, failover, retry) sees the real exception. An error
+            # event here reads as a terminal message and is never classified.
+            raise
         # User cancel is not an error: finalize as "aborted" (anthropic's
         # cancel semantics), preserving whatever content already streamed.
-        stop = "aborted" if _cancelled() else "error"
+        stop = "aborted"
         error_msg = AssistantMessage(
             role="assistant",
             content=content_blocks or [TextContent(type="text", text="")],

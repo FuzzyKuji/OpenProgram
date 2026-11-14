@@ -2,7 +2,34 @@
 <meta name="description" content="The computer_use_agent tool: targets, guides and code, with the pages for each backend.">
 <h1>Computer and browser use</h1>
 
-<p>One screen tool, <code translate="no">computer_use_agent</code>: applications on macOS, Linux and Windows; pages in the App's built-in browser and the headless Chromium; a remote virtual machine.</p>
+<p>The model operates applications on macOS, Linux and Windows, web pages and a remote virtual machine through one tool.</p>
+
+<figure>
+<svg class="fig-wide" viewBox="0 0 680 276" role="img" aria-label="One entry. The model has one screen tool, computer_use_agent, which takes one of three targets. app reaches an application's window, operated behind the user's work. browser reaches a tab in the App, a browser of its own with no window when no App window can be reached, or the user's Chrome or Edge when asked. vm reaches a virtual machine's screen.">
+  <defs><marker id="oe-a" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path class="head" d="M0 0L8 4L0 8z"/></marker></defs>
+  <text class="t-big" x="0" y="130" translate="no">computer_use_agent</text>
+  <text class="t-soft" x="0" y="154">one screen tool,</text>
+  <text class="t-soft" x="0" y="174">one target per call</text>
+  <path class="ln" d="M212 123H280" marker-end="url(#oe-a)"/>
+  <path class="ln" d="M246 123V23H280" marker-end="url(#oe-a)"/>
+  <path class="ln" d="M246 123V235H280" marker-end="url(#oe-a)"/>
+  <text class="t-big" x="292" y="30" translate="no">app</text>
+  <text class="t-soft" x="292" y="54">an application's window,</text>
+  <text class="t-soft" x="292" y="74">behind the user's work</text>
+  <text class="t-big" x="292" y="130" translate="no">browser</text>
+  <text class="t-soft" x="292" y="154">a tab in the App</text>
+  <text class="t-soft" x="292" y="174">no App window in reach: a browser of its own</text>
+  <text class="t-soft" x="292" y="194">chrome or edge asked: the user's Chrome or Edge</text>
+  <text class="t-big" x="292" y="242" translate="no">vm</text>
+  <text class="t-soft" x="292" y="266">a virtual machine's screen</text>
+</svg>
+<ol class="flow fig-narrow">
+  <li><strong><code translate="no">computer_use_agent</code></strong><small>one screen tool, one target per call</small></li>
+  <li><strong><code translate="no">app</code></strong><small>an application's window, behind the user's work</small></li>
+  <li><strong><code translate="no">browser</code></strong><small>a tab in the App; a browser of its own when no App window is in reach; the user's Chrome or Edge when asked</small></li>
+  <li class="flow-end"><strong><code translate="no">vm</code></strong><small>a virtual machine's screen</small></li>
+</ol>
+</figure>
 
 <h2 id="pages">Pages</h2>
 <table class="stack fixed">
@@ -13,7 +40,7 @@
 <tr><th scope="row"><a href="computer-use-macos.html">macOS delivery</a></th><td>background input, file dialogs, Spaces, busy applications and refusals</td></tr>
 <tr><th scope="row"><a href="computer-use-linux-windows.html">Linux and Windows backends</a></th><td>what each platform uses, and the cua-driver question</td></tr>
 <tr id="interface-work"><th scope="row"><a href="computer-use-interface.html">Computer use interface</a></th><td>agent cursor, window marker, cards, settings and pointing at things</td></tr>
-<tr id="the-browser-application"><th scope="row"><a href="browser-application.html">Browser application</a><span id="the-web_use-runtime"></span></th><td>the service and the web_use runtime</td></tr>
+<tr id="the-browser-application"><th scope="row"><a href="browser-application.html">Browser application</a></th><td>the modules, the service and a Program's web tabs</td></tr>
 <tr id="browser-target-the-tab-driver"><th scope="row"><a href="browser-tab-driver.html">Browser tab driver</a></th><td>tabs, several agents, single writes, coordinates and preview</td></tr>
 <tr><th scope="row"><a href="browser-tab-actions.html">Browser tab actions</a></th><td>reading, refs, acting, upload and page scripts</td></tr>
 </tbody>
@@ -71,7 +98,7 @@
 <thead><tr><th scope="col">Target</th><th scope="col">Backend</th><th scope="col">Opening returns</th></tr></thead>
 <tbody>
 <tr><th scope="row"><code translate="no">app</code></th><td><code translate="no">openprogram/programs/tools/computer_use/computer_use_agent/desktop/</code> (macOS, Linux X11, Windows)</td><td><code translate="no">args.app</code> given: its state (tree and screenshot); otherwise the app list</td></tr>
-<tr><th scope="row"><code translate="no">browser</code></th><td>the tab driver over the App's built-in tabs; with <code translate="no">args.browser</code> = <code translate="no">chrome</code> or <code translate="no">edge</code>, Playwright MCP in extension mode connected to the user's browser</td><td>the tab list</td></tr>
+<tr><th scope="row"><code translate="no">browser</code></th><td>the <a href="browser-tab-driver.html">tab driver</a>: a page opens as a tab in the App, or in a browser of the driver's own with no window when no App window can be reached; with <code translate="no">args.browser</code> = <code translate="no">chrome</code> or <code translate="no">edge</code>, Playwright MCP in extension mode connected to the user's browser</td><td>the tab list</td></tr>
 <tr><th scope="row"><code translate="no">vm</code></th><td>an OSWorld-compatible server at <code translate="no">computer_use.vm_url</code></td><td>a screenshot</td></tr>
 </tbody>
 </table>
@@ -95,7 +122,7 @@
 <tr><th scope="row">Browser first</th><td>As in Codex, the browser is chosen first and the actions do not change with it.</td></tr>
 <tr><th scope="row">Guide per delivery</th><td>The browser guide is built per delivery from the same check: it names only the user's browsers that have the extension, and with none it points pages in them to the <code translate="no">app</code> target.</td></tr>
 <tr><th scope="row">No extension</th><td>A call naming a browser without the extension is answered at once with that advice, asks no approval and starts no server.</td></tr>
-<tr><th scope="row">Server</th><td>For those that have it, <code translate="no">targets/browser.py</code> hands each step to <code translate="no">workflow/browser/extension_browser.py</code>, which runs <code translate="no">@playwright/mcp --extension --browser chrome|msedge</code> (the version pinned for <code translate="no">web_use</code>) through <code translate="no">_SyncMCPClient</code>, one server per conversation and browser, kept between calls.</td></tr>
+<tr><th scope="row">Server</th><td>For those that have it, <code translate="no">targets/browser.py</code> hands each step to <code translate="no">extension.py</code> of the browser application, which runs a pinned <code translate="no">@playwright/mcp --extension --browser chrome|msedge</code> through its own MCP client, one server per conversation and browser, kept between calls.</td></tr>
 <tr><th scope="row">Connection</th><td>The server opens <code translate="no">chrome-extension://&lt;id&gt;/connect.html</code> in that browser with the address of its relay, and the Playwright Extension connects back and relays CDP for the tab the user shares; with <code translate="no">computer_use.chrome_extension_token</code> set, the server passes <code translate="no">PLAYWRIGHT_MCP_EXTENSION_TOKEN</code> and the extension connects without asking.</td></tr>
 <tr><th scope="row">Action mapping</th><td><code translate="no">tabs</code>, <code translate="no">read</code> (with <code translate="no">tab</code> an index, which selects that tab), <code translate="no">open</code>, <code translate="no">close</code>, <code translate="no">screenshot</code>, <code translate="no">upload</code>, <code translate="no">evaluate</code> and the logs map to the server's tab, snapshot, screenshot, file, evaluate and log tools; every element and pointer action goes through <code translate="no">OfficialMCPPageBackend._action_call</code>, the same translation the <code translate="no">playwright_mcp</code> backend applies to App Pages.</td></tr>
 <tr><th scope="row">Refs</th><td>Refs are the server's snapshot refs.</td></tr>

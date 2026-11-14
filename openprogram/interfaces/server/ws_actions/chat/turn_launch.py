@@ -32,6 +32,41 @@ class _AdmittedTurn:
     release_surface_bindings: Callable[[Any], None]
     response_format: Any
     execution_id: Any
+    # A turn on a recorded branch that is not selected: it holds that
+    # branch's slot and reports its state with ``branch_running_task``.
+    side_branch_id: Any = None
+    branch_from: Any = None
+    # The branch the turn was admitted on, selected then or not. It runs and
+    # writes there whatever the person selects meanwhile.
+    branch_id: Any = None
+
+
+def _emit_turn_state(_s, turn: "_AdmittedTurn", *, cleared: bool = False,
+                     where: Any = None) -> None:
+    """Broadcast this turn's run state on the slot it holds now: the
+    selected branch's (``running_task``) or its branch's
+    (``branch_running_task``), wherever a switch has moved it.
+
+    Its end goes on the slot it was released from (``where``, as
+    ``_take_owned_run`` returns it): a switch while it ran already cleared
+    it from the place it left. With no slot to go by (released earlier, by
+    a stop or a failed start), it is sent as the selected run, and also as
+    its branch's run unless that branch is the one selected now, each
+    naming the turn, so a client clears it whichever branch it shows."""
+    if not cleared:
+        _s._emit_slot_state(turn.session_id, turn.msg_id)
+        return
+    from openprogram.interfaces.server.server_runtime.run_slots import SELECTED
+    ids = {"cleared_msg_id": turn.msg_id, "cleared_execution_id": turn.execution_id}
+    if where is None:
+        branch = turn.side_branch_id or turn.branch_id
+        _s._emit_running_task_event(turn.session_id, **ids)
+        if branch and _s._selected_branch(turn.session_id) != branch:
+            _s._emit_branch_running_task_event(turn.session_id, branch, **ids)
+    elif where == SELECTED:
+        _s._emit_running_task_event(turn.session_id, **ids)
+    else:
+        _s._emit_branch_running_task_event(turn.session_id, where, **ids)
 
 
 def _publish_running_task(_s, turn: _AdmittedTurn) -> None:
@@ -46,24 +81,21 @@ def _publish_running_task(_s, turn: _AdmittedTurn) -> None:
     session_id, msg_id = turn.session_id, turn.msg_id
     execution_id = turn.execution_id
     _admission = turn.admission
+    if turn.side_branch_id:
+        # The branch's slot was reserved by this message; it learns the
+        # admitted ids. The conversation's slot and the sidebar are the
+        # selected branch's and are left alone.
+        _s._set_branch_run_execution(session_id, msg_id, execution_id=execution_id,
+                                     status_version=_admission.status_version)
+        _emit_turn_state(_s, turn)
+        return
     try:
-        with _s._running_tasks_lock:
-            _running_task = _s._running_tasks.setdefault(session_id, {
-                "msg_id": msg_id, "func_name": "_chat",
-                "started_at": _t.time(), "last_event_at": _t.time(),
-                "display_params": "", "loaded_func_ref": None,
-                "stream_events": [],
-                "execution_id": execution_id,
-                "status_version": _admission.status_version,
-            })
-            # The reservation is created before the admission has an execution
-            # id. Fill that exact id into the owned task rather than relying on
-            # setdefault, which would leave a provisional value unable to
-            # match the admitted execution.
-            if _running_task.get("msg_id") == msg_id:
-                _running_task["execution_id"] = execution_id
-                _running_task["status_version"] = _admission.status_version
-        _s._emit_running_task_event(session_id)
+        # The reservation is created before the admission has an execution
+        # id. Fill that exact id into the slot this message owns, the
+        # selected one or, after a switch, its branch's.
+        _s._set_branch_run_execution(session_id, msg_id, execution_id=execution_id,
+                                     status_version=_admission.status_version)
+        _emit_turn_state(_s, turn)
     except BaseException as exc:
         with _s._running_tasks_lock:
             if (_s._running_tasks.get(session_id) or {}).get("msg_id") == msg_id:
@@ -93,11 +125,7 @@ def _publish_running_task(_s, turn: _AdmittedTurn) -> None:
 
 
 def _clear_running_task(_s, turn: _AdmittedTurn) -> None:
-    _s._emit_running_task_event(
-        turn.session_id,
-        cleared_msg_id=turn.msg_id,
-        cleared_execution_id=turn.execution_id,
-    )
+    _emit_turn_state(_s, turn, cleared=True)
 
 
 def _make_run_thread(_s, turn: _AdmittedTurn, **kwargs):
@@ -120,18 +148,19 @@ def _canonical_runner(_s, turn: _AdmittedTurn):
 
     def _run_canonical(**_thread_options):
         def _publish_activation(active):
-            with _s._running_tasks_lock:
-                task = _s._running_tasks.get(session_id)
-                if task and task.get("execution_id") == active.admission.execution_id:
-                    task["status_version"] = active.status_version
-            _s._emit_running_task_event(session_id)
+            _s._set_branch_run_execution(session_id, msg_id,
+                                         status_version=active.status_version)
+            _emit_turn_state(_s, turn)
 
         async def _activate():
             return await _adapter.activate(_admission, on_activated=_publish_activation)
 
         try:
             activated = asyncio.run(_activate())
-            if activated is not None:
+            from openprogram.interfaces.server.server_runtime.run_slots import SELECTED
+            if (activated is not None and not turn.side_branch_id
+                    and _s._slot_location(session_id, msg_id) == SELECTED):
+                # Context stats are the selected branch's, shown on its mirror.
                 _active, turn_result = activated
                 # Stats are a derived projection; a transient failure here
                 # must not change the already-committed turn's outcome.
@@ -147,12 +176,13 @@ def _canonical_runner(_s, turn: _AdmittedTurn):
         finally:
             turn.release_surface_bindings(turn.surface_context)
             try:
-                if _s._finish_owned_run(session_id, msg_id):
-                    _s._emit_running_task_event(
-                        session_id,
-                        cleared_msg_id=msg_id,
-                        cleared_execution_id=turn.execution_id,
-                    )
+                # A stop frees the slot while the execution is still ending, and
+                # the frame sent then still names it as the running turn. The
+                # turn's end is sent again now that it is over, so a stopped
+                # turn ends with a clear like any other; a slot another owner
+                # has taken since is not announced here.
+                where = _s._take_owned_run(session_id, msg_id)
+                _emit_turn_state(_s, turn, cleared=True, where=where)
             except Exception:
                 # Worker exit path: an exception here would die unobserved.
                 _log.warning(
@@ -188,7 +218,8 @@ def _start_run_thread(_s, turn: _AdmittedTurn) -> None:
         turn.adapter.fail_admission(
             turn.admission, reason_code="agent_runner_error", failure_text=f"{type(exc).__name__}: {exc}",
         )
-        if _s._finish_owned_run(session_id, msg_id):
-            _clear_running_task(_s, turn)
+        where = _s._take_owned_run(session_id, msg_id)
+        if where is not None:
+            _emit_turn_state(_s, turn, cleared=True, where=where)
         _s._release_run_reservation(session_id, msg_id)
         raise

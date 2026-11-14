@@ -145,10 +145,11 @@ class ActivationOperations:
                 safe_point_kinds=("agent.wait.before_tool",),
                 state_schema_version=AGENT_STATE_SCHEMA_VERSION,
             )
+        from openprogram.runtime.agent.turn_request import slash_action_of
         request = envelope["request"]
         text = str(request.get("user_text") or "").lstrip()
         if (
-            request.get("interaction") in {"spawn", "merge"}
+            slash_action_of(request) is not None
             or text.startswith(("/forced_tool", "/spawn", "/merge"))
         ):
             return CapabilitySet()
@@ -271,7 +272,10 @@ class ActivationOperations:
                 from openprogram.runtime.conversation.turn_runtime.loop_runner import resolve_agent_runtime
                 from openprogram.runtime.conversation.workdir import runtime_location_for
                 from openprogram.state.worktree.context import reset_worktree, set_worktree
-                _location = runtime_location_for(request.session_id, use_context=False)
+                _location = runtime_location_for(
+                    request.session_id, use_context=False,
+                    branch_id=getattr(request, "branch_id", None),
+                )
                 _workdir_token = set_worktree(_location["workdir"])
                 try:
                     _profile, _tools, _recordable, _prompt, _model, _contract = resolve_agent_runtime(
@@ -411,7 +415,8 @@ class ActivationOperations:
         # carry the same identity to the durable command transition.
         with self._handles_lock:
             self._cancel_commands[self._key(handle)] = command_id
-        handle.cancel_event.set()
+        from openprogram.runtime.execution.run_control.wakeups import set_and_fire
+        set_and_fire(handle.cancel_event)
         self._tell_function_process(handle, "cancel")
         return DriverAck(command_id=command_id, attempt_id=handle.attempt_id)
 
@@ -430,7 +435,8 @@ class ActivationOperations:
         self, handle: shared.AgentDriverHandle, reason: str
     ) -> TerminationReceipt:
         self._require_live(handle)
-        handle.cancel_event.set()
+        from openprogram.runtime.execution.run_control.wakeups import set_and_fire
+        set_and_fire(handle.cancel_event)
         killed = False
         try:
             from openprogram.runtime.conversation.process_runner import kill_active_subprocess

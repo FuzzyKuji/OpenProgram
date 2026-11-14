@@ -49,6 +49,7 @@ _SNAPSHOT_TYPES = {
     "settings",
     "working_dirs",
     "worktrees_list",
+    "worker_capabilities",
 }
 _REPLACEABLE_TYPES = {
     "context_stats",

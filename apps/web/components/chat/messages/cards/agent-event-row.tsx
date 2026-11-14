@@ -71,7 +71,7 @@ export function AgentNoticeRows({ msg, items }: { msg: ChatMsg; items: NoticeIte
   return (
     <>
       {items.map((item, i) => {
-        const name = item.name || (item.kind === "report" ? "" : shortAddress(item.address));
+        const name = item.name || (item.kind === "report" || item.kind === "stalled" ? "" : shortAddress(item.address));
         let label: string;
         let icon: SolarIconName;
         if (item.kind === "report") {
@@ -85,6 +85,10 @@ export function AgentNoticeRows({ msg, items }: { msg: ChatMsg; items: NoticeIte
           label = item.failed
             ? text(`Branch “${name}” failed to reply`, `分支「${name}」回复失败`)
             : text(`Branch “${name}” replied`, `分支「${name}」回复了`);
+        } else if (item.kind === "stalled") {
+          icon = "danger-triangle";
+          const who = name || text("A sub-agent", "子 agent");
+          label = text(`${who} has stalled; it is still running`, `${who} 停滞了，仍在运行`);
         } else {
           icon = "check-circle";
           label = text(`Branch “${name}” is idle`, `分支「${name}」空闲了`);
@@ -96,7 +100,7 @@ export function AgentNoticeRows({ msg, items }: { msg: ChatMsg; items: NoticeIte
             icon={icon}
             label={label}
             detail={noticeDetail(msg.content || "", items, i)}
-            failed={item.failed}
+            failed={item.failed || item.kind === "stalled"}
           />
         );
       })}

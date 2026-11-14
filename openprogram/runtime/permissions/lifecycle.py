@@ -14,14 +14,16 @@ def current_permission_request(request):
     req = copy.copy(request)
     if req.source not in {"web", "tui", "acp"} or req.authority_tier != "owner" or req.interaction != "interactive":
         return req
-    state = permission_state(req.session_id)
+    branch = getattr(req, "branch_id", None)
+    branch_args = {"branch_id": branch} if branch else {}
+    state = permission_state(req.session_id, **branch_args)
     if state.get("principal_id") == req.principal_id:
         req.permission_mode = state["mode"]
         req._permission_version = state["version"]
     # Project rule edits apply at the next operation boundary, including
     # revocations made in History while this owner turn is running.
     from openprogram.runtime.permissions.rule import load_merged_rules
-    req.permission_rules = load_merged_rules(req.session_id)
+    req.permission_rules = load_merged_rules(req.session_id, **branch_args)
     req.permission_rules = copy.deepcopy(req.permission_rules)
     return req
 
@@ -84,7 +86,83 @@ def spawn_permission_snapshot(store, parent, child):
     if isinstance(rules, PermissionRules):
         # The snapshot is persisted in the child's Job input, which is JSON.
         rules = dataclasses.asdict(rules)
-    return {"mode": request.permission_mode, "rules": copy.deepcopy(rules)}
+    snapshot = {"mode": request.permission_mode, "rules": copy.deepcopy(rules)}
+    # The folders and Sandbox the caller's turn runs with travel too, so the
+    # sub-agent's own Agent can only narrow them (permissions/delegation.py).
+    dirs = values.get("additional_working_dirs")
+    if isinstance(dirs, list) and dirs:
+        snapshot["additional_working_dirs"] = [str(path) for path in dirs]
+    enabled = _caller_sandbox(values, parent.session_id)
+    if isinstance(enabled, bool):
+        snapshot["sandbox_enabled"] = enabled
+    return snapshot
+
+
+def _caller_sandbox(values, session_id):
+    """The Sandbox the caller's stored turn ``values`` run with, or ``None`` (the global default).
+
+    A turn that left it to its project (``None``) is resolved here, against
+    the caller's conversation, or a sub-agent in another conversation would
+    read that conversation's project instead.
+    """
+    if not values.get("sandbox_config_frozen"):
+        return None
+    enabled = values.get("sandbox_enabled")
+    if enabled is None:
+        # The project's own switch, as session_config.sandbox_override_from_config
+        # reads it for a turn that set none; read from the project store here
+        # because permissions sit below the conversation package.
+        try:
+            from openprogram.host.sandbox import MODE_WORKSPACE_WRITE
+            from openprogram.state.store.project import project_store
+            project = project_store.project_for_session(session_id) or project_store.get_default_project()
+            mode = project_store.load_project_settings(project.id).get("sandbox_mode")
+            enabled = str(mode).strip().lower() == MODE_WORKSPACE_WRITE if mode else None
+        except Exception:  # noqa: BLE001 - no project setting: the global default applies to both
+            enabled = None
+    return enabled if isinstance(enabled, bool) else None
+
+
+def _answers_questions(values) -> bool:
+    """Whether a person is behind the stored turn ``values`` to answer an approval."""
+    route = values.get("asks_through")
+    if isinstance(route, dict) and route.get("session_id"):
+        return True
+    return (values.get("interaction") == "interactive" and values.get("speaker_kind") == "owner"
+            and not values.get("detached"))
+
+
+def spawn_question_route(store, parent, child, snapshot):
+    """Where a foreground sub-agent's approval questions are shown, or ``None``.
+
+    A sub-agent its caller waits on (``agent`` in the foreground, forked or
+    fresh) in the caller's own conversation asks there, through the
+    caller's existing approval card, named after the sub-agent: Claude
+    Code's foreground subagents and its fork (``permissionMode: 'bubble'``)
+    bubble their prompts up to the leader the same way. Nobody waits on a
+    background sub-agent or a delivered message, and a sub-agent forked
+    into another conversation has no card in the one the person reads, so
+    those keep ``None`` and what would ask is refused at once
+    (``refusal.helper_cannot_ask``).
+
+    Only a caller whose policy froze into ``snapshot`` (the live
+    same-principal owner parent) and that can answer itself qualifies.
+    """
+    if (snapshot is None or parent is None or child.source != "agent_spawn" or not child.wait
+            or child.message_origin or child.parent_session_id != parent.session_id):
+        return None
+    payload = store.get_job_agent_input(parent.execution_id)
+    if payload is not None:
+        values = payload["turn_request"]
+    else:
+        payload = store.get_agent_turn_input(parent.execution_id)
+        if payload is None or payload.get("kind") != "chat":
+            return None
+        values = payload["request"]
+    if not _answers_questions(values):
+        return None
+    label = str(child.label or child.subject or child.agent_id or "helper").strip()[:40]
+    return {"session_id": parent.session_id, "execution_id": parent.execution_id, "label": label}
 
 
 def wrap_live_permission(tool, request, on_event):
@@ -153,22 +231,31 @@ def wrap_live_permission(tool, request, on_event):
         return await inner.execute(call_id, args, cancel, on_update)
 
     def visible():
-        from openprogram.runtime.permissions.rule import parse_rule
-        from openprogram.runtime.permissions.tool_authority import lacks_static_capability
         from openprogram.programs import _unsafe_in_for
         current = current_permission_request(request)
-        if lacks_static_capability(current, tool.name):
+        if not epoch_visible():
             return False
-        # Read each provider call, so a mode change inside the turn applies.
         if tool.name == "exit_plan_mode":
             return current.permission_mode == "plan"
-        if current.permission_mode == "plan" and "plan" in _unsafe_in_for(tool.name):
+        return not (current.permission_mode == "plan" and "plan" in _unsafe_in_for(tool.name))
+
+    def epoch_visible():
+        """Whether the tool goes in the tools array of a new epoch: every
+        call of it refused (a whole-tool deny rule, an identity without its
+        capability) leaves it out. The mode does not: plan mode keeps the
+        array as it is and refuses the calls (``permission_decision``), as
+        Codex does, so entering or leaving it changes no request bytes."""
+        from openprogram.runtime.permissions.rule import parse_rule
+        from openprogram.runtime.permissions.tool_authority import lacks_static_capability
+        current = current_permission_request(request)
+        if lacks_static_capability(current, tool.name):
             return False
         rules = getattr(current, "permission_rules", None)
         return not any(rule.tool_name == tool.name and rule.pattern in (None, "")
                        for rule in (parse_rule(raw) for raw in (getattr(rules, "deny", None) or ())))
 
     wrapped._permission_visible = visible
+    wrapped._permission_epoch_visible = epoch_visible
     wrapped._permission_managed = True
     wrapped.execute = execute
     wrapped._permission_preflight = preflight

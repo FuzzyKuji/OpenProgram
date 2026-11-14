@@ -321,3 +321,181 @@ def test_spec_is_openai_tool_shaped(no_implicit_state_dir):
     assert "city" in params["properties"]
     # Runtime-injected params are not LLM-controllable and must not leak.
     assert "runtime" not in params["properties"]
+
+
+def _request_seen_by(runtime=None):
+    """Run one Agent method and return the turn request its body ran under."""
+    from openprogram import Agent
+    from openprogram.runtime.agent.turn_request import current_turn_request
+
+    seen = []
+
+    class WhoAgent(Agent):
+        method_options = {"who": {"name": "who", "tool": True}}
+
+        def who(self, text, runtime=None):
+            """Record who the run belongs to."""
+            seen.append(current_turn_request.get())
+            return text
+
+    WhoAgent().who("x", **({} if runtime is None else {"runtime": runtime}))
+    return seen[0]
+
+
+def test_embedded_run_is_owned_by_the_process(no_implicit_state_dir):
+    """A host-supplied ``call=`` runs as an owner no profile knows about."""
+    from openprogram import Runtime
+    from openprogram.runtime.permissions.authority import process_owner_principal_id
+    from openprogram.state.authority import has_capability, normalize_authority
+
+    first = _request_seen_by(Runtime(call=echo_call, model="test"))
+    second = _request_seen_by(Runtime(call=echo_call, model="test"))
+
+    authority = normalize_authority(first)
+    assert authority["authority_tier"] == "owner" and authority["speaker_kind"] == "owner"
+    assert has_capability(first, "process.exec")
+    assert first.principal_id == second.principal_id == process_owner_principal_id()
+
+
+def test_runtime_passed_by_position_is_the_hosts(no_implicit_state_dir):
+    """The host's runtime counts however it is handed to the method."""
+    from openprogram import Agent, Runtime
+    from openprogram.runtime.agent.turn_request import current_turn_request
+    from openprogram.runtime.permissions.authority import process_owner_principal_id
+
+    seen = []
+
+    class WhoAgent(Agent):
+        method_options = {"who": {"name": "who", "tool": True},
+                          "later": {"name": "later", "tool": True}}
+
+        def who(self, text, runtime=None):
+            """Record who the run belongs to."""
+            seen.append((current_turn_request.get().principal_id, runtime))
+            return runtime.exec(text)
+
+        async def later(self, text, runtime=None):
+            """The same, awaited."""
+            seen.append((current_turn_request.get().principal_id, runtime))
+            return text
+
+    import asyncio
+
+    runtime = Runtime(call=echo_call, model="test")
+    assert "by position" in WhoAgent().who("by position", runtime)
+    asyncio.run(WhoAgent().later("x", runtime))
+
+    assert seen == [(process_owner_principal_id(), runtime)] * 2
+
+
+def test_runtime_created_inside_the_method_is_the_hosts(no_implicit_state_dir):
+    """A host that builds its client inside the method opens no profile either."""
+    from openprogram import Agent, Runtime
+    from openprogram.runtime.agent.turn_request import current_turn_request
+    from openprogram.runtime.permissions.authority import process_owner_principal_id
+
+    seen = []
+
+    class InsideAgent(Agent):
+        method_options = {"bare": {"name": "bare", "tool": True},
+                          "declared": {"name": "declared", "tool": True}}
+
+        def bare(self, text):
+            """No runtime parameter at all."""
+            reply = Runtime(call=echo_call, model="test").exec(text)
+            seen.append(current_turn_request.get().principal_id)
+            return reply
+
+        def declared(self, text, runtime=None):
+            """A runtime parameter the host leaves alone."""
+            reply = Runtime(call=echo_call, model="test").exec(text)
+            seen.append(current_turn_request.get().principal_id)
+            return reply
+
+    assert "inside" in InsideAgent().bare("inside")
+    assert "inside" in InsideAgent().declared("inside")
+    assert seen == [process_owner_principal_id()] * 2
+
+
+def _profile_runtime():
+    """A runtime on a provider model, as a profile builds one, with no network."""
+    from openprogram import Runtime
+    from openprogram.models.providers.types import Model
+
+    runtime = Runtime(model="default")
+    runtime.api_model = Model(id="fake", name="fake", api="completion",
+                              provider="callable", base_url="")
+    return runtime
+
+
+async def _profile_stream(model, context, options=None):
+    import time
+
+    from openprogram.models.providers.types import (
+        AssistantMessage, EventDone, EventStart, EventTextEnd, EventTextStart, TextContent,
+    )
+
+    def message(text):
+        return AssistantMessage(content=[TextContent(text=text)], api="completion",
+                                provider="callable", model="fake", stop_reason="stop",
+                                timestamp=int(time.time() * 1000))
+
+    yield EventStart(partial=message(""))
+    yield EventTextStart(content_index=0, partial=message(""))
+    yield EventTextEnd(content_index=0, content="reply", partial=message("reply"))
+    yield EventDone(reason="stop", message=message("reply"))
+
+
+def test_run_on_the_profiles_model_is_the_profile_owners(tmp_path, monkeypatch):
+    """The profile's owner is taken up when the run uses the profile's model."""
+    from openprogram import Agent
+    from openprogram.runtime.agent.turn_request import current_turn_request
+    from openprogram.runtime.permissions.authority import (
+        owner_principal_id, process_owner_principal_id,
+    )
+
+    state = tmp_path / "state"
+    monkeypatch.setattr("openprogram.state.paths.get_state_dir", lambda: state)
+    monkeypatch.setattr("openprogram.runtime.agent.runtime.factory.create_runtime",
+                        lambda *args, **kwargs: _profile_runtime())
+    seen = []
+
+    class ProfileAgent(Agent):
+        method_options = {"ask": {"name": "ask", "tool": True}}
+
+        def ask(self, text, runtime=None):
+            """Ask the profile's default model."""
+            request = current_turn_request.get()
+            seen.append((request.principal_id, (state / "owner.json").exists()))
+            reply = runtime.exec(text, stream_fn=_profile_stream)
+            seen.append((request.principal_id, (state / "owner.json").exists()))
+            return reply
+
+    assert ProfileAgent().ask("hello") == "reply"
+
+    # Nothing of the profile is opened before the run asks for its model.
+    assert seen[0] == (process_owner_principal_id(), False)
+    assert seen[1] == (owner_principal_id(), True)
+    assert owner_principal_id() != process_owner_principal_id()
+    # The embedded identity never becomes the profile's.
+    embedded = _request_seen_by(_host_runtime())
+    assert embedded.principal_id == process_owner_principal_id()
+
+
+def test_profile_runtime_handed_to_the_run_is_the_profile_owners(tmp_path, monkeypatch):
+    """A caller that passes a profile runtime runs as the profile owner at once."""
+    from openprogram.runtime.permissions.authority import owner_principal_id
+
+    state = tmp_path / "state"
+    monkeypatch.setattr("openprogram.state.paths.get_state_dir", lambda: state)
+
+    request = _request_seen_by(_profile_runtime())
+
+    assert request.principal_id == owner_principal_id()
+    assert request.authority_tier == "owner"
+
+
+def _host_runtime():
+    from openprogram import Runtime
+
+    return Runtime(call=echo_call, model="test")

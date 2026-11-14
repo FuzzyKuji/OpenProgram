@@ -84,7 +84,9 @@ def _archive_agent_impl(to: str, reason: str = "") -> str:
     )
 
 
-@function(name="archive_agent", description=_DESCRIPTION, toolset=["core"])
+# close_agent took its place for the model (it also stops a running agent);
+# kept registered for programs and old transcripts.
+@function(name="archive_agent", description=_DESCRIPTION, toolset=["core"], expose=False)
 def archive_agent(to: str, reason: str = "") -> str:
     """Archive an agent branch: keep its history, revoke its right to
     be disturbed (no more send_message / agent(to=) deliveries)."""

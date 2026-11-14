@@ -11,7 +11,6 @@ NOTE = (
     "# Note\n\nA fact worth keeping.[^e-1f4c7a2b90] ^abc12345\n\n"
     "[^e-1f4c7a2b90]: Time: `2026-01-01`; Sources: [D1:1](/s/s1#d1-1)\n"
 )
-PLAIN = "# Unsupported\n\nUncited substantive prose.\n"
 
 
 def _invoke(name, args):
@@ -162,11 +161,13 @@ def test_validation_rejection_does_not_call_trusted_callback(owned_memory):
     root = owned_memory
     before = _snapshot(root)
     calls = []
-    ok, _message = staged_edit(
-        root, lambda stage: (stage / "topics/plain.md").write_text(PLAIN),
+    # A person's uncited paragraph is kept, but a hand edit may not drop a
+    # committed block ID.
+    ok, message = staged_edit(
+        root, lambda stage: (stage / "topics/note.md").unlink(),
         before_install=lambda: calls.append("must not run"),
     )
-    assert not ok
+    assert not ok, message
     assert calls == []
     assert _snapshot(root) == before
 

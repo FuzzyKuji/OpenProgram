@@ -416,6 +416,12 @@ def _maybe_auto_title(db, session_id: str, session: dict,
         except Exception:
             expected_title = session.get("title", "")
 
+    from openprogram.runtime.conversation import side_work
+
+    if not side_work.allowed():
+        # A process that is about to exit starts no model request here.
+        return
+
     def _bg():
         try:
             msgs = db.get_branch(session_id) or []
@@ -564,17 +570,25 @@ def maybe_auto_name_branch(db, session_id: str, head_id: str) -> None:
         meta = db.get_branch_meta(session_id, head_id)
     except Exception:
         return
-    if meta.get("name_locked") or meta.get("archived"):
+    if meta.get("archived"):
         return
 
+    # The branch's own turn count is kept whoever named it; a name the
+    # person gave only stops the automatic label.
     try:
         turns = db.bump_branch_turns(session_id, head_id)
     except Exception:
         return
-    if turns not in _RETITLE_AT_TURNS:
+    if meta.get("name_locked") or turns not in _RETITLE_AT_TURNS:
         return
 
     gen_count = int(meta.get("name_gen_count", 0))
+
+    from openprogram.runtime.conversation import side_work
+
+    if not side_work.allowed():
+        # A process that is about to exit starts no model request here.
+        return
 
     def _bg():
         try:
@@ -632,28 +646,24 @@ def _broadcast_branches_refresh(session_id: str) -> None:
 def trigger_compaction(session_id: str, agent_id: str = "main",
                         on_event: Optional[EventCallback] = None,
                         *,
-                        keep_recent_tokens: Optional[int] = None) -> dict:
-    """User-initiated compaction. Synchronous — the caller is responsible
-    for running this off the request thread if it cares about latency
-    (compaction calls the LLM to generate a summary).
+                        keep_recent_tokens: Optional[int] = None,
+                        cancel_event: Optional[threading.Event] = None) -> dict:
+    """User-initiated compaction (``/compact``). Synchronous — the caller
+    runs it off the request thread (the summary is an LLM call).
 
-    Pipeline:
-      1. Load active branch from SessionDB.
-      2. Run compact_context to get summary text + recent kept tail.
-      3. Persist a synthetic ``compactionSummary`` row chained off
-         the current head's parent (so it sits at the same fork
-         point as the original first kept message).
-      4. set_head to the new summary row.
-      5. Re-link the kept tail: each kept message gets a new id and
-         predecessor pointing back through the new chain.
+    Reads the session's head once and compacts the chain ending there
+    through ``engine.compact(user_initiated=True)``: the older turns of
+    that chain are summarised into one summary node spliced in where they
+    began (``metadata.covers_ids`` names them). Nothing is moved or
+    deleted and the head stays where it is; every chain that holds the
+    covered turns reads the summary in their place.
 
-    Mirrors Claude Code's compaction model (a real "summary" message
-    in the transcript) but stays SQL-native — no JSONL fork needed.
-    Old pre-summary messages remain in SessionDB but are off the
-    active branch (you can still get_descendants from them for
-    audit).
+    ``cancel_event`` ends the summary request; nothing is written then.
 
-    Returns ``{"summary": str, "kept_count": int, "summary_id": str}``.
+    Returns ``{"summary": str, "covered_count": int, "summary_id": str}``;
+    ``covered_count`` is how many turns the summary covers. When there is
+    too little to compact, ``message_count`` says how many messages the
+    chain has.
     """
     on_event = on_event or _noop
     from openprogram.runtime.context.session_db import default_db
@@ -663,8 +673,9 @@ def trigger_compaction(session_id: str, agent_id: str = "main",
     sess = db.get_session(session_id)
     if sess is None:
         raise ValueError(f"Unknown conversation {session_id!r}")
+    head_id = sess.get("head_id")
     from openprogram.runtime.context.persistence import rendered_history
-    history = rendered_history(db, session_id)
+    history = rendered_history(db, session_id, head_id)
     if len(history) < 4:
         # Tell the user instead of silently doing nothing — a manual
         # /compact with no visible response reads as a broken command.
@@ -676,13 +687,15 @@ def trigger_compaction(session_id: str, agent_id: str = "main",
                 f"{len(history)} message(s); compaction needs at least 4."
             ),
         }})
-        return {"summary": "", "kept_count": len(history), "summary_id": ""}
+        return {"summary": "", "covered_count": 0, "message_count": len(history),
+                "summary_id": ""}
 
-    from openprogram.runtime.conversation.session_model import read_session_chat_model
+    from openprogram.runtime.conversation.session_model import ensure_session_chat_model
 
     profile = _load_agent_profile(agent_id)
-    # Summarise on the conversation's own model, like its turns.
-    pin_provider, pin_model = read_session_chat_model(session_id)
+    # Summarise on the model the conversation's turns run on: the branch's
+    # own, else its Agent's, else the one the person ran last.
+    pin_provider, pin_model = ensure_session_chat_model(session_id, agent_id)
     override = f"{pin_provider}/{pin_model}" if pin_provider and pin_model else None
     model = _resolve_model(profile, override)
     engine = resolve_engine_for(profile)
@@ -697,6 +710,8 @@ def trigger_compaction(session_id: str, agent_id: str = "main",
                 on_event=on_event,
                 user_initiated=True,
                 keep_recent_tokens=keep_recent_tokens,
+                head_id=head_id,
+                cancel_event=cancel_event,
             )
         )
     finally:
@@ -705,6 +720,6 @@ def trigger_compaction(session_id: str, agent_id: str = "main",
 
     return {
         "summary": result.summary_text or "",
-        "kept_count": result.summarised_count,
+        "covered_count": result.summarised_count,
         "summary_id": result.summary_id or "",
     }

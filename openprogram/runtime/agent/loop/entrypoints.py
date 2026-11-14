@@ -50,6 +50,8 @@ def agent_loop(
                 tools=context.tools,
                 memory_prefetch=context.memory_prefetch,
                 run_note=context.run_note,
+                current_date=context.current_date,
+                turn_notes=context.turn_notes,
                 runtime_contract=context.runtime_contract,
             )
 
@@ -99,6 +101,8 @@ def agent_loop_continue(
                 tools=context.tools,
                 memory_prefetch=context.memory_prefetch,
                 run_note=context.run_note,
+                current_date=context.current_date,
+                turn_notes=context.turn_notes,
                 runtime_contract=context.runtime_contract,
             )
 
@@ -142,6 +146,8 @@ def agent_loop_resume(
                 tools=context.tools,
                 memory_prefetch=context.memory_prefetch,
                 run_note=context.run_note,
+                current_date=context.current_date,
+                turn_notes=context.turn_notes,
                 runtime_contract=context.runtime_contract,
             )
             assistant = continuation.assistant_message
@@ -176,6 +182,9 @@ def agent_loop_resume(
                     continuation.repeat_failures,
                     config.safe_point_hook,
                     start_index=start_index,
+                    context_window=getattr(config.model, "context_window", None),
+                    tool_output_weight=getattr(config.model, "tool_output_weight", None),
+                    history=current_context.messages,
                 )
                 tool_results = execution["tool_results"]
                 current_context.messages.extend(tool_results)

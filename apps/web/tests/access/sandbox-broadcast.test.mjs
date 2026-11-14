@@ -18,7 +18,8 @@ let cleanup, socket;
 const state={sandbox:true};
 globalThis.probeValues={
  useEffect:fn=>{cleanup=fn()},
- useSessionStore:{getState:()=>({setComposerSettings:(patch,id)=>{Object.assign(state,patch);void id}})},
+ sameSettingsBranch:(current,data)=>data.active_branch_id===undefined||data.active_branch_id===current.active_branch_id,
+ useSessionStore:{getState:()=>({composerSettingsBySession:{A:{active_branch_id:"a"}},setComposerSettings:(patch,id)=>{Object.assign(state,patch);void id}})},
  recordExecutionCursor:()=>({}),consumeCommandErrorFrame:()=>false,
  createHistoryFragmentDecoder:()=>({receive:wire=>[wire],clear(){}}),
  runtimeState:{},setSocket:s=>{socket=s},waitForOwnerAuthBootstrap:async()=>{},
@@ -29,9 +30,10 @@ registerHooks({resolve(s,c,next){if(mocks.has(s))return{url:'data:text/javascrip
 test('global Sandbox updates accept mutations but ignore correlated read/write replies',async()=>{
  const {useWS}=await import(pathToFileURL(target).href);useWS();
  await new Promise(resolve=>setImmediate(resolve));
- const reply=(id,value)=>socket.onmessage({data:JSON.stringify({type:'sandbox_changed',data:{session_id:'A',action:'set_sandbox',...(id?{request_id:id}:{}),sandbox:value}})});
+ const reply=(id,value,branch)=>socket.onmessage({data:JSON.stringify({type:'sandbox_changed',data:{session_id:'A',action:'set_sandbox',...(id?{request_id:id}:{}),sandbox:value,...(branch?{active_branch_id:branch}:{})}})});
  try {
   reply(null,false);await new Promise(resolve=>setImmediate(resolve));assert.equal(state.sandbox,false);
+  reply(null,true,'b');await new Promise(resolve=>setImmediate(resolve));assert.equal(state.sandbox,false);
   reply('old-read',true);await new Promise(resolve=>setImmediate(resolve));assert.equal(state.sandbox,false);
   reply('old-write',true);await new Promise(resolve=>setImmediate(resolve));assert.equal(state.sandbox,false);
  } finally {cleanup();}

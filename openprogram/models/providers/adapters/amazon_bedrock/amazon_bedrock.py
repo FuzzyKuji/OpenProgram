@@ -10,7 +10,10 @@ Mirrors amazon-bedrock.ts
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
+import socket
+import threading
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -195,38 +198,39 @@ def stream_bedrock(
 
             if opts.get("on_payload"):
                 opts["on_payload"](request)
-
-            response = client.converse_stream(**request)
+            from ...recording.capture import BEDROCK, capture_request
+            capture_request(model, request, wire=BEDROCK)
 
             _sig = opts.get("signal")
-            for item in response["stream"]:
-                # Caller cancel (Stop button) — polled per event; raising
-                # abandons the boto3 event stream.
-                if _sig is not None and callable(getattr(_sig, "is_set", None)) and _sig.is_set():
-                    from openprogram.models.providers.utils.errors import StreamAborted
-                    raise StreamAborted("stream cancelled by caller signal")
-                if "messageStart" in item:
-                    ev_stream.push({"type": "start", "partial": output})
-                elif "contentBlockStart" in item:
-                    _handle_block_start_bedrock(item["contentBlockStart"], blocks, output, ev_stream)
-                elif "contentBlockDelta" in item:
-                    _handle_block_delta_bedrock(item["contentBlockDelta"], blocks, output, ev_stream)
-                elif "contentBlockStop" in item:
-                    _handle_block_stop_bedrock(item["contentBlockStop"], blocks, output, ev_stream)
-                elif "messageStop" in item:
-                    output["stop_reason"] = _map_stop_reason_bedrock(item["messageStop"].get("stopReason"))
-                elif "metadata" in item:
-                    _handle_metadata_bedrock(item["metadata"], model, output)
-                elif "internalServerException" in item:
-                    raise RuntimeError(f"Internal server error: {item['internalServerException'].get('message', '')}")
-                elif "modelStreamErrorException" in item:
-                    raise RuntimeError(f"Model stream error: {item['modelStreamErrorException'].get('message', '')}")
-                elif "validationException" in item:
-                    raise RuntimeError(f"Validation error: {item['validationException'].get('message', '')}")
-                elif "throttlingException" in item:
-                    raise RuntimeError(f"Throttling error: {item['throttlingException'].get('message', '')}")
-                elif "serviceUnavailableException" in item:
-                    raise RuntimeError(f"Service unavailable: {item['serviceUnavailableException'].get('message', '')}")
+            async with contextlib.aclosing(_converse_events(client, request)) as items:
+                async for item in items:
+                    # Caller cancel (Stop button) — polled per event; raising
+                    # closes the boto3 event stream.
+                    if _sig is not None and callable(getattr(_sig, "is_set", None)) and _sig.is_set():
+                        from openprogram.models.providers.utils.errors import StreamAborted
+                        raise StreamAborted("stream cancelled by caller signal")
+                    if "messageStart" in item:
+                        ev_stream.push({"type": "start", "partial": output})
+                    elif "contentBlockStart" in item:
+                        _handle_block_start_bedrock(item["contentBlockStart"], blocks, output, ev_stream)
+                    elif "contentBlockDelta" in item:
+                        _handle_block_delta_bedrock(item["contentBlockDelta"], blocks, output, ev_stream)
+                    elif "contentBlockStop" in item:
+                        _handle_block_stop_bedrock(item["contentBlockStop"], blocks, output, ev_stream)
+                    elif "messageStop" in item:
+                        output["stop_reason"] = _map_stop_reason_bedrock(item["messageStop"].get("stopReason"))
+                    elif "metadata" in item:
+                        _handle_metadata_bedrock(item["metadata"], model, output)
+                    elif "internalServerException" in item:
+                        raise RuntimeError(f"Internal server error: {item['internalServerException'].get('message', '')}")
+                    elif "modelStreamErrorException" in item:
+                        raise RuntimeError(f"Model stream error: {item['modelStreamErrorException'].get('message', '')}")
+                    elif "validationException" in item:
+                        raise RuntimeError(f"Validation error: {item['validationException'].get('message', '')}")
+                    elif "throttlingException" in item:
+                        raise RuntimeError(f"Throttling error: {item['throttlingException'].get('message', '')}")
+                    elif "serviceUnavailableException" in item:
+                        raise RuntimeError(f"Service unavailable: {item['serviceUnavailableException'].get('message', '')}")
 
             output["stop_reason"] = output.get("stop_reason", "stop")
             if output["stop_reason"] in ("error", "aborted"):
@@ -255,8 +259,91 @@ def stream_bedrock(
             # think the stream succeeded and busy-loop on retry).
             ev_stream.fail(exc)
 
-    asyncio.ensure_future(_run())
+    # Owned by the stream: closing it (a steer, a stop, the idle bound)
+    # cancels the request instead of leaving it to wait on the socket.
+    ev_stream.attach_producer(asyncio.ensure_future(_run()))
     return ev_stream
+
+
+async def _converse_events(client: Any, request: dict[str, Any]):
+    """Yield the ``ConverseStream`` events of ``request``, read on a thread of their own.
+
+    boto3 is synchronous: its request and each event-stream read block. Run
+    on the event loop, one stalled read froze every session in the process
+    until botocore's own read timeout, and neither the stream idle bound nor
+    a cancel could act. Here the request and the reads run on a daemon
+    thread that hands each event to the loop, so the loop only awaits.
+    Closing this generator (the bound, a stop, a steer) releases the event
+    stream and a read still in flight (:func:`_release`); whatever the
+    thread ends with afterwards is dropped.
+    """
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue = asyncio.Queue()
+    closed = threading.Event()
+    opened: dict[str, Any] = {}
+
+    def deliver(kind: str, value: Any) -> None:
+        try:
+            loop.call_soon_threadsafe(queue.put_nowait, (kind, value))
+        except RuntimeError:  # the loop is gone; nobody is reading
+            closed.set()
+
+    def read() -> None:
+        try:
+            stream = client.converse_stream(**request)["stream"]
+            opened["stream"] = stream
+            if closed.is_set():
+                stream.close()
+                return
+            for item in stream:
+                if closed.is_set():
+                    return
+                deliver("item", item)
+            deliver("end", None)
+        except BaseException as exc:  # noqa: BLE001 -- handed to the loop
+            if not closed.is_set():
+                deliver("error", exc)
+
+    threading.Thread(target=read, name="bedrock-converse-stream", daemon=True).start()
+    try:
+        while True:
+            kind, value = await queue.get()
+            if kind == "item":
+                yield value
+            elif kind == "end":
+                return
+            else:
+                raise value
+    finally:
+        closed.set()
+        stream = opened.get("stream")
+        if stream is not None:
+            _release(stream)
+
+
+def _release(stream: Any) -> None:
+    """Close a botocore event stream without blocking the event loop.
+
+    ``close()`` waits for the buffered reader a stalled read holds, so it
+    runs on its own thread; shutting the socket down first ends that read at
+    once instead of at botocore's read timeout.
+    """
+    raw = getattr(stream, "_raw_stream", None)  # urllib3 HTTPResponse
+    sock = getattr(getattr(raw, "connection", None), "sock", None)
+    if sock is None:
+        # A response that closes its connection keeps the socket only in
+        # its file object: http.client HTTPResponse -> BufferedReader -> SocketIO.
+        fp = getattr(getattr(raw, "_fp", None), "fp", None)
+        sock = getattr(getattr(fp, "raw", None), "_sock", None)
+    if sock is not None:
+        with contextlib.suppress(OSError):
+            sock.shutdown(socket.SHUT_RDWR)
+
+    def close() -> None:
+        with contextlib.suppress(Exception):
+            stream.close()
+
+    threading.Thread(target=close, name="bedrock-converse-stream-close", daemon=True).start()
 
 
 def _build_boto_retry_config():
@@ -407,6 +494,14 @@ def _convert_messages_bedrock(
             j = i + 1
             while j < len(transformed) and getattr(transformed[j], "role", None) == "toolResult":
                 tool_results.append(_make_tool_result(transformed[j]))
+                j += 1
+            # The instructions those calls brought along go after the
+            # results, in the same user message (``tool_attachments``).
+            from openprogram.models.providers.shared.tool_attachments import AttachmentMessage
+            while j < len(transformed) and isinstance(transformed[j], AttachmentMessage):
+                tool_results.extend({"text": sanitize_surrogates(c.text)}
+                                    for c in transformed[j].content
+                                    if getattr(c, "type", None) == "text" and c.text.strip())
                 j += 1
             i = j - 1
             result.append({"role": "user", "content": tool_results})

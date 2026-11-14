@@ -52,10 +52,8 @@ class SessionStore(IndexOperations, StorageOperations, SessionsOperations, Messa
         self._sessions: "OrderedDict[str, tuple[SessionLog, SessionMemoryIndex]]" = shared.OrderedDict()
         self._cache_cap = cache_cap if cache_cap is not None else shared._resolve_cache_cap()
         self._lock = shared.threading.Lock()
-        # Filesystem work is serialized per session, not across the store.
-        # ponytail: retain one small RLock per seen session id; replace with a
-        # bounded lock table only if profiles with millions of ids appear.
-        self._session_locks: dict[str, shared.Any] = {}
+        # Filesystem work is serialized per conversation, not across the
+        # store, through the process-wide conversation lock (_session_lock).
         self._locations_write_lock = shared.threading.Lock()
         # Location index: session_id → absolute repo path, for sessions
         # that live OUTSIDE the home root (i.e. inside a bound project's
@@ -110,20 +108,19 @@ class SessionStore(IndexOperations, StorageOperations, SessionsOperations, Messa
         if pair is None:
             return
         session_log, idx = pair
-        with idx._lock:
-            cur = list(idx.meta.get("merged_heads") or [])
+
+        def _apply(meta: dict):
+            cur = list(meta.get("merged_heads") or [])
             changed = False
             for h in head_ids:
-                if not h:
-                    continue
-                h = h.strip()
+                h = (h or "").strip()
                 if h and h not in cur:
                     cur.append(h)
                     changed = True
-            if changed:
-                idx.meta["merged_heads"] = cur
-        if changed:
-            self._persist_meta(session_log, idx)
+            meta["merged_heads"] = cur
+            return changed, None
+
+        self._update_meta(session_log, idx, _apply, keys=("merged_heads",))
 
 
     def merged_heads(self, session_id: str) -> set[str]:
@@ -228,10 +225,7 @@ class SessionStore(IndexOperations, StorageOperations, SessionsOperations, Messa
                     if not kids:
                         del idx.children_by_caller[parent]
         session_log.delete_nodes([node_id])
-        branches = dict(idx.meta.get("branches") or {})
-        if node_id in branches:
-            branches.pop(node_id, None)
-            idx.set_meta(branches=branches)
+        self.delete_branch_name(session_id, node_id)
         self._persist_meta(session_log, idx)
         return True
 
@@ -269,7 +263,9 @@ class SessionStore(IndexOperations, StorageOperations, SessionsOperations, Messa
             if m.get("token_model"):
                 last_model = m["token_model"]
         current_tokens = last_input_tokens + output_total // max(messages_counted, 1)
-        denom = cache_read_total + input_total
+        # input_tokens excludes the cached and the newly cached tokens, so
+        # the prompt is all three.
+        denom = input_total + cache_read_total + cache_write_total
         cache_hit_rate = (cache_read_total / denom) if denom else 0.0
         return {
             "input_tokens": input_total, "output_tokens": output_total,
@@ -363,6 +359,8 @@ class SessionStore(IndexOperations, StorageOperations, SessionsOperations, Messa
             return None
         _session_log, idx = pair
         # Old semantics: longest message-tree chain via the predecessor field.
+        hidden = set(idx.meta.get("rewind_hidden_nodes") or [])
+        retired = set(idx.meta.get("rewind_hidden_heads") or [])
         children = idx.children_by_predecessor
         roots = [msg_id] if msg_id else [
             n.id for n in idx.all_nodes()
@@ -371,15 +369,15 @@ class SessionStore(IndexOperations, StorageOperations, SessionsOperations, Messa
         deepest_id: shared.Optional[str] = None
         deepest_depth = -1
         for root in roots:
-            if root not in idx.nodes_by_id:
+            if root not in idx.nodes_by_id or root in hidden or root in retired:
                 continue
             stack: list[tuple[str, int]] = [(root, 0)]
             while stack:
                 cur, depth = stack.pop()
                 kids = [child_id for child_id in children.get(cur, [])
-                        if not (idx.nodes_by_id[child_id].metadata or {}).get("structural")]
+                        if child_id not in hidden and not (idx.nodes_by_id[child_id].metadata or {}).get("structural")]
                 if not kids:
-                    if depth > deepest_depth:
+                    if depth > deepest_depth and cur not in retired:
                         deepest_depth = depth
                         deepest_id = cur
                 else:

@@ -324,12 +324,6 @@ def test_unknown_application_directory_keeps_its_name() -> None:
     assert _callable_name("applications/notes_harness") == "notes_harness"
 
 
-def test_builtin_application_resolves_to_registered_callable() -> None:
-    from openprogram.interfaces.server.routes.catalog.programs import _callable_name
-
-    assert _callable_name("applications/browser/web_use") == "web_use"
-
-
 def test_programs_logic_builds_transitive_application_calls(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -779,7 +773,7 @@ def _register_entry(registered: dict, name: str, source: Path, module: str) -> N
 
 
 def test_application_logic_is_the_union_of_its_registered_entries(tmp_path, monkeypatch):
-    """An entry in a subpackage (``browser/web_use``) stands for the application."""
+    """An entry in a subpackage (``shop/checkout``) stands for the application."""
     client = _client(tmp_path, monkeypatch)
     applications = tmp_path / "openprogram" / "programs" / "applications"
     _write(applications / "shop" / "__init__.py", "")
@@ -790,24 +784,24 @@ def test_application_logic_is_the_union_of_its_registered_entries(tmp_path, monk
     )
     _write(applications / "shop" / "pages.py", "def render():\n    pass\n")
     _write(applications / "shop" / "privacy.py", "def unused():\n    pass\n")
-    entry_source = applications / "shop" / "web_use" / "__init__.py"
+    entry_source = applications / "shop" / "checkout" / "__init__.py"
     _write(
         entry_source,
         "from openprogram.programs.applications.shop.service import Service\n"
         "from openprogram.programs.applications.shop.pages import render\n\n"
-        "def web_use(task: str):\n    render()\n    return Service().start()\n",
+        "def checkout(task: str):\n    render()\n    return Service().start()\n",
     )
     monkeypatch.setattr("openprogram.programs._host.runtime._registry", registered := {})
-    _register_entry(registered, "web_use", entry_source, "openprogram.programs.applications.shop.web_use")
+    _register_entry(registered, "checkout", entry_source, "openprogram.programs.applications.shop.checkout")
 
     shop = {entry["name"]: entry for entry in _listing(client, "applications")}["shop"]
-    assert shop["callable_name"] == "web_use"
-    assert shop["description"] == "web_use entry"
-    assert shop["agent_entries"] == [{"name": "web_use", "description": "web_use entry"}]
+    assert shop["callable_name"] == "checkout"
+    assert shop["description"] == "checkout entry"
+    assert shop["agent_entries"] == [{"name": "checkout", "description": "checkout entry"}]
     assert "note" not in shop
 
     logic = client.get("/api/programs/logic", params={"path": "applications/shop"}).json()
-    assert logic["entries"] == ["web_use"]
+    assert logic["entries"] == ["checkout"]
     # Calling a class analyses its methods; it is not an unresolved entry.
     assert logic["analysis_complete"] is True, logic["analysis_warnings"]
     assert {
@@ -849,17 +843,17 @@ def test_application_without_an_agent_entry_gets_a_neutral_note(tmp_path, monkey
     } == {"applications/toolkit/stages"}
 
 
-def test_builtin_applications_resolve_their_registered_entries() -> None:
+def test_a_builtin_application_without_entries_lists_as_a_library() -> None:
     from openprogram.interfaces.server.routes.catalog.programs import _list_entries, _program_logic
 
     applications = {entry["name"]: entry for entry in _list_entries("applications")["entries"]}
 
     browser = _program_logic("applications/browser")
-    assert browser["entries"] == ["web_use"]
+    assert browser["entries"] == []
     assert browser["analysis_complete"] is True, browser["analysis_warnings"]
     assert any(edge["source"] == "applications/browser" for edge in browser["edges"])
-    assert applications["browser"]["callable_name"] == "web_use"
-    assert "note" not in applications["browser"]
+    assert "callable_name" not in applications["browser"]
+    assert applications["browser"]["note"] == {"kind": "library", "exports": ["setup"]}
 
 
 def test_tool_rows_list_their_parameters() -> None:

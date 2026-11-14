@@ -100,11 +100,14 @@ class GhCliSource:
 
     def removal_steps(self, cred: Credential) -> list[RemovalStep]:
         host = cred.metadata.get("host", "github.com")
+        # The file this token was read from: under %AppData% on
+        # Windows, not ~/.config/gh.
+        hosts_file = cred.metadata.get("source_path") or str(self._resolve_path())
         return [
             RemovalStep(
                 description=(
                     f"Run `gh auth logout --hostname {host}` to remove "
-                    f"the corresponding entry from ~/.config/gh/hosts.yml. "
+                    f"the corresponding entry from {hosts_file}. "
                     f"If you skip this step, OpenProgram will see the "
                     f"token again on the next import sweep and offer to "
                     f"re-adopt it."

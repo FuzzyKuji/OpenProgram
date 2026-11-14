@@ -17,7 +17,7 @@ from typing import Any
 
 from ..management.transaction import TransactionError, workspace_revision
 from ..workspace_layout import is_internal_path
-from ..markdown import parse_topic_tree
+from ..markdown import read_topic_tree
 from .fusion import CANDIDATE_MULTIPLIER, embedding_weight, fuse
 
 DERIVED_DIRS = ("timeline",)
@@ -109,7 +109,12 @@ def status(
     the owner-only CLI and web views ask for it explicitly.
     """
     root = Path(memory_dir).resolve()
-    units = parse_topic_tree(root / "topics") if (root / "topics").is_dir() else []
+    # Read the way memory is read: whatever a file holds, the overview
+    # counts what can be read.
+    units = (
+        read_topic_tree(root / "topics").units
+        if (root / "topics").is_dir() else []
+    )
     files = visible_files(root)
     recent = root / "recent_events.jsonl"
     recent_count = 0
@@ -228,9 +233,9 @@ def read_file(
         raise TransactionError(
             "INVALID_ARGUMENT", "file does not exist", path=str(path)
         )
-    text = target.read_text(encoding="utf-8")
+    text = target.read_text(encoding="utf-8", errors="replace")
     if block_id:
-        content = _extract_block(text, block_id, path=str(path))
+        content = _read_paragraph(memory_dir, target, text, block_id.lstrip("^"), str(path))
         mode = "block"
     elif heading:
         content = _extract_heading(text, heading, path=str(path))
@@ -248,6 +253,60 @@ def read_file(
         "content": content[:limits.max_read_chars],
         "truncated": truncated,
     }
+
+
+#: What a paragraph that cites nothing says about where it came from.
+SOURCE_LINES = {
+    "outside": "source: outside file",
+    "person": "source: added by person",
+}
+
+CHANGED_NOTE = (
+    "(This paragraph has changed since that ID was read; the file's "
+    "current paragraphs follow.)"
+)
+
+
+def _read_paragraph(
+    memory_dir: Path, target: Path, text: str, block_id: str, path: str,
+) -> str:
+    """One paragraph by ID, with the footnotes it cites, and a line naming
+    its source when it cites nothing.
+
+    A derived ID (``~…``, a paragraph without an ``^id`` of its own) names
+    text that may have changed since it was read: then the file's current
+    paragraphs come back instead of an error, as a citation to a file
+    still leads to the file.
+    """
+    from ..management import ownership
+    from ..markdown.parser import DERIVED_PREFIX, read_topic_file
+
+    root = Path(memory_dir).resolve()
+    topics = root / "topics"
+    unit = None
+    try:
+        relative = target.relative_to(topics).as_posix()
+    except ValueError:
+        relative = None
+    if relative is not None:
+        units, _problem = read_topic_file(
+            target, topics,
+            outside=ownership.contains(ownership.outside_paths(root), relative),
+        )
+        unit = next((u for u in units if u.memory_id == block_id), None)
+    if block_id.startswith(DERIVED_PREFIX):
+        if unit is None:
+            return f"{CHANGED_NOTE}\n\n{text.rstrip()}\n"
+        lines = text.split("\n")
+        start = max(unit.line - 1, 0)
+        end = start
+        while end + 1 < len(lines) and lines[end + 1].strip():
+            end += 1
+        content = "\n".join(lines[start:end + 1]) + "\n"
+    else:
+        content = _extract_block(text, block_id, path=path)
+    origin = SOURCE_LINES.get(unit.origin) if unit is not None else None
+    return f"{content}{origin}\n" if origin else content
 
 
 def _extract_block(text: str, block_id: str, *, path: str) -> str:
@@ -466,7 +525,7 @@ def _bm25_index(root: Path) -> Any:
         cached = _bm25_indexes.get(root)
         if cached is not None and cached[0] == signature:
             return cached[1]
-        index = MemoryBM25Index(root, persist=True)
+        index = MemoryBM25Index(root)
         _bm25_indexes[root] = (signature, index)
         return index
 
@@ -493,7 +552,7 @@ def _clear_search_index_cache_for_tests() -> None:
 def _present(hit: dict[str, Any]) -> dict[str, Any]:
     keep = (
         "event_id", "path", "line", "headings", "date", "dates",
-        "content", "refs", "final_score", "score", "similarity",
+        "content", "refs", "origin", "final_score", "score", "similarity",
     )
     result = {key: hit[key] for key in keep if key in hit}
     if "event_id" not in result and hit.get("event"):

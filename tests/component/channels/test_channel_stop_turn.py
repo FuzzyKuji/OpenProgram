@@ -24,6 +24,7 @@ from openprogram.models.providers.types import (
     Model,
     TextContent,
 )
+from openprogram.runtime.agent_registry.manager import AgentModelRef
 from openprogram.runtime.context.session_db import SessionDB
 from openprogram.runtime.conversation import turn_runtime as turns
 from openprogram.runtime.execution import default_store
@@ -34,6 +35,12 @@ class _Agent:
     session_scope = "per-account-channel-peer"
     session_daily_reset = ""
     session_idle_minutes = 0
+    # Branch settings fall back to the Agent's own model, effort and tool
+    # policy; this Agent names none of them.
+    model = AgentModelRef()
+    thinking_effort = None
+    tools = None
+    always_on: dict = {}
 
 
 class _FakeChannel(Channel):

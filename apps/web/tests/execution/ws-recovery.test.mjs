@@ -19,6 +19,8 @@ exportsByModule.set('@/lib/chat/conversation-work', ['notifyConversationWorkChan
 exportsByModule.set('@/lib/chat/transcript/todo-plan', ['useTodoStore']);
 const real = new Set(['@/lib/runtime-bridge/session/session-load','../execution/execution-recovery','./history-fragments','../execution/execution-message-recovery','@/lib/net/execution/execution-cursor']);
 const hooks=registerHooks({resolve(specifier, context, next) {
+  // Recovery has no unsaved composer settings; keep the production read owner.
+  if(context.parentURL?.endsWith('/runtime-bridge/session/session-load.ts') && specifier==='@/lib/agents/branch-settings') return {url:'data:text/javascript,export const pendingBranchSettings=()=>undefined;',shortCircuit:true};
   if(context.parentURL?.endsWith('/runtime-bridge/session/session-load.ts') && specifier==='@/lib/net/ws/text-frames') return {url:'data:text/javascript,export const flushTextFrames=()=>{};',shortCircuit:true};
   if(specifier==='@/lib/net/ws/session-load') return {url:new URL('../../lib/net/ws/session-load.ts',import.meta.url).href,shortCircuit:true};
   if(context.parentURL?.endsWith('/runtime-bridge/session/session-load.ts') && (specifier==='../state'||specifier==='@/lib/session-store')) return {url:'data:text/javascript,'+encodeURIComponent(specifier==='../state'?'export const runtimeState=globalThis.__wsFixture.exports.runtimeState; export const getSocket=()=>runtimeState.ws;':'export const useSessionStore=globalThis.__wsFixture.exports.useSessionStore;'),shortCircuit:true};

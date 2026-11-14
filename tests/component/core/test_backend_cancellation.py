@@ -9,14 +9,14 @@ from openprogram.host.backend.local import LocalBackend
 
 
 def _python(code, tmp_path):
-    from openprogram.host.backend import local
+    from openprogram.host._platform import command_shell
 
     # Exercise cancellation of real code, not nested `python -c` source
     # escaping through MSYS/native command-line parsing on Windows.
     script = tmp_path / "child.py"
     script.write_text(code, encoding="utf-8")
     arguments = [Path(sys.executable).as_posix(), script.as_posix()]
-    if sys.platform == "win32" and local._windows_bash() is None:
+    if command_shell.host_shell().is_powershell:
         return "& " + " ".join("'" + arg.replace("'", "''") + "'" for arg in arguments)
     return shlex.join(arguments)
 

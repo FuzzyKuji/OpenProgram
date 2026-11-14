@@ -114,6 +114,17 @@ async def _websocket_handler(ws):
         await ws.send_text(state.json.dumps(
             {"type": "frontend_build", "data": {"id": export_id()}}
         ))
+        # What a client may rely on this Worker for (a stop that is never
+        # refused as stale, a stop that names a send); a client keeps its
+        # fallbacks for a Worker that does not say so. ``server`` says who
+        # the Worker is and every capability it has (``handshake``).
+        from openprogram.interfaces.server.handshake import server_identity
+        from openprogram.runtime.execution.control.submission import CONTROL_CAPABILITIES
+        await ws.send_text(state.json.dumps(
+            {"type": "worker_capabilities",
+             "data": {name: True for name in CONTROL_CAPABILITIES},
+             "server": server_identity()}
+        ))
 
         # Keep alive — receive pings/messages
         while True:
@@ -313,6 +324,15 @@ async def _handle_ws_command(ws, cmd: dict):
     # The web reads turns (history protocol 3); every other client gets plain rows.
     if action in ("list_sessions", "load_session") and cmd.get("history_version") == 3:
         ws._history_protocol = 3
+    # A client that says who it is (``handshake.client_identity``), kept for
+    # the connection's log lines.
+    if "client" in cmd and getattr(ws, "_client_identity", None) is None:
+        from openprogram.interfaces.server.handshake import client_identity
+
+        identity = client_identity(cmd)
+        if identity is not None:
+            ws._client_identity = identity
+            _log.debug("ws client %s %s", identity.get("name"), identity.get("version"))
     _log.debug("ws command received: action=%s", action)
 
     h = state.WS_ACTIONS.get(action)

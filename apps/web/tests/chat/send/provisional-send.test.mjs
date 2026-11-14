@@ -428,16 +428,32 @@ describe("Stop and execution commands", () => {
     assert.equal(store().runningTasks[sid], undefined);
   });
 
-  test("a stale rejection restores the task from the snapshot, only when it owns the foreground", () => {
+  test("a Stop goes out once, and an accepted answer leaves the reply stopping until the turn ends", () => {
+    reset();
+    transcript.putRow(sid, { id: "exec-4", role: "assistant", rowKind: "assistant", content: "partial", status: "running" });
+    store().setRunningTaskFor(sid, { session_id: sid, msg_id: "u4", execution_id: "exec-4", status_version: 1 });
+    const frames = [];
+    stopSession(sid, (frame) => { frames.push(frame); return true; });
+    chatHandlers.handleExecutionCommandUpdated({ command: {
+      command_id: frames[0].command_id, execution_id: "exec-4", status: "accepted", result_version: 4,
+    } });
+    assert.equal(frames.length, 1);
+    assert.equal(message("exec-4").status, "cancelled", "the stop is under way");
+    assert.equal(store().runningTasks[sid], undefined);
+    assert.ok(runtimeState._optimisticCancels[frames[0].command_id], "closed by the execution's cancelled frame");
+  });
+
+  test("a refused stop restores the task from the snapshot, only when it owns the foreground", () => {
     for (const [status, owns] of [["running", true], ["paused", false]]) {
       reset();
       store().setRunningTaskFor(sid, { session_id: sid, msg_id: "u1", execution_id: "exec-1", status_version: 3 });
       const frames = [];
       stopSession(sid, (frame) => { frames.push(frame); return true; });
       chatHandlers.handleExecutionCommandUpdated({ command: {
-        command_id: frames[0].command_id, execution_id: "exec-1", status: "rejected", rejection_code: "stale_version",
+        command_id: frames[0].command_id, execution_id: "exec-1", status: "rejected", rejection_code: "unsupported_capability",
         latest_snapshot: { execution_id: "exec-1", session_id: sid, status, status_version: 4 },
       } });
+      assert.equal(frames.length, 1, "only a stale refusal is sent again");
       const task = store().runningTasks[sid];
       if (owns) {
         assert.equal(task.execution_id, "exec-1");
@@ -448,6 +464,23 @@ describe("Stop and execution commands", () => {
       }
       assert.deepEqual(runtimeState._optimisticCancels, {});
     }
+  });
+
+  test("a refused stop whose turn the slot already holds at a newer version takes the stop off the reply", () => {
+    reset();
+    transcript.putRow(sid, { id: "exec-3", role: "assistant", rowKind: "assistant", content: "partial", status: "running" });
+    store().setRunningTaskFor(sid, { session_id: sid, msg_id: "u3", execution_id: "exec-3", status_version: 3 });
+    const frames = [];
+    stopSession(sid, (frame) => { frames.push(frame); return true; });
+    assert.equal(message("exec-3").status, "cancelled");
+    store().setRunningTaskFor(sid, { session_id: sid, msg_id: "u3", execution_id: "exec-3", status_version: 6 });
+    chatHandlers.handleExecutionCommandUpdated({ command: {
+      command_id: frames[0].command_id, execution_id: "exec-3", status: "rejected", rejection_code: "invalid_state",
+      latest_snapshot: { execution_id: "exec-3", session_id: sid, status: "running", status_version: 5 },
+    } });
+    assert.equal(message("exec-3").status, "running");
+    assert.equal(store().runningTasks[sid].status_version, 6);
+    assert.deepEqual(runtimeState._optimisticCancels, {});
   });
 
   test("an applied command keeps the canonical running-task version", () => {
@@ -472,6 +505,44 @@ describe("Stop and execution commands", () => {
     assert.equal(cancel.execution_id, "exec-9");
     assert.equal(cancel.expected_version, 2);
     assert.equal(runtimeState._optimisticStops[draft], undefined);
+  });
+
+  test("a pre-ACK Stop goes out once when the ACK names the turn, whatever version it names", () => {
+    reset();
+    const draft = "local_stop-before-ack";
+    store().setRunningTaskFor(draft, { session_id: draft, msg_id: "" });
+    stopSession(draft, () => assert.fail("no cancel without an execution id"));
+    const before = sent.length;
+    chatHandlers.wsHandleChatAck({ session_id: draft, msg_id: "u10", execution_id: "exec-10", status_version: 1 });
+    const first = sent.slice(before).find((frame) => frame.action === "execution.cancel");
+    assert.equal(first.expected_version, 1);
+    chatHandlers.handleExecutionCommandUpdated({ command: {
+      command_id: first.command_id, execution_id: "exec-10", status: "accepted", result_version: 3,
+    } });
+    const cancels = sent.slice(before).filter((frame) => frame.action === "execution.cancel");
+    assert.equal(cancels.length, 1);
+    assert.equal(store().runningTasks[draft], undefined, "the stop is under way");
+  });
+
+  test("an ACK naming the turn but not its version sends the pre-ACK Stop at once", () => {
+    reset();
+    const draft = "local_stop-before-fn-ack";
+    transcript.putRow(draft, { id: "exec-11", role: "assistant", rowKind: "assistant", content: "", status: "running" });
+    store().setRunningTaskFor(draft, { session_id: draft, msg_id: "" });
+    stopSession(draft, () => assert.fail("no cancel without an execution id"));
+    assert.equal(message("exec-11").status, "cancelled");
+    const before = sent.length;
+    chatHandlers.wsHandleChatAck({ session_id: draft, msg_id: "u11", execution_id: "exec-11", function_run: true });
+    try {
+      const cancels = sent.slice(before).filter((frame) => frame.action === "execution.cancel");
+      assert.equal(cancels.length, 1);
+      assert.equal(cancels[0].execution_id, "exec-11");
+      assert.equal(sent.slice(before).some((frame) => frame.action === "get_run_state"), false);
+      assert.equal(store().runningTasks[draft], undefined, "the stop is under way");
+    } finally {
+      releaseStopHold(draft, false);
+      store().setRunningTaskFor(draft, null, "always");
+    }
   });
 });
 

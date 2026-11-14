@@ -12,7 +12,7 @@ import { settleFunctionRetry } from "../actions/function-retry";
  * Imported for side effects + `initChatPage()` by `useWS`.
  */
 
-import type { ExecutionCommand } from "@/lib/execution/execution-debugger";
+import { sendExecutionCancel } from "@/lib/execution/cancel-execution";
 import {
   fetchBranches,
   newSession,
@@ -54,6 +54,7 @@ import { chatAckIsActive, useCenterTabs } from "@/lib/tabs/center-tabs-store";
 import { visibleSessionIds } from "@/lib/tabs/navigation/shell-session";
 import { writeChatScroll } from "@/lib/chat/history/chat-scroll";
 import { selectRow, useSessionStore } from "@/lib/session-store";
+import { offSelectedBranch } from "@/lib/chat/run/selected-branch";
 import {
   warmContextBreakdown,
   writeContextBreakdownCache,
@@ -79,9 +80,6 @@ import { appendLocalNotice } from "@/lib/chat/transcript/apply-read";
 import { stopOverlay } from "@/lib/chat/transcript/apply-transcript-update";
 import type { TurnWindow, WireTurn } from "@/lib/chat/history/history-window";
 import { applyFirstRead } from "./transcript-updates";
-
-/** The compaction-started notice each session is showing. */
-const compactionNotices = new Map<string, string>();
 
 /** The app's single draft-channel-choice host (module-level, backed by
  *  `runtimeState._pendingChannelChoice`). */
@@ -111,6 +109,14 @@ useSessionStore.subscribe((s) => {
 });
 
 /* ===== chat_ack / chat_response / status ========================= */
+
+/** A command on the page's socket; `false` when it is not open. */
+function sendOnSocket(payload: unknown): boolean {
+  const sock = getSocket();
+  if (!sock || sock.readyState !== WebSocket.OPEN) return false;
+  sock.send(JSON.stringify(payload));
+  return true;
+}
 
 interface ChatAckData {
   session_id?: string;
@@ -229,43 +235,36 @@ export function wsHandleChatAck(data: ChatAckData): void {
     // overwrites the same key with a richer payload). Without this the
     // sending tab's row appears but doesn't flow until that round-trip.
     const optimisticStop = runtimeState._optimisticStops[sid];
+    // A Stop pressed before this ack is sent now that the turn has a name.
+    // A stop names its execution; the version (absent from a function
+    // run's ack) is only what the page last saw.
     const stoppedOptimistically = Boolean(optimisticStop);
     if (optimisticStop) {
       delete runtimeState._optimisticStops[sid];
       const replyId = data.execution_id || data.reply_id || "";
-      const commandId = crypto.randomUUID();
-      const cancels = Boolean(data.execution_id && typeof data.status_version === "number");
+      // A stop that already named the send is in force on the Worker; only
+      // one that could not is sent now, naming the execution.
+      const sentByRequest = Boolean(optimisticStop.commandId);
+      const commandId = optimisticStop.commandId || crypto.randomUUID();
+      const cancels = Boolean(data.execution_id);
       if (replyId) {
         useSessionStore.getState().applyLocalChange(sid, stopOverlay(replyId, cancels ? [{ until_command_rejected: commandId }] : []));
       }
-      if (data.execution_id && typeof data.status_version === "number") {
+      if (data.execution_id) {
+        const version = typeof data.status_version === "number" ? data.status_version : 0;
         runtimeState._optimisticCancels[commandId] = {
           sessionId: sid,
           task: {
             session_id: sid,
             msg_id: data.msg_id || "",
             execution_id: data.execution_id,
-            status_version: data.status_version,
+            status_version: version,
           },
           messageId: optimisticStop.messageId || replyId || undefined,
           previousMessageStatus: optimisticStop.previousMessageStatus,
         };
-        const sock = getSocket();
-        if (!sock || sock.readyState !== WebSocket.OPEN) {
+        if (!sentByRequest && !sendExecutionCancel(sendOnSocket, data.execution_id, version, commandId)) {
           delete runtimeState._optimisticCancels[commandId];
-        } else {
-          try {
-            sock.send(JSON.stringify({
-              type: "execution.command",
-              action: "execution.cancel",
-              command_id: commandId,
-              execution_id: data.execution_id,
-              expected_version: data.status_version,
-              payload: {},
-            } satisfies ExecutionCommand));
-          } catch {
-            delete runtimeState._optimisticCancels[commandId];
-          }
         }
       }
       if (isActive) setRunning(false);
@@ -299,11 +298,21 @@ interface ChatResponseData {
   [k: string]: unknown;
 }
 
+function frameOffSelection(data: ChatResponseData): boolean {
+  const sid = typeof data.session_id === "string" ? data.session_id : null;
+  if (!sid) return false;
+  const selected = useSessionStore.getState().composerSettingsBySession[sid]?.active_branch_id;
+  return offSelectedBranch(data.branch_id, selected);
+}
+
 export function wsHandleChatResponse(data: ChatResponseData): void {
   // A sub-agent's frames (a Job working in this session) end the Job's
   // own turn, not the conversation's: no running-state, unread or reply
   // bookkeeping here. chat-stream keeps them for the agent's step row.
   if (data.job_id) return;
+  // A turn on a branch the person switched away from runs on; its frames
+  // change nothing on the branch shown, whose run state is its own.
+  if (frameOffSelection(data)) return;
   // A bound chat's reply did not reach its channel conversation. The turn
   // itself is finished and unaffected; only the user needs to know.
   if (data.type === "channel_delivery_failed") {
@@ -411,6 +420,12 @@ export function handleExecutionCommandUpdated(frame: unknown): void {
   const status = String(command.status || "").toLowerCase();
   if (!commandId || !executionId) return;
   const pending = runtimeState._optimisticCancels[commandId];
+  // A stop of an execution that had already ended: nothing was left to
+  // stop, and nothing failed. The execution's own frame settles the view.
+  if (status === "already_terminal") {
+    delete runtimeState._optimisticCancels[commandId];
+    return;
+  }
   if (status !== "accepted" && status !== "applied" && status !== "rejected") {
     return;
   }
@@ -440,12 +455,10 @@ export function handleExecutionCommandUpdated(frame: unknown): void {
         }, "never");
       }
     }
-    // Accepted may be an intermediate command lifecycle frame; only the
-    // terminal applied frame closes the optimistic entry.
-    if (status === "applied") {
-      if (pending) showToast("Stopped.");
-      delete runtimeState._optimisticCancels[commandId];
-    }
+    // A stop's command answers that the stop is in force, not that the
+    // turn has ended (a repeated stop is accepted while the turn still
+    // runs): the execution's cancelled frame says "Stopped." and closes
+    // the optimistic entry (use-ws).
     return;
   }
 
@@ -484,6 +497,9 @@ export function handleExecutionCommandUpdated(frame: unknown): void {
     && typeof current.status_version === "number"
     && current.status_version > snapshotVersion
   ) {
+    // The slot already holds this turn at a newer version: it runs, so
+    // the stop drawn over its reply goes, as for any other refusal.
+    store.applyLocalChange(snapshotSessionId, { kind: "overlay_command_rejected", commandId });
     delete runtimeState._optimisticCancels[commandId];
     return;
   }
@@ -731,7 +747,11 @@ export function restoreForegroundExecutionTask(value: unknown, execution?: unkno
     return;
   }
   if (!value || typeof value !== "object") return;
-  const task = value as { session_id?: string; execution_id?: string; msg_id?: string; status_version?: number };
+  const task = value as { session_id?: string; execution_id?: string; msg_id?: string; status_version?: number; side_branch?: boolean };
+  // A turn on a branch that is not selected is not this conversation's
+  // foreground turn: the pane shows the selected branch, so its Stop and
+  // its steers must not reach that turn.
+  if (task.side_branch === true) return;
   const sid = task.session_id;
   const eid = task.execution_id;
   if (!sid || !eid || !task.msg_id || typeof task.status_version !== "number") return;
@@ -757,6 +777,8 @@ export function handleRunningTask(rt: unknown): void {
     stream_events?: unknown[];
     execution_id?: string;
     status_version?: number;
+    op_kind?: string;
+    op_id?: string;
   };
 
   // 先做 cancelled 守卫，再碰任何 occupancy。旧代码先 setRunning(true)
@@ -800,6 +822,11 @@ export function handleRunningTask(rt: unknown): void {
     started_at: t.started_at,
     execution_id: executionId,
     status_version: statusVersion,
+    // What the branch's operation is (a reply, /compact, a rewind ...) and
+    // the id a Stop of an operation with no execution names.
+    ...(t.op_kind ? { op_kind: t.op_kind } : {}),
+    ...(t.op_id ? { op_id: t.op_id } : {}),
+    ...(priorTask?.msg_id === mid && priorTask?.phase ? { phase: priorTask.phase } : {}),
   });
 }
 
@@ -897,12 +924,17 @@ function settleUnscopedChatError(data: ChatResponseData): boolean {
 
 /* ===== handleChatResponse (bookkeeping) ========================== */
 
-function removeCompactionNotice(sid: string): void {
-  const noticeId = compactionNotices.get(sid);
-  compactionNotices.delete(sid);
-  if (noticeId) {
-    useSessionStore.getState().applyLocalChange(sid, { kind: "local_remove", rowId: noticeId });
-  }
+/** A turn compacting its own context mid-run: the run indicator names the
+ *  step while it lasts. /compact itself is the branch's operation
+ *  (`op_kind: "compact"`) and needs nothing here. */
+function setRunPhase(sid: string, phase: string | undefined): void {
+  const store = useSessionStore.getState();
+  const task = store.runningTasks[sid];
+  if (!task || task.op_kind === "compact" || task.phase === phase) return;
+  const next = { ...task };
+  if (phase) next.phase = phase;
+  else delete next.phase;
+  store.setRunningTaskFor(sid, next, "never");
 }
 
 export function handleChatResponse(data: ChatResponseData): void {
@@ -920,21 +952,9 @@ export function handleChatResponse(data: ChatResponseData): void {
   // Compaction / snip frames can arrive mid-turn. They must not fall
   // through to the final-reply branch (that clears running + pending).
   if (type === "compaction_started") {
-    if (sid) {
-      useSessionStore.getState().setCompactionUi(sid, {
-        running: true,
-      });
-      const noticeId = "compaction_started_" + Date.now().toString(36);
-      compactionNotices.set(sid, noticeId);
-      appendLocalNotice(sid, {
-        id: noticeId,
-        role: "system",
-        rowKind: "system_event",
-        kind: "compaction",
-        content: translateText("Compacting context…", "正在压缩上下文…"),
-        status: "done",
-      });
-    }
+    // The run indicator shows it: /compact is the branch's operation, a
+    // turn's own compaction is a phase of that turn.
+    if (sid) setRunPhase(sid, "compact");
     return;
   }
   if (type === "compaction_finished") {
@@ -946,12 +966,7 @@ export function handleChatResponse(data: ChatResponseData): void {
       if (!data.no_op) void fetchBranches(sid, { force: true });
     }
     if (sid) {
-      useSessionStore.getState().setCompactionUi(sid, {
-        running: false,
-      });
-      // Every ending takes the in-progress notice away; local notices
-      // survive reads, so nothing else would remove it.
-      removeCompactionNotice(sid);
+      setRunPhase(sid, undefined);
       const noOp = Boolean(data.no_op);
       if (noOp) {
         appendLocalNotice(sid, {
@@ -977,17 +992,23 @@ export function handleChatResponse(data: ChatResponseData): void {
   }
   if (type === "compaction_failed") {
     if (sid) {
-      useSessionStore.getState().setCompactionUi(sid, { running: false });
-      removeCompactionNotice(sid);
-      const err = String((data as { error?: unknown }).error ?? "");
+      setRunPhase(sid, undefined);
+      const info = data as { error?: unknown; user_initiated?: unknown; cancelled?: unknown };
+      // A turn's own compaction that did not go through leaves the history
+      // as it was and is tried again on a later request, so it says nothing.
+      // Only a /compact the person ran reports how it ended.
+      if (!info.user_initiated) return;
+      const err = String(info.error ?? "");
       appendLocalNotice(sid, {
         id: "compaction_failed_" + Date.now().toString(36),
         role: "system",
         rowKind: "system_event",
         kind: "compaction",
-        content: err
-          ? translateText("Context compaction failed: ", "上下文压缩失败：") + err
-          : translateText("Context compaction failed", "上下文压缩失败"),
+        content: info.cancelled
+          ? translateText("Compaction stopped; context unchanged.", "已停止压缩，上下文保持不变")
+          : err
+            ? translateText("Context compaction failed: ", "上下文压缩失败：") + err
+            : translateText("Context compaction failed", "上下文压缩失败"),
         status: "done",
       });
     }

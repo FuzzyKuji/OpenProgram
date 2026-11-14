@@ -6,6 +6,7 @@ import os
 import time
 import uuid
 from pathlib import Path
+from openprogram.host._platform.filesystem import replace_file
 
 
 def _empty() -> dict:
@@ -102,7 +103,7 @@ def save(manifest_path: Path, value: dict) -> None:
             json.dump(value, handle, ensure_ascii=False, indent=2)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(tmp, manifest_path)
+        replace_file(tmp, manifest_path)
         if os.name != "nt":
             directory = os.open(manifest_path.parent, os.O_RDONLY)
             try:
@@ -123,8 +124,13 @@ def record_prepared(
     recoverability: str = "exact",
     unavailable_reason: str | None = None,
     project_locator: dict | None = None,
+    first_sequence: int | None = None,
 ) -> None:
-    """Persist the first pre-turn image before a trusted mutator writes."""
+    """Persist the first pre-turn image before a trusted mutator writes.
+
+    ``first_sequence`` is the workspace sequence at which the turn's first
+    write to the path starts; ``mutation_sequence`` follows its newest one.
+    """
     value = load(manifest_path)
     files = value.setdefault("files", {})
     existing = files.get(backup_basename)
@@ -144,6 +150,8 @@ def record_prepared(
         "prepared_at": time.time(),
         "committed_at": None,
     }
+    if first_sequence:
+        entry["first_sequence"] = int(first_sequence)
     if project_locator is not None:
         if not _valid_locator(project_locator):
             raise ValueError("invalid project locator")

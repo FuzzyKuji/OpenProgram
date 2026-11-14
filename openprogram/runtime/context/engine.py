@@ -98,6 +98,8 @@ class ContextEngine:
                 system_prompt: Optional[str] = None,
                 tail_tokens: int | None = None,
                 clean_history: bool = False,
+                head_id: Optional[str] = None,
+                audience: str = "own_prompt",
                 ) -> TurnPrep:
         raise NotImplementedError
 
@@ -115,6 +117,8 @@ class ContextEngine:
                       user_initiated: bool = False,
                       cancel_event: Optional[threading.Event] = None,
                       keep_recent_tokens: Optional[int] = None,
+                      head_id: Optional[str] = None,
+                      trigger: Optional[str] = None,
                       ) -> CompactResult:
         raise NotImplementedError
 
@@ -134,8 +138,42 @@ class ContextEngine:
 # Default implementation — composes the components
 # ---------------------------------------------------------------------------
 
-_TOO_LONG = "Summary exceeds the render budget; history unchanged"
 _NO_REDUCTION = "Summary does not reduce context; history unchanged"
+_CANCELLED = "Compaction cancelled; history unchanged"
+
+
+def _turn_branch(session_id: str) -> Optional[str]:
+    """The branch of the turn running this compaction, when it is one of
+    this conversation's turns."""
+    try:
+        from openprogram.state import execution_facts
+        return execution_facts.turn_branch(session_id)
+    except Exception:
+        return None
+
+
+def _model_name(model: Any) -> str:
+    """``provider/id`` of the model a summary was written with."""
+    model_id = getattr(model, "id", None) or (str(model) if model else "")
+    provider = getattr(model, "provider", None)
+    return f"{provider}/{model_id}" if provider and model_id else model_id
+
+
+def _compaction_audience() -> str:
+    """Whom a compaction's input is rendered for: the own-prompt audience,
+    without recalled memory while memory is off, so the summary does not
+    carry it on (``turn_context.without_recall``). Earlier turns keep what
+    they were sent until then."""
+    from openprogram.runtime.context.turn_context import OWN_PROMPT, without_recall
+    return OWN_PROMPT if memory_readable() else without_recall(OWN_PROMPT)
+
+
+def memory_readable() -> bool:
+    try:
+        from openprogram.state.memory.policy import allowed, current
+        return current() is None or allowed()
+    except Exception:
+        return False
 
 
 class DefaultContextEngine(ContextEngine):
@@ -188,6 +226,8 @@ class DefaultContextEngine(ContextEngine):
                 system_prompt: Optional[str] = None,
                 tail_tokens: int | None = None,
                 clean_history: bool = False,
+                head_id: Optional[str] = None,
+                audience: str = "own_prompt",
                 ) -> TurnPrep:
         decision: list[str] = []
         session_id = (session or {}).get("id") or ""
@@ -202,12 +242,16 @@ class DefaultContextEngine(ContextEngine):
         compacted_history = history
         n_redacted = 0
         tokens_freed = 0
+        shown: dict = {}
         agent_messages = self._build_messages_from_dag(
             session_id=session_id,
             history=history,
             model=model,
             tail_tokens=tail_tokens,
             clean_history=clean_history,
+            head_id=head_id,
+            shown=shown,
+            audience=audience,
         )
         decision.append("input:dag render")
 
@@ -218,8 +262,9 @@ class DefaultContextEngine(ContextEngine):
             system_prompt = self._build_system_prompt(agent, tools=tools)
 
         # 4. Allocate budget.
-        from openprogram.programs import split_tools_for_dispatch
-        provider_tools, _deferred_catalog = split_tools_for_dispatch(tools or [])
+        from openprogram.programs import loaded_tools, split_tools_for_dispatch
+        provider_tools, _deferred_catalog = split_tools_for_dispatch(
+            tools or [], loaded_tools(agent_messages))
         budget = self.budgets.allocate(
             context_window=real_context_window(model),
             system_prompt=system_prompt,
@@ -241,15 +286,6 @@ class DefaultContextEngine(ContextEngine):
         else:
             decision.append(f"usage:source={usage.source}")
 
-        # 6. Note any active summary id stamped on session.extra_meta.
-        # ``session`` may be None or carry a non-dict extra_meta from an
-        # older record; both are handled without a guard.
-        extra_meta = (session or {}).get("extra_meta")
-        summary_id = (
-            extra_meta.get("_last_summary_id")
-            if isinstance(extra_meta, dict) else None
-        )
-
         return TurnPrep(
             system_prompt=system_prompt,
             agent_messages=agent_messages,
@@ -258,7 +294,8 @@ class DefaultContextEngine(ContextEngine):
             usage=usage,
             tool_results_redacted=n_redacted,
             tokens_freed_by_microcompact=tokens_freed,
-            summary_id=summary_id,
+            section_notes=dict(shown.get("section_notes") or {}),
+            turn_view=shown.get("turn_view"),
             decision_path=decision,
         )
 
@@ -284,12 +321,22 @@ class DefaultContextEngine(ContextEngine):
                       user_initiated: bool = False,
                       cancel_event: Optional[threading.Event] = None,
                       keep_recent_tokens: Optional[int] = None,
+                      head_id: Optional[str] = None,
+                      trigger: Optional[str] = None,
                       ) -> CompactResult:
+        """Summarise the older part of one chain into a summary node.
+
+        ``head_id`` is the tip of the chain to compact; the caller names it,
+        so a compaction never lands on a branch it did not read (``None``
+        reads the session's head once, when the view is loaded).
+        ``cancel_event`` stops the summary request mid-stream; nothing is
+        written then. ``trigger`` names why it ran (``manual``, ``auto``,
+        ``reactive``) on the node; it defaults from ``user_initiated``.
+        """
+        import asyncio
         import time
 
         started = time.time()
-        from openprogram.runtime.context.persistence import rendered_history
-
         from openprogram.runtime.context.model import Context
         db = Context.turn_store(session_id)
         # §4 step 1: compaction consumes the RENDERED view — active
@@ -298,10 +345,11 @@ class DefaultContextEngine(ContextEngine):
         # turns the previous summary already covers.
         from openprogram.runtime.context.compaction.view import load_compaction_view
         from openprogram.runtime.context.tokens import estimate_history_tokens
-        view = load_compaction_view(db, session_id)
+        view = load_compaction_view(db, session_id, head_id, audience=_compaction_audience())
         history = view.history
-        tokens_before = self._occupancy_tokens(session_id, history)
+        tokens_before = self._occupancy_tokens(session_id, history, head_id=view.head_id)
         reason = "auto" if not user_initiated else "manual"
+        trigger = trigger or reason
 
         def _no_op(extra: str | None = None) -> CompactResult:
             return CompactResult(
@@ -314,14 +362,16 @@ class DefaultContextEngine(ContextEngine):
                 error=extra,
             )
 
-        if (len(history) < 4
-                or (cancel_event is not None and cancel_event.is_set())):
-            result = _no_op()
+        def _finish(result: CompactResult) -> CompactResult:
             self._emit_compaction_finished(
                 on_event, session_id=session_id,
-                user_initiated=user_initiated, result=result,
+                user_initiated=user_initiated, result=result, trigger=trigger,
             )
             return result
+
+        if (len(history) < 4
+                or (cancel_event is not None and cancel_event.is_set())):
+            return _finish(_no_op())
 
         window = real_context_window(model) or 0
         cut = self.summarizer.find_cut_index(
@@ -330,23 +380,13 @@ class DefaultContextEngine(ContextEngine):
             context_window=window,
         )
         if cut <= self.summarizer.protect_first_n:
-            result = _no_op()
-            self._emit_compaction_finished(
-                on_event, session_id=session_id,
-                user_initiated=user_initiated, result=result,
-            )
-            return result
+            return _finish(_no_op())
 
         from openprogram.runtime.context.compaction.hold import default_hold, hold_key
-        held_as = hold_key(session_id, model)
+        held_as = hold_key(session_id, model, _turn_branch(session_id))
         held = None if user_initiated else default_hold.held(held_as)
         if held is not None:
-            result = _no_op(held)
-            self._emit_compaction_finished(
-                on_event, session_id=session_id,
-                user_initiated=user_initiated, result=result,
-            )
-            return result
+            return _finish(_no_op(held))
 
         # The active branch's previous summary is already in the covered
         # input. Never inject the session-global cache from another branch.
@@ -357,8 +397,22 @@ class DefaultContextEngine(ContextEngine):
                 "type": "compaction_started",
                 "session_id": session_id,
                 "user_initiated": user_initiated,
+                # manual, auto, mid_turn, reactive or model_downshift.
+                "trigger": trigger,
                 "tokens_before": tokens_before,
             }})
+
+        # The conversation's last request on this chain, sent again with the
+        # summary prompt, reads its cached prefix (compaction/fork.py). Not
+        # when recovering from an overflow: that request is what did not fit.
+        fork = None
+        if trigger != "reactive":
+            from openprogram.runtime.context.compaction.fork import fork_source
+            from openprogram.runtime.context.compaction.prompts import FORK_SUMMARY_PROMPT
+            cap = int(getattr(self.summarizer, "max_summary_tokens", 0) or 20_000)
+            fork = fork_source(
+                session_id, getattr(view, "rendered_ids", None) or (), model, prompt=FORK_SUMMARY_PROMPT,
+                output_tokens=min(cap, int(getattr(model, "max_tokens", 0) or cap)))
 
         try:
             summary = await self.summarizer.summarise(
@@ -368,95 +422,82 @@ class DefaultContextEngine(ContextEngine):
                 cancel_event=cancel_event,
                 keep_recent_tokens=keep_recent_tokens,
                 context_window=window,
+                **({"fork": fork} if fork is not None else {}),
             )
+        except asyncio.CancelledError:
+            # A Stop closed the summary stream: the turn ends as stopped,
+            # not as a failed compaction, and nothing counts toward the hold.
+            if cancel_event is not None and cancel_event.is_set():
+                return _finish(_no_op(_CANCELLED))
+            raise
         except Exception as error:
             default_hold.failed(held_as, f"{type(error).__name__}: {error}")
             raise
 
+        if cancel_event is not None and cancel_event.is_set():
+            return _finish(_no_op(_CANCELLED))
         if (summary.cut_idx <= 0 or summary.summarised_count == 0
                 or not summary.summary_text):
             if summary.error:
                 default_hold.failed(held_as, summary.error)
-            result = _no_op(summary.error)
-            self._emit_compaction_finished(
-                on_event, session_id=session_id,
-                user_initiated=user_initiated, result=result,
-            )
-            return result
+            return _finish(_no_op(summary.error))
 
-        from openprogram.runtime.context.tokens import _text_tokens
-        from openprogram.state.store.session.spill import NODE_RENDER_CAP
-        if (len(summary.summary_text) + len("[Previous conversation summary]\n") > NODE_RENDER_CAP
-                or _text_tokens(summary.summary_text) > self.summarizer.max_summary_tokens):
-            result = _no_op(_TOO_LONG)
-        elif cancel_event is not None and cancel_event.is_set():
-            result = _no_op("Compaction cancelled; history unchanged")
-        elif not view.unchanged(db, session_id):
+        # The summary is complete when it gets here: it has every section and
+        # stopped before its output cap (the summarizer fails it otherwise).
+        # What is left to check is that the chain is the one it read and
+        # that the render gets strictly smaller.
+        saved = 0
+        if not view.unchanged(db, session_id):
             result = _no_op("Context changed during compaction; retry with current history")
         elif not 0 < summary.cut_idx < len(history):
             result = _no_op("Invalid compaction range")
         else:
-            candidate = view.candidate_messages(summary.summary_text, summary.cut_idx)
+            from openprogram.runtime.context.persistence import covered_chain_ids
+            covers = covered_chain_ids(history[:summary.cut_idx])
+            restored = self._restored_state(session_id, view, covers)
+            candidate = view.candidate_messages(summary.summary_text, summary.cut_idx,
+                                                restored.get("restored_state") or "")
             saved = estimate_history_tokens(view.messages) - estimate_history_tokens(candidate)
             result = _no_op(_NO_REDUCTION) if saved <= 0 else None
         if result is not None:
-            if result.error in (_TOO_LONG, _NO_REDUCTION):
+            if result.error == _NO_REDUCTION:
                 default_hold.failed(held_as, result.error)
-            self._emit_compaction_finished(
-                on_event, session_id=session_id,
-                user_initiated=user_initiated, result=result,
-            )
-            return result
+            return _finish(result)
 
+        # Everything the node states is known before it is written, and goes
+        # in with it: one write, no stamping afterwards. ``tokens_after`` is
+        # the ring's own reading less what the summary saves on this chain.
+        covered_count = len(covers)
+        tokens_after = max(0, tokens_before - saved)
+        compacted_at = time.time()
         summary_id = self.persister.insert_summary_node(
             session_id,
             summary_text=summary.summary_text,
             cut_idx=summary.cut_idx,
             history=history,
-        )
-        if not summary_id:
-            result = _no_op("insert_summary_node returned None")
-            self._emit_compaction_finished(
-                on_event, session_id=session_id,
-                user_initiated=user_initiated, result=result,
-            )
-            return result
-        default_hold.done(held_as)
-
-        from openprogram.runtime.context.persistence import covered_chain_ids
-        covered_count = len(covered_chain_ids(history[:summary.cut_idx]))
-        try:
-            db.update_session(
-                session_id,
-                _last_summary_id=summary_id,
-                _last_summary_text=summary.summary_text,
-                _last_compacted_at=time.time(),
-            )
-        except Exception:
-            # Losing this silently makes the next turn recompact the
-            # same range, so it is worth a log line.
-            _log.warning(
-                "failed to persist compaction summary state for session %s",
-                session_id, exc_info=True,
-            )
-        self.usage.record_compaction(session_id)
-
-        new_history = rendered_history(db, session_id) or history
-        tokens_after = self._occupancy_tokens(session_id, new_history)
-        try:
-            db.merge_node_metadata(session_id, summary_id, {
+            facts={
+                "trigger": trigger,
+                "model": _model_name(model),
                 "tokens_before": tokens_before,
                 "tokens_after": tokens_after,
                 "summarised_count": covered_count,
-                "compacted_at": time.time(),
-            })
-        except Exception:
-            _log.warning(
-                "failed to stamp compaction stats on %s",
-                summary_id, exc_info=True,
-            )
+                "compacted_at": compacted_at,
+                # Given to the model as context, not as its own words
+                # (Codex, Pi, OpenCode, Claude Code all do).
+                "render_role": "user",
+            },
+            context_window=window,
+            **restored,
+        )
+        if not summary_id:
+            return _finish(_no_op("insert_summary_node returned None"))
+        default_hold.done(held_as)
+        from openprogram.models.usage.prefix_fingerprint import expect_break
+        expect_break(session_id, "compaction")
 
-        result = CompactResult(
+        self.usage.record_compaction(session_id)
+
+        result = _finish(CompactResult(
             ok=True,
             summary_text=summary.summary_text,
             summary_id=summary_id,
@@ -471,11 +512,7 @@ class DefaultContextEngine(ContextEngine):
                           else "auto")),
             error=summary.error,
             fell_back_to_structural=summary.fell_back_to_structural,
-        )
-        self._emit_compaction_finished(
-            on_event, session_id=session_id,
-            user_initiated=user_initiated, result=result,
-        )
+        ))
 
         # 事件层 tap（懒 import 防循环）。emit_safe 自己吞异常，无需再包一层。
         from openprogram.runtime.events import emit_safe
@@ -487,6 +524,19 @@ class DefaultContextEngine(ContextEngine):
                   {"session": session_id})
 
         return result
+
+    @staticmethod
+    def _restored_state(session_id: str, view: Any, covers: list[str]) -> dict:
+        """The working state written after the summary and the file lists
+        kept with it (compaction/restore.py). A summary is worth keeping
+        without them, so a failure leaves them out."""
+        try:
+            from openprogram.runtime.context.compaction.restore import restored
+            text, files = restored(session_id, view.graph, view.head_id, covers)
+            return {"restored_state": text, "restored_files": files}
+        except Exception:
+            _log.warning("restored state left out of the summary for %s", session_id, exc_info=True)
+            return {}
 
     # ---- Post-turn -----------------------------------------------------
 
@@ -516,6 +566,9 @@ class DefaultContextEngine(ContextEngine):
         model: Any,
         tail_tokens: int | None = None,
         clean_history: bool = False,
+        head_id: Optional[str] = None,
+        shown: Optional[dict] = None,
+        audience: str = "own_prompt",
     ) -> list:
         """Build provider Message[] via render_context + render_dag_messages —
         the SAME context pipeline runtime.exec uses (dag/overview.md
@@ -541,9 +594,22 @@ class DefaultContextEngine(ContextEngine):
         the latest steps (context/tail.py), for a turn that must stay small
         without compacting.
 
+        ``head_id`` is the tip of the branch a turn runs on when that is not
+        the selected branch (a turn beside it); otherwise the selected
+        branch's tip is read.
+
         ``clean_history`` is a run that starts from nothing (a scheduled
         task, a clean Job or sub-agent): the conversation it sits in is not
         its context.
+
+        ``shown``, when given, receives what the render shows that the
+        caller decides on: ``section_notes``, the last note of each section
+        in it, and ``turn_view``, what it shows of earlier dates, plan-mode
+        and Goal notes and todo use (``context.turn_context``).
+
+        ``audience`` is who the request is for (``context.turn_context``): a
+        conversation turn's own request shows the section notes beside
+        earlier messages; the default, a call with its own prompt, does not.
 
         Raises on failure → prepare() catches and falls back to _assemble.
         """
@@ -560,7 +626,7 @@ class DefaultContextEngine(ContextEngine):
         shim = SessionNodeWriter(db, session_id)
         graph = shim.load()
 
-        branch = db.get_branch(session_id) or history or []
+        branch = (db.get_branch(session_id, head_id) if head_id else db.get_branch(session_id)) or history or []
         branch_ids = [b.get("id") for b in branch if b.get("id")]
 
         head_id = None
@@ -623,7 +689,13 @@ class DefaultContextEngine(ContextEngine):
         except Exception:
             session_directory = None
 
-        messages = render_dag_messages(graph, read_ids, session_directory)
+        messages = render_dag_messages(graph, read_ids, session_directory,
+                                       reasoning_for=model, audience=audience)
+        if shown is not None:
+            from openprogram.runtime.context.turn_context import last_sections
+            shown["section_notes"] = last_sections(graph, read_ids, audience)
+            from openprogram.runtime.context.turn_context import turn_view
+            shown["turn_view"] = turn_view(graph, read_ids)
         if omitted:
             messages = self._with_omitted_note(graph, read_ids, messages)
         return messages
@@ -633,8 +705,8 @@ class DefaultContextEngine(ContextEngine):
         """Say that older messages were left out, right before the kept tail.
 
         A summary renders first as one assistant message, so the note goes
-        after it. Being a user message, it also keeps a tail that starts on a
-        reply from opening the request with an assistant message.
+        after it. Being a user message, it also keeps a tail that starts on
+        a reply from opening the request with an assistant message.
         """
         import time
 
@@ -642,27 +714,27 @@ class DefaultContextEngine(ContextEngine):
         from openprogram.runtime.context.nodes import summary_covers_ids
         from openprogram.runtime.context.tail import OMITTED_NOTE
 
-        has_summary = any(
-            nid in graph.nodes and summary_covers_ids(graph.nodes[nid]) is not None
-            for nid in read_ids[:1]
-        )
+        first = read_ids[0] if read_ids else None
+        position = 1 if (first in graph.nodes
+                         and summary_covers_ids(graph.nodes[first]) is not None) else 0
         note = UserMessage(
             role="user",
             content=[TextContent(type="text", text=OMITTED_NOTE)],
             timestamp=int(time.time() * 1000),
         )
-        position = 1 if has_summary else 0
         return [*messages[:position], note, *messages[position:]]
 
     def _estimate(self, history: list[dict]) -> int:
         from openprogram.runtime.context.tokens import estimate_history_tokens
         return estimate_history_tokens(history)
 
-    def _occupancy_tokens(self, session_id: str, history: list[dict]) -> int:
-        """Same total the ring and /context panel use (rendered view)."""
+    def _occupancy_tokens(self, session_id: str, history: list[dict],
+                          *, head_id: Optional[str] = None) -> int:
+        """Same total the ring and /context panel use for the chain ending
+        at ``head_id`` (rendered view)."""
         try:
             from openprogram.runtime.context.session_stats import estimate_total_used
-            total, _ = estimate_total_used(session_id)
+            total, _ = estimate_total_used(session_id, head_id)
             if total > 0:
                 return int(total)
         except Exception:
@@ -679,6 +751,7 @@ class DefaultContextEngine(ContextEngine):
         session_id: str,
         user_initiated: bool,
         result: CompactResult,
+        trigger: Optional[str] = None,
     ) -> None:
         if not on_event:
             return
@@ -687,6 +760,9 @@ class DefaultContextEngine(ContextEngine):
             "error": result.error,
             "session_id": session_id,
             "user_initiated": user_initiated,
+            "trigger": trigger,
+            # A stop is not a failure; the surfaces word it differently.
+            "cancelled": result.error == _CANCELLED,
             "no_op": result.no_op,
             "summary_id": result.summary_id,
             "summarised_count": result.summarised_count,

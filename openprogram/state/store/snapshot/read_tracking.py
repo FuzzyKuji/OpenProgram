@@ -22,6 +22,20 @@ on files we're about to read/write anyway, so it's not extra I/O of note.
 Resolution of "which session" reuses the same ``_store`` ContextVar the
 file-backup helper uses, so it's a no-op outside a dispatcher-driven
 turn (standalone tool calls, unit tests) — exactly like backups.
+
+Inside a turn the baseline belongs to the branch, and is derived from the
+branch's own history (Claude Code rebuilds its read state from the
+conversation the same way, ``extractReadFilesFromMessages``): each read or
+write is recorded against the turn it happened in (its reply node) in the
+conversation's ``read_baselines.jsonl``, and a check takes the newest
+record for that file whose turn lies on this branch's line, after the
+latest compaction on it. So the baseline does not depend on which process
+ran the read (a scheduled run, the CLI, the Worker), a branch made from an
+older point sees only the reads above that point, a rewind's retracted
+turns no longer count, two branches never share one, and a compaction
+makes the model read again. Paths are compared as
+``os.path.normcase(os.path.abspath(p))``; an SSH environment's paths are
+POSIX paths and compared as they are, under their own ``env`` key.
 """
 from __future__ import annotations
 
@@ -69,24 +83,141 @@ def _current_session() -> Optional[str]:
         return None
 
 
-def mark_seen(abs_path: str, *, session_id: Optional[str] = None) -> None:
+LOCAL_ENV = "local"
+LEDGER_FILE = "read_baselines.jsonl"
+
+
+def path_key(path: str, env: str = LOCAL_ENV) -> str:
+    """How a path is compared: case- and separator-normalized on the local
+    disk (Windows), as given on a remote POSIX host."""
+    if env != LOCAL_ENV:
+        return path
+    return os.path.normcase(os.path.abspath(path))
+
+
+def _current_anchor() -> Optional[str]:
+    """The node of the turn in flight that a read is recorded against: its
+    reply (a tool run in a subprocess carries ``<reply>|node:<id>``)."""
+    try:
+        from openprogram.state.store import _current_turn_id
+        raw = _current_turn_id.get() or ""
+    except Exception:
+        return None
+    raw = raw.split("|node:", 1)[0]
+    if raw.startswith("pred:"):
+        raw = raw[len("pred:"):]
+    return raw if raw and raw != "ROOT" else None
+
+
+def _ledger(session_id: str):
+    try:
+        from openprogram.state.store.current import current_store
+        db = current_store()
+        if not db._session_dir(session_id).exists():  # noqa: SLF001 - as todos.json
+            return None
+        return db.state_file(session_id, LEDGER_FILE)
+    except Exception:
+        return None
+
+
+def _line_of(session_id: str, anchor: str) -> Optional[tuple[set, float]]:
+    """The node ids on the line ending at ``anchor`` and the time of the
+    latest compaction on it (reads before it no longer count)."""
+    try:
+        from openprogram.state.store.current import current_store
+        chain = current_store().get_branch(session_id, anchor) or []
+    except Exception:
+        return None
+    if not chain:
+        return None
+    since = 0.0
+    for message in chain:
+        if str(message.get("id") or "").startswith("summary_"):
+            stamp = message.get("timestamp") or (message.get("metadata") or {}).get("compacted_at") or 0
+            try:
+                since = max(since, float(stamp))
+            except (TypeError, ValueError):
+                pass
+    return {message.get("id") for message in chain}, since
+
+
+def record_baseline(session_id: str, env: str, path: str, digest: str, size: int) -> Optional[dict]:
+    """Record what the turn in flight saw of ``path``; the record, or
+    ``None`` outside a turn (then only this process remembers it)."""
+    anchor = _current_anchor()
+    ledger = _ledger(session_id) if anchor else None
+    if ledger is None:
+        return None
+    import json
+    import time
+    entry = {"node": anchor, "env": env, "path": path_key(path, env), "hash": digest,
+             "size": size, "ts": time.time()}
+    with _lock:
+        lines = _ledger_lines(ledger)
+        lines.append(json.dumps(entry))
+        ledger.write_text("\n".join(lines[-LEDGER_LIMIT:]) + "\n", encoding="utf-8")
+    return entry
+
+
+LEDGER_LIMIT = 2000
+
+
+def _ledger_lines(ledger) -> list[str]:
+    try:
+        return [line for line in ledger.read_text(encoding="utf-8").splitlines() if line.strip()]
+    except FileNotFoundError:
+        return []
+
+
+def branch_baseline(session_id: str, env: str, path: str) -> tuple[bool, Optional[dict]]:
+    """``(tracked, record)``: whether the branch's history decides (a turn
+    is in flight on a recorded line) and, if so, the newest record of
+    ``path`` on that line since its latest compaction."""
+    anchor = _current_anchor()
+    ledger = _ledger(session_id) if anchor else None
+    if ledger is None:
+        return False, None
+    line = _line_of(session_id, anchor)
+    if line is None:
+        return False, None
+    on_line, since = line
+    key = path_key(path, env)
+    import json
+    found = None
+    with _lock:
+        lines = _ledger_lines(ledger)
+    for raw in lines:
+        try:
+            entry = json.loads(raw)
+        except ValueError:
+            continue
+        if (entry.get("path") == key and entry.get("env") == env
+                and entry.get("node") in on_line and float(entry.get("ts") or 0) > since):
+            found = entry
+    return True, found
+
+
+def mark_seen(abs_path: str, *, session_id: Optional[str] = None) -> Optional[dict]:
     """Record the file's current on-disk state as the agent's baseline.
 
     Called after a successful read (the agent now knows this content)
     and after a successful write (the agent just produced this content).
-    No-op outside a session, or if the file can't be fingerprinted.
+    Inside a turn the record goes on the branch's history (returned);
+    outside one only this process remembers it. No-op outside a session,
+    or if the file can't be fingerprinted.
     """
     if not abs_path:
-        return
+        return None
     sid = session_id or _current_session()
     if not sid:
-        return
+        return None
     fp = _fingerprint(abs_path)
     if fp is None:
-        return
-    key = os.path.abspath(abs_path)
+        return None
+    key = path_key(abs_path)
     with _lock:
         _seen.setdefault(sid, {})[key] = fp
+    return record_baseline(sid, LOCAL_ENV, abs_path, fp.sha1, fp.size)
 
 
 # Outcome codes from :func:`check_fresh`.
@@ -110,9 +241,13 @@ def check_fresh(abs_path: str, *, session_id: Optional[str] = None) -> str:
     sid = session_id or _current_session()
     if not sid:
         return UNTRACKED
-    key = os.path.abspath(abs_path)
-    with _lock:
-        baseline = _seen.get(sid, {}).get(key)
+    tracked, entry = branch_baseline(sid, LOCAL_ENV, abs_path)
+    if tracked:
+        baseline = (_Fingerprint(mtime_ns=0, size=int(entry.get("size") or 0), sha1=str(entry.get("hash")))
+                    if entry is not None else None)
+    else:
+        with _lock:
+            baseline = _seen.get(sid, {}).get(path_key(abs_path))
     if baseline is None:
         return NEVER_READ
     current = _fingerprint(abs_path)
@@ -150,5 +285,6 @@ def forget_session(session_id: str) -> None:
 
 __all__ = [
     "mark_seen", "check_fresh", "stale_message", "forget_session",
+    "record_baseline", "branch_baseline", "path_key", "LOCAL_ENV",
     "FRESH", "UNTRACKED", "NEVER_READ", "STALE",
 ]

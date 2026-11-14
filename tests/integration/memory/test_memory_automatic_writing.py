@@ -251,7 +251,17 @@ def test_permanent_writer_startup_failure_is_not_offered_next_poll(
 
         assert session_watcher._scan(idle_minutes=0) == 0
         processed = session_watcher._load_processed()
-        assert processed == {SESSION_ID: updated_at}
+        if failure == "lazy-credential":
+            # A missing key is the writer's sign-in, the same for every
+            # conversation: it is recorded once, nothing is given up on,
+            # and the conversation is written once a sign-in changes.
+            assert processed == {}
+            state = session_watcher.load_state()
+            assert state["credentials"]["writer"]["reason_code"] == (
+                "MODEL_AUTHENTICATION"
+            )
+        else:
+            assert processed == {SESSION_ID: updated_at}
         ended = [
             payload for name, payload in events
             if name == "memory.ingest_ended"

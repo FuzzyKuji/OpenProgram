@@ -58,7 +58,7 @@
 <thead><tr><th scope="col">部分</th><th scope="col">规则</th></tr></thead>
 <tbody>
 <tr><th scope="row">请求与回复</th><td>同样的 <code translate="no">load_session</code>，带 <code translate="no">history_before</code>、<code translate="no">history_after</code>、<code translate="no">history_around</code> 或 <code translate="no">history_latest</code>，值可以是任意行 id。25 轮或 512 KiB。正文从存储新鲜读取。回复 <code translate="no">session_history_page { id, turns, window, request_id, action }</code>。</td></tr>
-<tr><th scope="row">游标</th><td>不再位于分支上的游标返回 <code translate="no">cursor_not_on_branch</code>，客户端做一次首次读取。只是前进的 head 不算不匹配。</td></tr>
+<tr><th scope="row">游标</th><td>不再位于分支上的游标返回 <code translate="no">cursor_not_on_branch</code>，客户端做一次首次读取。保存在该行上的阅读位置同时作废，首次读取不会再请求它。只是前进的 head 不算不匹配。</td></tr>
 <tr><th scope="row">放置</th><td>客户端按 <code translate="no">window.start</code> 放置页，绝不放到末尾：既不相邻也不与已持有跨度重叠的页被丢弃。绘制前按消息 id 恢复。按整页淘汰。</td></tr>
 <tr><th scope="row">锚点</th><td>锚点只从服务端行保存，绝不从本地行保存。</td></tr>
 </tbody>

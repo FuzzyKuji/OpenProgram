@@ -8,6 +8,7 @@
  * every quiet moment, a bar sized by loudness while you speak, newest on
  * the right. Engine, model and language live in Settings → Voice only.
  */
+import { platformKeys, useIsMacPlatform } from "@/lib/shortcut-keys";
 import { buttonVariants } from "@/components/ui/button";
 import { HoverTip, TipBody } from "@/components/ui/tooltip";
 import { SolarIcon } from "@/components/solar-icons";
@@ -19,6 +20,7 @@ import styles from "./voice.module.css";
 
 export function MicButton({ state, onToggle }: { state: VoiceState; onToggle: () => void }) {
   const { text } = useTranslation();
+  const mac = useIsMacPlatform();
   const active = state === "recording" || state === "starting";
   const label = active
     ? text("Stop voice input", "停止语音输入")
@@ -32,8 +34,8 @@ export function MicButton({ state, onToggle }: { state: VoiceState; onToggle: ()
           title={label}
           detail={active
             ? text("Esc discards this recording.", "按 Esc 放弃这段录音。")
-            : text("Click, or hold ⌥Space while typing. Text stays in the box to edit.",
-              "点击，或在输入时按住 ⌥空格。文字留在输入框里，可以改完再发。")}
+            : text(`Click, or hold ${platformKeys("⌥", mac)}Space while typing. Text stays in the box to edit.`,
+              `点击，或在输入时按住 ${platformKeys("⌥", mac)}空格。文字留在输入框里，可以改完再发。`)}
         />
       }
     >

@@ -66,6 +66,52 @@ test("retains a rejected draft across reopening and exposes a Git warning", asyn
   warned.edit("after"); await warned.flush();
   assert.equal(warned.state.warning, "Git failed");
 });
+test("a held file opens with the server's note on what keeps it out of memory", async () => {
+  const draft = new MemoryDraft("/held", async () => reply("- uncited", { warning: "Not in the memory format" }), storage());
+  await draft.load();
+  assert.equal(draft.state.warning, "Not in the memory format");
+});
+test("a save that leaves only the title keeps it in the editor with the server's note", async () => {
+  const calls = [];
+  const draft = new MemoryDraft("/note", async (_url, init) => {
+    if (!init) return reply("# Note\n\nA fact.[^e1]\n");
+    const body = JSON.parse(init.body);
+    calls.push(body);
+    return body.content === "# Note\n"
+      ? reply(body.content, { removed: true, warning: "topics/note.md has no cited paragraph" })
+      : reply(body.content);
+  }, storage());
+  await draft.load();
+  draft.edit("# Note\n");
+  await draft.flush();
+  assert.equal(draft.state.content, "# Note\n");
+  assert.equal(draft.state.base, "# Note\n");
+  assert.equal(draft.state.error, "");
+  assert.equal(draft.state.removed, true);
+  assert.match(draft.state.warning, /no cited paragraph/);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(calls.length, 1, "nothing left to save, so no second request");
+  draft.edit("# Note\n\nA fact.[^e1]\n");
+  await draft.flush();
+  assert.equal(calls[1].base_content, "# Note\n");
+  assert.equal(draft.state.removed, false);
+  assert.equal(draft.state.warning, "");
+});
+test("a removed topic that is on the server again loads as an ordinary one", async () => {
+  let saved = false;
+  const draft = new MemoryDraft("/note", async (_url, init) => {
+    if (init) { saved = true; return reply("# Note\n", { removed: true }); }
+    return reply(saved ? "# Note\n\nA fact.[^e1]\n" : "# Note\n\nOld.[^e1]\n");
+  }, storage());
+  await draft.load();
+  draft.edit("# Note\n");
+  await draft.flush();
+  assert.equal(draft.state.removed, true);
+  // Another writer puts the topic back; opening it again reads that file.
+  await draft.load();
+  assert.equal(draft.state.content, "# Note\n\nA fact.[^e1]\n");
+  assert.equal(draft.state.removed, false);
+});
 test("Retry reloads after a failed initial read", async () => {
   let reads = 0;
   const draft = new MemoryDraft("/note", async () => ++reads === 1

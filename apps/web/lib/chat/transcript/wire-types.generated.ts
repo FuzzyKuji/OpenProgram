@@ -18,6 +18,7 @@ export interface Block {
   outcome?: string;
   truncated?: boolean;
   total_bytes?: number;
+  full_output?: Record<string, number>;
   message_id?: string;
   node_id?: string;
   provider_executed?: boolean;

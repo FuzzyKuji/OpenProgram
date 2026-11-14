@@ -31,7 +31,6 @@
  Usage:
    .\scripts\install.ps1                  # full install (everything above)
    .\scripts\install.ps1 -Minimal         # bare host only
-   .\scripts\install.ps1 -Stealth         # + stealth browsers
    .\scripts\install.ps1 -Programs owner/repo  # + install program packages after the main install
    .\scripts\install.ps1 -Target DIR      # where to clone when run off the web (default $HOME\OpenProgram)
    .\scripts\install.ps1 -Yes             # skip every prompt, use defaults
@@ -44,7 +43,6 @@
 [CmdletBinding()]
 param(
   [string]$Python = "",
-  [switch]$Stealth,
   [string[]]$Programs = @(),       # program sources to install: directory, git URL or owner/repo
   [switch]$Minimal,               # bare host: skip web build / programs / default extras
   [string]$Target = "",           # clone destination when run off the web (default $HOME\OpenProgram)
@@ -155,7 +153,6 @@ if (-not $Bootstrapped -and -not (Test-OpenProgramCheckout $HostRoot)) {
   Step "handing off to the cloned installer: $child"
   $forward = @("-Bootstrapped")
   if ($Minimal)      { $forward += "-Minimal" }
-  if ($Stealth)      { $forward += "-Stealth" }
   if ($Yes)          { $forward += "-Yes" }
   if ($Python)       { $forward += @("-Python", $Python) }
   if ($Programs)     { $forward += @("-Programs", ($Programs -join ',')) }
@@ -279,12 +276,14 @@ function Install-CliLauncher {
   $quotedPython = $PY.Replace('%', '%%')
   # Parse embedded Unicode paths as UTF-8 even on legacy console code pages,
   # then restore the caller's code page without losing Python's exit status.
+  # Python runs in UTF-8 mode, as the released launchers start it, so text
+  # with no encoding named reads the same on every Windows language.
   $content = @"
 @echo off
 setlocal DisableDelayedExpansion
 for /f "tokens=2 delims=:." %%P in ('chcp') do set "_OPENPROGRAM_CODEPAGE=%%P"
 chcp 65001 >nul
-"$quotedPython" -m openprogram %*
+"$quotedPython" -X utf8 -m openprogram %*
 set "_OPENPROGRAM_EXIT=%ERRORLEVEL%"
 chcp %_OPENPROGRAM_CODEPAGE% >nul
 exit /b %_OPENPROGRAM_EXIT%
@@ -351,17 +350,6 @@ function Install-DefaultExtras {
   if ($LASTEXITCODE -ne 0) { Die "playwright chromium download failed (needs network)" }
 }
 
-# ---- 7. heavier opt-in extras: stealth browsers ------------------------------
-function Install-Extras {
-  if ($Stealth) {
-    Step "installing stealth browser (patchright + camoufox)"; Pip install -e "${HostRoot}[browser-stealth]"
-    & $PY -m patchright install chromium
-    if ($LASTEXITCODE -ne 0) { Die "patchright Chromium install failed" }
-    & $PY -m camoufox fetch
-    if ($LASTEXITCODE -ne 0) { Die "camoufox fetch failed" }
-  }
-}
-
 # ---- 8. optional: program packages (-Programs) -------------------------------
 function Install-Programs {
   if (-not $Programs) { return }
@@ -378,7 +366,6 @@ function Install-Programs {
 Step "OpenProgram setup  (os=Windows, minimal=$Minimal)"
 Install-Web
 Install-DefaultExtras
-Install-Extras
 Install-Programs
 
 Write-Host "`nOpenProgram ready. Open a new terminal so the openprogram command is found." -ForegroundColor Green

@@ -24,6 +24,7 @@ import re
 import threading
 import time
 from typing import Any
+from openprogram.host._platform.filesystem import replace_file
 
 
 def session_key_for_agent(
@@ -112,7 +113,7 @@ def start_new_generation(agent, base_key: str) -> int:
         tmp = path.with_suffix(".tmp")
         tmp.write_text(_json.dumps(table, indent=2, sort_keys=True),
                        encoding="utf-8")
-        tmp.replace(path)
+        replace_file(tmp, path)
         return table[ident]
 
 

@@ -13,6 +13,15 @@ Two storage layers:
   restarts so a long-running conversation's compaction state persists
   across crashes.
 
+The ``last_*`` occupancy figures belong to a branch: each branch of a
+conversation reads its own chain, so a turn on one branch never budgets
+against another branch's request. The persisted record keeps every
+branch's figures under ``branches`` and, at its top level, the selected
+branch's (``branch_id``) as the projection the context ring reads; the
+cumulative billing totals stay per conversation. The branch a call means
+is the one it names, else the branch the current turn runs on (the usage
+context's ``branch_id``), else the projection.
+
 Tracker also handles prompt-cache observation: every Anthropic response
 carries ``cache_read_input_tokens`` separately from ``input_tokens`` —
 we track the split so an engine can tell "we're sending 100K tokens but
@@ -23,12 +32,16 @@ from __future__ import annotations
 import json
 import logging
 import time
+from dataclasses import replace
 from threading import Lock
-from typing import Any
+from typing import Any, Optional
 
 from openprogram.runtime.context.types import UsageState
 
 _log = logging.getLogger(__name__)
+
+_LAST_FIELDS = ("last_prompt_tokens", "last_completion_tokens",
+                "last_cache_read_tokens", "last_cache_write_tokens")
 
 
 class UsageTracker:
@@ -44,29 +57,71 @@ class UsageTracker:
     """
 
     def __init__(self, *, storage_key: str = "_usage") -> None:
+        # The conversation's state: its billing totals and the projected
+        # branch's ``last_*`` figures.
         self._cache: dict[str, UsageState] = {}
+        # Which branch the projection's ``last_*`` belong to (None: a record
+        # written before branches were kept, read as the selected branch's).
+        self._projection: dict[str, Optional[str]] = {}
+        # Each branch's own ``last_*`` figures, by conversation.
+        self._branches: dict[str, dict[str, dict[str, Any]]] = {}
         self._lock = Lock()
         self.storage_key = storage_key
 
     # ---- Read ----------------------------------------------------------
 
-    def get(self, session_id: str) -> UsageState:
-        """Return the latest state for ``session_id`` — load from DB
-        on a cache miss."""
+    def _session_state(self, session_id: str) -> UsageState:
         with self._lock:
             cached = self._cache.get(session_id)
             if cached is not None:
                 return cached
         state = self._load_from_db(session_id)
         with self._lock:
-            self._cache[session_id] = state
-        return state
+            self._cache.setdefault(session_id, state)
+            return self._cache[session_id]
+
+    @staticmethod
+    def _branch_for(session_id: str, branch_id: Optional[str]) -> Optional[str]:
+        if branch_id is not None:
+            return branch_id
+        try:
+            from openprogram.models.usage.context import current_usage_context
+            context = current_usage_context()
+        except Exception:
+            return None
+        if context.session_id not in (None, session_id):
+            return None
+        return context.branch_id
+
+    def get(self, session_id: str, branch_id: Optional[str] = None) -> UsageState:
+        """Return the latest state for ``session_id`` as ``branch_id`` reads
+        it — load from DB on a cache miss.
+
+        The billing totals are the conversation's; the ``last_*`` figures are
+        the branch's own. A branch with no figures of its own reads none,
+        unless it is the projected branch (or the record predates branches).
+        """
+        state = self._session_state(session_id)
+        branch = self._branch_for(session_id, branch_id)
+        if branch is None:
+            return state
+        with self._lock:
+            own = (self._branches.get(session_id) or {}).get(branch)
+            projected = self._projection.get(session_id)
+        if own is not None:
+            return replace(state, **{key: int(own.get(key) or 0) for key in _LAST_FIELDS},
+                           last_updated_at=float(own.get("last_updated_at") or 0),
+                           source=own.get("source") or state.source)
+        if projected is None or projected == branch:
+            return state
+        return replace(state, **{key: 0 for key in _LAST_FIELDS}, source="estimate")
 
     # ---- Write ---------------------------------------------------------
 
     def record_turn(self, session_id: str, *,
                     usage: dict[str, Any] | None,
-                    persist: bool = True) -> UsageState:
+                    persist: bool = True,
+                    branch_id: Optional[str] = None) -> UsageState:
         """Record one turn's provider-reported usage.
 
         ``usage`` shape mirrors what the dispatcher gets from
@@ -74,10 +129,16 @@ class UsageTracker:
         ``output_tokens``, ``cache_read_tokens``, ``cache_write_tokens``.
         Missing keys default to 0.
 
-        Returns the updated state for callers that want to immediately
-        check thresholds.
+        The ``last_*`` figures go to the turn's branch (``branch_id``, else
+        the current turn's); the projection takes them too when that branch
+        is the selected one. The billing totals always add up per
+        conversation.
+
+        Returns the updated state as the turn's branch reads it, for
+        callers that want to immediately check thresholds.
         """
-        prev = self.get(session_id)
+        prev = self._session_state(session_id)
+        branch = self._branch_for(session_id, branch_id)
         u = usage or {}
         # Dispatcher totals carry an explicit last-request occupancy. Never
         # substitute their cumulative billing fields when that value is zero.
@@ -100,14 +161,36 @@ class UsageTracker:
             last_compacted_at=prev.last_compacted_at,
             source="provider" if prompt > 0 else "estimate",
         )
+        projected = branch is None or branch == self._selected_branch(session_id)
         with self._lock:
-            self._cache[session_id] = new
+            if branch is not None:
+                self._branches.setdefault(session_id, {})[branch] = {
+                    **{key: getattr(new, key) for key in _LAST_FIELDS},
+                    "last_updated_at": new.last_updated_at, "source": new.source,
+                }
+            if projected:
+                self._cache[session_id] = new
+                self._projection[session_id] = branch
+            else:
+                # Another branch's turn: the projection keeps the selected
+                # branch's figures; only the totals move.
+                self._cache[session_id] = replace(
+                    new, **{key: getattr(prev, key) for key in _LAST_FIELDS},
+                    source=prev.source)
         if persist:
-            self._persist(session_id, new)
-        return new
+            self._persist(session_id, self._cache[session_id])
+        return self.get(session_id, branch) if branch is not None else new
+
+    @staticmethod
+    def _selected_branch(session_id: str) -> Optional[str]:
+        try:
+            from openprogram.runtime.context.session_db import default_db
+            return (default_db().get_session(session_id) or {}).get("active_branch_id")
+        except Exception:
+            return None
 
     def record_compaction(self, session_id: str) -> UsageState:
-        state = self.get(session_id)
+        state = self._session_state(session_id)
         state.compaction_count += 1
         state.last_compacted_at = time.time()
         with self._lock:
@@ -147,10 +230,15 @@ class UsageTracker:
         """Flush + drop the in-memory cache slot for a closed session."""
         with self._lock:
             self._cache.pop(session_id, None)
+            self._projection.pop(session_id, None)
+            self._branches.pop(session_id, None)
 
     def reset(self, session_id: str) -> None:
         """Wipe everything for this session (used by /reset, clear_sessions)."""
-        self._cache.pop(session_id, None)
+        with self._lock:
+            self._cache.pop(session_id, None)
+            self._projection.pop(session_id, None)
+            self._branches.pop(session_id, None)
         self._persist(session_id, UsageState())
 
     # ---- Persistence ---------------------------------------------------
@@ -160,7 +248,9 @@ class UsageTracker:
             from openprogram.runtime.context.session_db import default_db
             db = default_db()
             sess = db.get_session(session_id) or {}
-            raw = (sess.get("extra_meta") or {}).get(self.storage_key)
+            # Written as a session field (``_persist``); an older row kept
+            # it under ``extra_meta``.
+            raw = sess.get(self.storage_key) or (sess.get("extra_meta") or {}).get(self.storage_key)
         except Exception:
             raw = None
         if not raw:
@@ -173,6 +263,14 @@ class UsageTracker:
             # Old last_* fields contain turn totals. Preserve billing history.
             for key in ("last_prompt_tokens", "last_cache_read_tokens", "last_cache_write_tokens"):
                 data[key] = 0
+        branches = data.get("branches")
+        with self._lock:
+            self._projection.setdefault(session_id, data.get("branch_id"))
+            if isinstance(branches, dict):
+                stored = self._branches.setdefault(session_id, {})
+                for key, value in branches.items():
+                    if isinstance(value, dict):
+                        stored.setdefault(key, {**value, "source": "cached"})
         return UsageState(
             last_prompt_tokens=int(data.get("last_prompt_tokens", 0) or 0),
             last_completion_tokens=int(data.get("last_completion_tokens", 0) or 0),
@@ -205,6 +303,14 @@ class UsageTracker:
                 "last_updated_at": state.last_updated_at,
                 "last_compacted_at": state.last_compacted_at,
             }
+            with self._lock:
+                projected = self._projection.get(session_id)
+                branches = {key: {field: value for field, value in row.items() if field != "source"}
+                            for key, row in (self._branches.get(session_id) or {}).items()}
+            if projected is not None:
+                data["branch_id"] = projected
+            if branches:
+                data["branches"] = branches
             default_db().update_session(
                 session_id,
                 **{self.storage_key: json.dumps(data, default=str)},

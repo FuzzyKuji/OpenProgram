@@ -17,6 +17,15 @@ Beside the board, ``plans`` records where each plan appeared: one entry
 per (turn, plan), holding the plan as that turn last left it. The chat
 draws each entry under the reply of its ``anchor_id`` turn. A file
 without ``plans`` (version 1) reads as a board with no placed plans.
+
+Each branch of the conversation has its own board and plans (version 3:
+``{"branches": {branch_id: {"todos", "plans"}}}``), the way Claude Code
+keeps one todo list per agent context: two branches running side by side
+never overwrite each other's list. A branch's board is the turn's own
+(``current_branch_id``); a branch made by a retry, an edit or a fork starts
+with a copy of the board of the branch it left from, taken the first time
+it reads one. An older file's single board belongs to the branch that was
+selected when it is first read.
 """
 from __future__ import annotations
 
@@ -47,6 +56,38 @@ def current_session_id() -> Optional[str]:
         return None
 
 
+def current_branch_id(session_id: str) -> Optional[str]:
+    """The branch a board read or write belongs to: the running turn's own
+    branch when the turn is in this conversation, else the selected one."""
+    try:
+        from openprogram.runtime.agent.turn_request import get_turn_request
+        req = get_turn_request()
+    except Exception:
+        req = None
+    if req is not None and getattr(req, "session_id", None) == session_id and getattr(req, "branch_id", None):
+        return req.branch_id
+    return _selected_branch(session_id)
+
+
+def _selected_branch(session_id: str) -> Optional[str]:
+    try:
+        from openprogram.runtime.context.session_db import default_db
+        return (default_db().get_session(session_id) or {}).get("active_branch_id")
+    except Exception:
+        return None
+
+
+def _parent_branch(session_id: str, branch_id: str) -> Optional[str]:
+    """The branch a branch was made from (its record's ``parent_branch_id``)."""
+    try:
+        from openprogram.runtime.context.session_db import default_db
+        ref = ((default_db().get_session(session_id) or {}).get("branch_refs") or {}).get(branch_id)
+    except Exception:
+        return None
+    parent = ref.get("parent_branch_id") if isinstance(ref, dict) else None
+    return parent if isinstance(parent, str) and parent != branch_id else None
+
+
 def todos_path(session_id: str):
     """Path to the session's todos.json, or None when the session repo
     doesn't exist."""
@@ -68,27 +109,93 @@ def _read(session_id: str) -> dict[str, Any]:
     return blob if isinstance(blob, dict) else {}
 
 
-def load(session_id: str) -> list[dict[str, Any]]:
-    todos = _read(session_id).get("todos")
+_NO_BRANCH = ""
+
+
+def _branches(session_id: str, blob: Optional[dict] = None) -> dict[str, dict[str, Any]]:
+    """Every branch's ``{todos, plans}``; an older file's single board is
+    the selected branch's."""
+    blob = _read(session_id) if blob is None else blob
+    branches = blob.get("branches")
+    if isinstance(branches, dict):
+        return {key: value for key, value in branches.items() if isinstance(value, dict)}
+    if "todos" in blob or "plans" in blob:
+        return {_selected_branch(session_id) or _NO_BRANCH: {
+            "todos": blob.get("todos"), "plans": blob.get("plans")}}
+    return {}
+
+
+def _entry(session_id: str, branch_id: Optional[str]) -> dict[str, Any]:
+    """One branch's board. A branch with none yet starts from a copy of the
+    board of the branch it was made from, stored on it at once, so later
+    changes on either side stay apart."""
+    key = branch_id or _NO_BRANCH
+    branches = _branches(session_id)
+    if key in branches:
+        return branches[key]
+    seen = {key}
+    parent = _parent_branch(session_id, key) if branch_id else None
+    while parent and parent not in seen:
+        if parent in branches:
+            copied = json.loads(json.dumps(branches[parent]))
+            try:
+                _write(session_id, {**branches, key: copied})
+            except Exception:  # noqa: BLE001 - the copy is read again next time
+                _log.debug("todo board copy not stored session=%s", session_id, exc_info=True)
+            return copied
+        seen.add(parent)
+        parent = _parent_branch(session_id, parent)
+    return {}
+
+
+def _write(session_id: str, branches: dict[str, dict[str, Any]]) -> None:
+    path = todos_path(session_id)
+    if path is None:
+        raise ValueError(f"session {session_id!r} not found")
+    payload = {"version": 3, "branches": branches}
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def load(session_id: str, branch_id: Optional[str] = None) -> list[dict[str, Any]]:
+    """The board of ``branch_id`` (the current turn's branch by default)."""
+    todos = _entry(session_id, branch_id or current_branch_id(session_id)).get("todos")
     return todos if isinstance(todos, list) else []
 
 
-def load_plans(session_id: str) -> list[dict[str, Any]]:
-    plans = _read(session_id).get("plans")
+def _valid_plans(plans: Any) -> list[dict[str, Any]]:
     if not isinstance(plans, list):
         return []
     return [p for p in plans if isinstance(p, dict) and p.get("anchor_id") and isinstance(p.get("todos"), list)]
 
 
-def save(session_id: str, todos: list[dict[str, Any]], plans: Optional[list[dict[str, Any]]] = None) -> None:
-    """Write the board; ``plans`` omitted keeps the placed plans on file."""
-    path = todos_path(session_id)
-    if path is None:
-        raise ValueError(f"session {session_id!r} not found")
+def load_plans(session_id: str, branch_id: Optional[str] = None) -> list[dict[str, Any]]:
+    """The placed plans of ``branch_id`` (the current turn's branch by default)."""
+    return _valid_plans(_entry(session_id, branch_id or current_branch_id(session_id)).get("plans"))
+
+
+def load_all_plans(session_id: str) -> list[dict[str, Any]]:
+    """Every branch's placed plans: the chat draws each under its own turn,
+    and a turn lies on one branch, so they never collide."""
+    out: list[dict[str, Any]] = []
+    seen: set = set()
+    for entry in _branches(session_id).values():
+        for plan in _valid_plans(entry.get("plans")):
+            ident = (plan.get("anchor_id"), plan.get("plan_id"))
+            if ident not in seen:
+                seen.add(ident)
+                out.append(plan)
+    return out
+
+
+def save(session_id: str, todos: list[dict[str, Any]], plans: Optional[list[dict[str, Any]]] = None,
+         branch_id: Optional[str] = None) -> None:
+    """Write one branch's board; ``plans`` omitted keeps its placed plans."""
+    key = branch_id or current_branch_id(session_id) or _NO_BRANCH
     if plans is None:
-        plans = load_plans(session_id)
-    payload = {"version": 2, "todos": todos, "plans": plans}
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        plans = load_plans(session_id, key)
+    branches = _branches(session_id)
+    branches[key] = {"todos": todos, "plans": plans}
+    _write(session_id, branches)
 
 
 def next_id(todos: list[dict[str, Any]]) -> str:
@@ -209,7 +316,9 @@ def publish(session_id: str, todos: list[dict[str, Any]], plans: Optional[list[d
         interface_link.broadcast(
             {"type": "todos_update", "data": {
                 "session_id": session_id, "todos": todos,
-                "plans": plans if plans is not None else load_plans(session_id),
+                "branch_id": current_branch_id(session_id),
+                # The chat replaces its plans with these: every branch's.
+                "plans": load_all_plans(session_id),
             }},
         )
     except Exception:

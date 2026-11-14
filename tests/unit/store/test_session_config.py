@@ -34,7 +34,7 @@ def test_session_run_config_round_trip(tmp_db: SessionDB) -> None:
     )
 
     assert tools_override_from_config(cfg) == {"inherit": True, "web_search": True}
-    assert reasoning_from_config(cfg) is None
+    assert reasoning_from_config(cfg) == "off"
     assert permission_from_config(cfg, default="auto") == "bypass"
 
     loaded = load_session_run_config("c1")
@@ -68,7 +68,7 @@ def test_thinking_aliases_normalize(tmp_db: SessionDB) -> None:
         thinking_effort="none",
     )
     assert cfg.thinking_effort == "off"
-    assert reasoning_from_config(cfg) is None
+    assert reasoning_from_config(cfg) == "off"
 
     cfg = save_session_run_config(
         "c1",
@@ -143,10 +143,21 @@ def test_set_sandbox_false_persists_on_existing_session(tmp_db, monkeypatch) -> 
         monkeypatch, tmp_db, {"session_id": "s1", "sandbox_enabled": False},
     )
     data = sent[0]["data"]
+    # Off is what the configured default gives anyway: nothing is stored and
+    # the conversation keeps following the default.
     assert data["sandbox"] is False
-    assert data["sandbox_enabled"] is False
+    assert (data["sandbox_enabled"], data["sandbox_source"]) == (None, "inherited")
     assert frames[0]["data"]["sandbox"] is False
-    assert load_session_run_config("s1").sandbox_enabled is False
+    assert load_session_run_config("s1").sandbox_enabled is None
+    # A choice that differs from the default is the conversation's own.
+    sent, _frames = _set_sandbox_payload(
+        monkeypatch, tmp_db, {"session_id": "s1", "sandbox_enabled": True},
+    )
+    assert (sent[0]["data"]["sandbox_enabled"], sent[0]["data"]["sandbox_source"]) == (True, "branch")
+    assert load_session_run_config("s1").sandbox_enabled is True
+    # Switching back off clears it again.
+    _set_sandbox_payload(monkeypatch, tmp_db, {"session_id": "s1", "sandbox_enabled": False})
+    assert load_session_run_config("s1").sandbox_enabled is None
 
 
 def test_set_sandbox_false_echoes_before_session_exists(tmp_db, monkeypatch) -> None:

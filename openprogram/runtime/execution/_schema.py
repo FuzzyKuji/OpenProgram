@@ -199,10 +199,33 @@ TABLES: dict[str, Table] = {
             'trusted_actor_json': None,
             'config_snapshot_ref': None,
             'created_at': None,
+            # The id the client gave the send that admitted this execution, so
+            # a stop can name the turn before it knows the execution id. Rows
+            # admitted before the column existed hold None.
+            'client_request_id': None,
         },
         key=('execution_id',),
         required=('input_ref', 'input_hash', 'entrypoint', 'session_id', 'trusted_actor_json', 'config_snapshot_ref', 'created_at'),
+        unique=(('session_id', 'client_request_id'),),
         lookups=('session_id',),
+    ),
+    # A stop that named a send (session, client request id) before any
+    # execution was admitted for it. Admission of that send takes the mark
+    # (``execution_id``), and activation ends the turn as stopped.
+    'execution_stop_marks': Table(
+        columns={
+            'session_id': None,
+            'client_request_id': None,
+            'command_id': None,
+            'actor_json': None,
+            'reason_code': None,
+            'created_at': None,
+            'expires_at': None,
+            'execution_id': None,
+        },
+        key=('session_id', 'client_request_id'),
+        required=('session_id', 'client_request_id', 'command_id', 'actor_json', 'reason_code', 'created_at', 'expires_at'),
+        lookups=('session_id', 'execution_id'),
     ),
     'execution_resource_intents': Table(
         columns={

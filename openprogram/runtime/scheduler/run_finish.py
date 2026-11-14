@@ -36,6 +36,7 @@ from typing import Any
 from openprogram.runtime.execution.model import TERMINAL_EXECUTION_STATUSES, ExecutionStatus
 
 from . import task_branch, task_runs, time_limits
+from openprogram.host._platform.filesystem import replace_file
 
 _LOG = logging.getLogger(__name__)
 
@@ -104,9 +105,31 @@ def finish(outcome: Mapping[str, Any]) -> None:
         _finish(dict(outcome))
 
 
+def close_run_tabs(execution_id: str, *, wait: bool = False) -> None:
+    """A run starts clean and ends with its answer: the pages it opened close with it.
+
+    Safe for any execution that ended: only a scheduled run's and a check-in's
+    pages carry the run they were opened in. The Worker does not wait for the
+    App; a run's own process passes ``wait`` so the pages are closed before
+    the process exits."""
+    try:
+        from openprogram.programs._host import services
+
+        browser = services.lookup("browser")
+        if browser is not None and execution_id:
+            if wait:
+                browser.tabs.close_run_tabs(execution_id)
+            else:
+                browser.tabs.close_run_tabs_soon(execution_id)
+    except Exception:  # noqa: BLE001 - a page left open is bounded by the conversation's limit
+        _LOG.warning("pages of run %s not closed", execution_id, exc_info=True)
+
+
 def _finish(outcome: dict[str, Any]) -> None:
     session_id = str(outcome.get("session_id") or "")
     execution_id = str(outcome.get("execution_id") or "")
+    # Every ending the Worker hears comes through here, the ones kept on disk too.
+    close_run_tabs(execution_id)
     try:
         from openprogram.runtime import interface_link
 
@@ -186,14 +209,20 @@ def finish_held(request: Any, result: Any) -> None:
         finish(outcome)
 
 
+def scheduled_task_of(executions: Any, execution: Any) -> dict[str, Any] | None:
+    """The task this execution is a run of, if it is one."""
+    payload = executions.get_agent_turn_input(execution.execution_id) or {}
+    task = (payload.get("request") or {}).get("scheduled_task")
+    return dict(task) if isinstance(task, Mapping) and task.get("id") else None
+
+
 def finish_resumed(executions: Any, execution: Any, result: Any) -> None:
     """A turn this Worker continued or closed has stopped: finish it if it is a
     task's run. ``result`` is ``None`` when it stopped with no turn running."""
-    payload = executions.get_agent_turn_input(execution.execution_id) or {}
-    task = (payload.get("request") or {}).get("scheduled_task")
-    if not isinstance(task, Mapping) or not task.get("id"):
+    task = scheduled_task_of(executions, execution)
+    if task is None:
         return
-    outcome = conclude(execution.session_id, dict(task), execution.execution_id, result, execution)
+    outcome = conclude(execution.session_id, task, execution.execution_id, result, execution)
     if outcome is not None:
         finish(outcome)
 
@@ -226,7 +255,7 @@ def keep(outcome: Mapping[str, Any]) -> None:
         try:
             with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
                 json.dump(dict(outcome), handle, ensure_ascii=False)
-            os.replace(temporary, _kept_path(str(outcome["execution_id"])))
+            replace_file(temporary, _kept_path(str(outcome["execution_id"])))
         finally:
             if os.path.exists(temporary):
                 os.unlink(temporary)

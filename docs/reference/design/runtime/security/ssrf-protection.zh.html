@@ -103,7 +103,7 @@
 <thead><tr><th scope="col">排除项</th><th scope="col">归属与窄理由</th></tr></thead>
 <tbody>
 <tr><th scope="row"><code translate="no">security/safe_http.py</code></th><td>托管传输；唯一直接构造 <code translate="no">httpcore</code> 连接池和代理的地方</td></tr>
-<tr><th scope="row"><code translate="no">programs/applications/browser/chrome.py</code></th><td>浏览器控制；确切的浏览器 opener 和回环 CDP 存活连接</td></tr>
+<tr><th scope="row"><code translate="no">programs/applications/browser/app_endpoint.py</code></th><td>浏览器控制；对 App 的 CDP 端点的回环探测</td></tr>
 <tr><th scope="row"><code translate="no">cli/commands/mcp.py</code></th><td>Owner 控制面；仅认证后端 opener</td></tr>
 <tr><th scope="row"><code translate="no">cli/ink.py</code>、<code translate="no">cli/commands/doctor.py</code>、<code translate="no">cli/commands/rescue.py</code></th><td>Owner 控制面；仅确切的回环 Worker 存活 socket</td></tr>
 </tbody>

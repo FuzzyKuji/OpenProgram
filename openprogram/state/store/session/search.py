@@ -167,7 +167,7 @@ def _rg_search(targets: list[Path], query: str) -> list[str]:
             ["rg", "--files-with-matches", "--no-messages",
              "--glob", "*.jsonl", "--max-count", "1",
              "-i", "--", query, *map(str, targets)],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10,
         )
     except (OSError, subprocess.TimeoutExpired):
         return []

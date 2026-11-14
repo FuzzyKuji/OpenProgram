@@ -52,7 +52,7 @@ def test_feature_matrix_published_values_match_canonical_table(matrix_path: Path
     result = check_matrix(matrix_path)
 
     assert result.feature_count == 160
-    assert result.openprogram_score == 91.5
+    assert result.openprogram_score == 92.0
     assert result.openprogram_gaps == 59
     assert result.openprogram_only == 6
     assert result.json_schema_status == "●"
@@ -74,14 +74,14 @@ def test_feature_matrix_published_values_match_canonical_table(matrix_path: Path
         (
             lambda text: _replace_number(
                 text,
-                '<th scope="row">我们</th><td>91.5</td>',
-                '<th scope="row">Ours</th><td>91.5</td>',
-                "91.5",
+                '<th scope="row">我们</th><td>92.0</td>',
+                '<th scope="row">Ours</th><td>92.0</td>',
+                "92.0",
             ),
             "score",
         ),
         (
-            lambda text: _replace_number(text, "功能矩阵、91.5 分", "Feature matrix, 91.5 score", "91.5"),
+            lambda text: _replace_number(text, "功能矩阵、92.0 分", "Feature matrix, 92.0 score", "92.0"),
             "score summary",
         ),
         (

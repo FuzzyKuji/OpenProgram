@@ -336,7 +336,7 @@
 <table class="stack">
 <thead><tr><th scope="col">From</th><th scope="col">Practice</th><th scope="col">Ours</th></tr></thead>
 <tbody>
-<tr><th scope="row">codex-cli</th><td>Writer lease from a SQLite table with retry counts and last watermark; checks quota first</td><td>Cross-process write lock, one-second timeout, no retry counts; failures reach writer status and a <code translate="no">memory_writer_failed</code> frame</td></tr>
+<tr><th scope="row">codex-cli</th><td>Writer lease from a SQLite table with retry counts and last watermark; checks quota first</td><td>Cross-process write lock, one-second timeout; the idle watcher keeps failures by the scope of their cause (conversation, memory, sign-in) in <code translate="no">ingest-state.json</code>; failures reach writer status and a <code translate="no">memory_writer_failed</code> frame</td></tr>
 <tr><th scope="row">codex-cli</th><td>The model embeds a hidden marker naming memory it used; the server counts it and strips it. Counts rank content at organization.</td><td>Not built; nightly organization merges by content</td></tr>
 <tr><th scope="row">openclaw</th><td>Deduplication in two copies that check each other</td><td>Node marks alone; Topic footnotes name the same messages without cross-checking</td></tr>
 <tr><th scope="row">pi-mono</th><td>A generated summary on leaving a branch</td><td>Not built</td></tr>

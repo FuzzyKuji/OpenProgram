@@ -11,6 +11,7 @@ import type { ActivityPageFrameProps, ActivityPageTarget, ActivityPanelContext, 
 import { computeActivityGeometry, geometryVariables } from "./activity-page-geometry";
 import { ActivityCell, ActivityDetail, ActivityNote, ActivityPanelReact, ActivityRowStoreReact, createActivityRowStore, useActivityPanel } from "./activity-page-row";
 import { useActivityPageKeys } from "./use-activity-page-keys";
+import { observeSwipe } from "./sideways";
 import { AgentPage } from "./agent-page";
 import { ProgramPage } from "./program-page";
 import { CommandPage } from "./command-page";
@@ -61,6 +62,17 @@ export function ActivityPageFrame({ kind, title, status, tone, headExtra, axis, 
 
   useLayoutEffect(() => { back.current?.focus({ preventScroll: true }); }, []);
   useActivityPageKeys(root, scroller, context.close);
+  // A swipe towards the overview drags the page aside once the track is at its left end.
+  const pull = context.pull;
+  useLayoutEffect(() => {
+    const list = scroller.current;
+    if (!list || !pull) return;
+    return observeSwipe(list, {
+      begin: direction => direction < 0 && list.scrollLeft < 1,
+      move: moved => pull.move(Math.max(0, -moved)),
+      end: (moved, speed) => pull.end(Math.max(0, -moved), -speed),
+    }, false);
+  }, [pull]);
 
   const flip = () => {
     const list = scroller.current;

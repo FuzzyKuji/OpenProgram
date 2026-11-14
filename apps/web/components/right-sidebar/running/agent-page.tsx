@@ -43,12 +43,15 @@ export function AgentPage({ target, context }: ActivityPageProps<"agent">) {
   const box = useRef<HTMLDivElement>(null);
   const back = useRef<HTMLButtonElement>(null);
   useLayoutEffect(() => { back.current?.focus({ preventScroll: true }); }, [alwaysOnOpen]);
-  useActivityPageKeys(root, box, context.close);
+  // Back is one step: a column of the chart first, then the overview.
+  const stepBack = useRef<(() => boolean) | null>(null);
+  const goBack = () => { if (!stepBack.current?.()) context.close(); };
+  useActivityPageKeys(root, box, goBack);
 
   // The always-on setting opens over the chart, and going back returns to it.
   const glyph = <AgentGlyph shape={shape} color={scope.color} small />;
   const overlay = alwaysOnOpen
-    ? <ActivityPanelReact.Provider value={{ ...context, close: () => setAlwaysOnOpen(false) }}>
+    ? <ActivityPanelReact.Provider value={{ ...context, close: () => setAlwaysOnOpen(false), pull: undefined }}>
       <ActivityPageFrame kind={glyph} title={text("Always-on", "常驻")} axis={null}><AlwaysOnRow context={context} scope={scope} /></ActivityPageFrame>
     </ActivityPanelReact.Provider>
     : null;
@@ -57,12 +60,12 @@ export function AgentPage({ target, context }: ActivityPageProps<"agent">) {
     {overlay}
     <div ref={root} className={`${pageStyles.root} ${pageStyles.fade}`} hidden={alwaysOnOpen} data-timeline="0" data-both="0">
       <div className={pageStyles.top}>
-        <Button ref={back} type="button" variant="ghost" className={`${pageStyles.bk} ${styles.named}`} onClick={context.close} aria-label={text("Back to Activity", "返回运行记录")}>
+        <Button ref={back} type="button" variant="ghost" className={`${pageStyles.bk} ${styles.named}`} onClick={goBack} aria-label={text("Back in Activity", "在运行记录里返回")}>
           <ChevronLeft size={14} strokeWidth={1.8} aria-hidden="true" />{glyph}<span>{head.title}</span>
         </Button>
       </div>
       {scope.head && !scope.active ? <ActivityActionRow icon={GitBranch} label={text("Switch to this branch", "切换到这个分支")} note={text("Shows it in the chat", "在聊天里显示它")} onClick={() => context.switchTo(scope)} /> : null}
-      <AgentChart head={scope.head} context={context} box={box} reportName={run => reportNameForRun(run, context)} nextWake={nextWakeOf(context, scope)} onOpenNextWake={() => setAlwaysOnOpen(true)} />
+      <AgentChart head={scope.head} context={context} box={box} reportName={run => reportNameForRun(run, context)} nextWake={nextWakeOf(context, scope)} onOpenNextWake={() => setAlwaysOnOpen(true)} stepBack={stepBack} onPull={context.pull} />
     </div>
   </>;
 }

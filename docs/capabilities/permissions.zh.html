@@ -16,7 +16,7 @@
 <thead class="sr"><tr><th scope="col">项目</th><th scope="col">说明</th></tr></thead>
 <tbody>
 <tr><th scope="row">选择</th><td>Web、App：输入框底部。终端：<code translate="no">/permissions</code>；<code translate="no">Shift+Tab</code> 按此顺序循环四个模式。</td></tr>
-<tr><th scope="row">生效顺序</th><td>对话自己的模式，其次项目默认模式（项目设置），最后 Bypass permissions。每一轮都用它，有人看着与否都一样。</td></tr>
+<tr><th scope="row">生效顺序</th><td>当前分支自己的模式，其次项目默认模式（项目设置），最后 Bypass permissions。每一轮都用它，有人看着与否都一样。</td></tr>
 <tr><th scope="row">Bypass permissions</th><td>存储值是 <code translate="no">bypass</code>，<code translate="no">--permission</code> 和项目设置文件写的就是这个词。不覆盖显式 deny 或 ask 规则、<a href="#agent-替你发出的消息">暂存的消息</a>、插件限制和身份限制。</td></tr>
 <tr><th scope="row">Auto</th><td>审查无法进行时拒绝该调用。</td></tr>
 <tr><th scope="row">Manual</th><td>首次操作某个应用时询问，可以在本对话内允许。</td></tr>
@@ -82,7 +82,7 @@
 <li>界面已知确认版本时立即发送，确认后才显示为有效。模型正在推理、输出或生成参数时同样生效。</li>
 <li>新模式进入后续模型请求，已在生成的文字不改写。已授权的工具保留授权。切到Plan阻止尚未获准的写入。</li>
 <li>不再需要的普通审批通过 execution 的持久等待自动处理，任务继续。显式 ask、提问、表单和 Sandbox 升级不因切换模式而回答。重复回答、取消、超时和恢复不会重复执行已完成的调用。</li>
-<li>只影响当前会话。其他窗口接收已确认的模式，旧修改被拒绝。失败或断线的修改保持未确认：重新连接、检查模式后再试。未发送的草稿把模式存在本地，随首条消息发送。</li>
+<li>只影响当前分支。显示该分支的其他窗口接收已确认的模式，分支或版本已过期的修改被拒绝。失败或断线的修改保持未确认：重新连接、检查模式后再试。未发送的草稿把模式存在本地，随首条消息发送。</li>
 </ul>
 </details>
 <table class="stack fixed">
@@ -102,6 +102,8 @@
 <li>经认证的交互式 owner 会话在下一次操作时读取最新规则，包括运行中的修改。已获准的操作保留授权；审批等待仍需答复；已接纳的子 Agent 保留原策略。</li>
 <li>删除规则影响后续授权，不改变已执行的操作。</li>
 <li>Windows 路径用正斜杠可避免转义歧义，如 <code translate="no">read(C:/Users/me/project/**)</code>。盘符路径里的普通反斜杠会保留。规则语法用 <code translate="no">\\</code>、<code translate="no">\(</code>、<code translate="no">\)</code> 转义自身字符。JSON 配置还要遵守 JSON 的反斜杠转义。</li>
+<li>同一个文件不管怎么写，路径规则都能匹配：正反斜杠、短文件名、指向该文件夹的链接。拒绝和询问规则不分大小写，也能匹配从工作目录出发的相对路径；允许规则按完整路径和磁盘上保存的大小写比较。网络共享写成 <code translate="no">//server/share/**</code>，或者粘贴时全程用反斜杠。</li>
+<li>命令在 PowerShell 里运行时，含 <code translate="no">{</code>、<code translate="no">}</code> 或 <code translate="no">,</code> 的命令只按原文精确匹配允许规则，也就是<strong>始终允许</strong>保存的那条。拒绝和询问规则照常读取。</li>
 </ul>
 </details>
 <h2 id="understand-a-refusal">拒绝信息</h2>
@@ -115,7 +117,7 @@
 </tbody></table>
 <p class="note">缺参数或参数格式不对不算拒绝，作为普通工具错误返回给模型。</p>
 <h2 id="sandbox">Sandbox</h2>
-<p>默认关闭，在输入框 Plus 菜单里按会话打开。修改影响后续轮次。</p>
+<p>默认关闭，在输入框 Plus 菜单里按分支打开。修改影响后续轮次。</p>
 <table class="stack fixed">
 <thead class="sr"><tr><th scope="col">设置或情况</th><th scope="col">效果</th></tr></thead>
 <tbody>

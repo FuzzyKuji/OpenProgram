@@ -75,7 +75,7 @@
 <tr><th scope="row"><code translate="no">heads</code></th><td>每会话当前 DAG head（选中的分支尖端）</td></tr>
 <tr><th scope="row"><code translate="no">additionalWorkingDirsBySession</code></th><td>每会话附加工作目录</td></tr>
 <tr><th scope="row"><code translate="no">composerDrafts</code></th><td>每会话未发送草稿文本，持久化到 localStorage</td></tr>
-<tr><th scope="row"><code translate="no">composerSettingsBySession</code></th><td>每会话工具开关/思考强度，持久化</td></tr>
+<tr><th scope="row"><code translate="no">composerSettingsBySession</code></th><td>当前分支的工具开关、思考强度和分支身份；按会话分键只是显示投影，持久设置属于分支引用</td></tr>
 </tbody>
 </table>
 <p class="note"><code translate="no">pendingDecisions</code> 是扁平 FIFO，每项带 <code translate="no">sessionId</code>（<code translate="no">session-store/types.ts</code>）；每个使用方都要过滤，作用域错了会吞掉或重复显示别的会话的问题。</p>

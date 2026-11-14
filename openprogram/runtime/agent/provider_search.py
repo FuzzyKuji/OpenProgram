@@ -82,6 +82,18 @@ def resolve_web_search(
     return True, kept
 
 
+#: The per-turn override ``openprogram --print --no-web`` sends: the Search
+#: intent off, and no tool whose name says web (:func:`no_web_tools`).
+NO_WEB_OVERRIDE: dict[str, Any] = {"inherit": True, "web_search": False, "web": False}
+
+
+def no_web_tools(override: Any) -> bool:
+    """Whether a turn's override takes every web tool away (``"web": False``):
+    the local ``web_search`` and ``web_fetch`` tools, any other tool whose
+    name says web, deferred or not, and the provider's own search."""
+    return isinstance(override, dict) and override.get("web") is False
+
+
 def session_search_intent(override: Any, profile: dict | None) -> bool:
     """The Search switch as a turn sees it: per-turn override, else profile.
 

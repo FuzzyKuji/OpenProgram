@@ -50,7 +50,7 @@ def write_payloads(sitemap: Path, output: Path) -> list[Path]:
     paths = []
     for index, payload in enumerate(batches, start=1):
         path = output / f"batch-{index}.json"
-        path.write_text(json.dumps(payload, separators=(",", ":")) + "\n")
+        path.write_text(json.dumps(payload, separators=(",", ":")) + "\n", encoding="utf-8")
         paths.append(path)
     return paths
 

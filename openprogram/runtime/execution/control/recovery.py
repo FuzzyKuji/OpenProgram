@@ -62,6 +62,8 @@ class RecoveryOperations:
         attempt_id: str | None = None,
         generation: int | None = None,
         only_if_abandoned: bool = False,
+        continuable: bool = True,
+        never_bound: bool = False,
     ) -> RecoveryCompletion:
         """Durably finalize work whose physical owner is known to be gone.
 
@@ -70,6 +72,15 @@ class RecoveryOperations:
         so a late report from an older owner cannot recover a newer attempt.
         Startup recovery omits the identity because it is the authority that
         discovers abandoned owners.
+
+        A turn lost to a restart may be left paused for the next Worker to
+        continue. ``continuable=False`` is for an owner that is gone while the
+        Worker goes on (a scheduled run's process that was killed): such a
+        turn ends instead, and nothing is recorded for a restart to pick up.
+
+        ``never_bound`` is for an owner a cancel reached before any driver was
+        bound to run its turn: the attempt ends ``cancelled_during_activation``,
+        so whoever reads it later knows the turn never ran.
         """
         if (attempt_id is None) != (generation is None):
             raise AttemptConflict(
@@ -134,7 +145,8 @@ class RecoveryOperations:
                            or self.executions.get_job_agent_input(execution_id))
             is_job = isinstance(agent_input, Mapping) and agent_input.get("kind") == "job_agent"
             if (
-                execution.status is ExecutionStatus.RUNNING
+                continuable
+                and execution.status is ExecutionStatus.RUNNING
                 and isinstance(agent_input, Mapping)
                 and agent_input.get("kind") in {"chat", "job_agent"}
                 and (not is_job or only_if_abandoned)
@@ -145,16 +157,19 @@ class RecoveryOperations:
                     status=[CommandStatus.ACCEPTED.value, CommandStatus.APPLYING.value],
                 )
                 request = agent_input.get("turn_request" if is_job else "request", {})
+                from openprogram.runtime.execution.slash_actions import slash_action_of
                 interaction = request.get("interaction") if isinstance(request, Mapping) else None
+                slash_action = slash_action_of(dict(request)) if isinstance(request, Mapping) else None
                 # A turn with no finished model decision has done nothing yet,
                 # so it starts over from what the user sent.
                 restart_pending = (
                     not has_decision
                     and not unresolved
                     and not control_pending
-                    and (is_job or interaction not in {"spawn", "merge"})
+                    and (is_job or slash_action is None)
                 )
                 restart_new_turn = (not is_job and not restart_pending and not control_pending
+                                    and slash_action is None
                                     and interaction in {None, "interactive"}
                                     and request.get("source") in {"web", "tui", "acp"})
 
@@ -172,7 +187,8 @@ class RecoveryOperations:
                     apply_command = True
             elif execution.status is ExecutionStatus.RUNNING:
                 from ..restart import crash_checkpoint
-                restart_checkpoint = None if unresolved else crash_checkpoint(self, connection, execution, journal)
+                restart_checkpoint = (None if unresolved or not continuable
+                                      else crash_checkpoint(self, connection, execution, journal))
                 execution = self.executions._require_execution(connection, execution_id)
                 running_commands = True
                 target = (
@@ -220,7 +236,7 @@ class RecoveryOperations:
                 # in finish_attempt(CANCELLED); they do not keep it running.
                 target = ExecutionStatus.CANCELLED
                 reason_code = execution.reason_code or "cancelled"
-                outcome = "owner_lost_during_cancel"
+                outcome = "cancelled_during_activation" if never_bound else "owner_lost_during_cancel"
                 apply_command = True
 
             if restart_checkpoint is not None:
@@ -433,10 +449,11 @@ class RecoveryOperations:
                         if process_owner_may_be_alive(current.owner_lease):
                             continue
                         admission = self.executions.get_agent_turn_input(execution.execution_id)
+                        from openprogram.runtime.execution.slash_actions import slash_action_of
                         request = admission.get("request", {})
                         restart = (
                             admission.get("kind") == "chat"
-                            and request.get("interaction") not in {"spawn", "merge"}
+                            and slash_action_of(dict(request)) is None
                         )
                         recovered = self.executions._transition_execution(
                             connection, execution.execution_id,

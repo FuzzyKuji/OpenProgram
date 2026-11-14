@@ -345,3 +345,33 @@ def test_a_text_starting_with_a_dash_is_not_read_as_an_option(monkeypatch, platf
     assert _no_system_notifications.system_notify("-Scout", "-3% revenue") is True
     assert ran[0][0] == tool
     assert ran[0][-3:] == ["--", "-Scout", "-3% revenue"]
+
+
+def test_windows_notification_is_a_toast_whose_texts_are_never_script(monkeypatch, _no_system_notifications):
+    """Not run on Windows: Windows PowerShell is a stand-in at the subprocess boundary."""
+    from openprogram.runtime.scheduler import reminders
+
+    ran = []
+    monkeypatch.setattr(reminders.sys, "platform", "win32")
+    monkeypatch.setattr(reminders.shutil, "which",
+                        lambda name: rf"C:\Windows\System32\{name}" if name == "powershell.exe" else None)
+    monkeypatch.setattr(reminders.subprocess, "run",
+                        lambda cmd, **kw: ran.append((cmd, kw)) or SimpleNamespace(returncode=0))
+    title, message = "OpenProgram ⏰", "'); Remove-Item C:\\ -Recurse; ('<b>&"
+    assert _no_system_notifications.system_notify(title, message) is True
+    command, options = ran[0]
+    assert command[0].endswith("powershell.exe") and command[-2] == "-Command"
+    assert "ToastNotificationManager" in command[-1]
+    assert not any(title in part or message in part for part in command)
+    assert options["env"]["OPENPROGRAM_NOTICE_TITLE"] == title
+    assert options["env"]["OPENPROGRAM_NOTICE_MESSAGE"] == message
+    assert "$env:OPENPROGRAM_NOTICE_MESSAGE" in command[-1] and "CreateTextNode" in command[-1]
+
+
+def test_windows_without_windows_powershell_posts_nothing(monkeypatch, _no_system_notifications):
+    from openprogram.runtime.scheduler import reminders
+
+    monkeypatch.setattr(reminders.sys, "platform", "win32")
+    monkeypatch.setattr(reminders.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(reminders.subprocess, "run", lambda *_a, **_k: pytest.fail("ran a command"))
+    assert _no_system_notifications.system_notify("OpenProgram", "Stand up") is False

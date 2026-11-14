@@ -939,8 +939,7 @@ def _application_agent_entries(relative: str) -> list[tuple[str, str, str]]:
     """``(catalog path, name, description)`` of every entry an application registered.
 
     The host registers an application's Agent entries wherever they live
-    in its package: ``applications/browser`` registers ``web_use`` in
-    ``browser/web_use``. Only an application root has them.
+    in its package. Only an application root has them.
     """
     parts = Path(relative).parts
     if len(parts) != 2 or parts[0] != "applications":

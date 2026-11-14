@@ -4,7 +4,8 @@
 branch (the transcript) ends at it, and the next message attaches under
 HEAD as a sibling of the old continuation — the two then switch with
 ``< N/M >``. The response carries the HEAD before the move; checking it
-out again leaves the DAG as it was. HEAD cannot move while a turn runs.
+out again leaves the DAG as it was. A switch is a view change: it goes
+ahead while a turn runs.
 """
 from __future__ import annotations
 
@@ -45,7 +46,7 @@ def server(monkeypatch: pytest.MonkeyPatch):
     state = {"running": False}
     monkeypatch.setattr(srv, "_sessions", {SID: {"id": SID, "messages": []}})
     monkeypatch.setattr(srv, "_sessions_lock", threading.Lock())
-    monkeypatch.setattr(srv, "_is_run_active", lambda sid: state["running"])
+    monkeypatch.setattr(srv, "_is_selected_run_active", lambda sid: state["running"])
     monkeypatch.setattr(srv, "_invalidate_messages", lambda sid: None)
     monkeypatch.setattr(srv, "_save_session", lambda sid: None)
     monkeypatch.setattr(srv, "refresh_context_stats", lambda sid: None)
@@ -136,10 +137,9 @@ def test_back_restores_the_previous_leaf_and_leaves_nothing(db, server):
     assert sorted(m["id"] for m in db.get_messages(SID)) == before
 
 
-def test_head_does_not_move_while_a_turn_runs(db, server):
+def test_switching_goes_ahead_while_a_turn_runs(db, server):
     _two_turns(db)
     server["running"] = True
     status, body = _checkout("u1_reply")
-    assert status == 409
-    assert "run" in body["error"]
-    assert (db.get_session(SID) or {}).get("head_id") == "u2_reply"
+    assert status == 200 and body["head_id"] == "u1_reply"
+    assert (db.get_session(SID) or {}).get("head_id") == "u1_reply"

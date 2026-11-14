@@ -151,6 +151,10 @@ class _DeltaRestorer:
     def flush(self, kind: str, index: int) -> str:
         return self._vault.restore(self._pending.pop((kind, index), ""))
 
+    def reset(self) -> None:
+        """Forget every held tail: the reply they belonged to is void."""
+        self._pending.clear()
+
 
 def _without_unfinished_tail(message: Any, index: int) -> Any:
     """``message`` with the streaming block at ``index`` cut before a
@@ -177,7 +181,7 @@ def redact_context(context: Any, vault: Vault) -> Any:
 def redacting_stream_fn(base_stream_fn: Callable[..., Any]) -> Callable[..., Any]:
     """Wrap a ``stream_fn`` so each call sends a redacted context and streams
     back restored events. A request with nothing to redact passes through."""
-    from .event_stream import AssistantMessageEventStream
+    from .event_stream import AssistantMessageEventStream, close_stream
     import asyncio
 
     def _fn(model: Any, context: Any, options: Any):
@@ -207,6 +211,10 @@ def redacting_stream_fn(base_stream_fn: Callable[..., Any]) -> Callable[..., Any
             try:
                 async for ev in inner:
                     etype = getattr(ev, "type", None)
+                    if etype == "retry" and getattr(ev, "restart", False):
+                        # The reply starts over: a placeholder half received
+                        # from the failed attempt belongs to nothing.
+                        deltas.reset()
                     if etype in ("text_end", "thinking_end", "toolcall_end"):
                         tail = deltas.flush(etype.split("_")[0], ev.content_index)
                         if tail:
@@ -228,8 +236,14 @@ def redacting_stream_fn(base_stream_fn: Callable[..., Any]) -> Callable[..., Any
                 out.fail(RuntimeError("stream ended without a final message"))
             except BaseException as exc:  # noqa: BLE001
                 out.fail(exc)
+                if isinstance(exc, asyncio.CancelledError):
+                    # A stop: the provider request under this wrapper ends with it.
+                    await close_stream(inner, timeout=0.5)
+                    raise
 
-        asyncio.ensure_future(_run())
+        # Owned by the stream: a consumer that stops reading cancels this
+        # task through ``close_stream``, and the task closes the provider's.
+        out.attach_producer(asyncio.ensure_future(_run()))
         return out
 
     return _fn

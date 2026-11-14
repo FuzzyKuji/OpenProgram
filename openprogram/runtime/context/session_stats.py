@@ -111,15 +111,23 @@ def compute_breakdown(
     has_tool_snapshot = tool_snapshot is not None
     recorded_tool_rows = list((tool_snapshot or {}).get("tools") or [])
 
+    # Section notes count where the requests send them: a conversation's
+    # turns render them, and the latest turn on the branch records whether
+    # its requests render the memory section's.
+    from openprogram.runtime.context.turn_context import block as _turn_block, conversation_audience
+    audience = conversation_audience(next(
+        (bool(m.get("memory_map_notes")) for m in reversed(branch)
+         if isinstance(m, dict) and m.get("role") == "user"), False))
+
     # 分支消息 + 从 extra(JSON) 里挖最近一次调用记下的原料
     # （tools_available / system_prompt）。
     msgs = []
     latest_tools = []
     for m in branch:
         content = m.get("content") or ""
-        prefetch = m.get("memory_prefetch") or ""
-        if prefetch:
-            content = f"{prefetch.rstrip()}\n\n{content}"
+        from openprogram.runtime.context.render import with_turn_block
+        if m.get("role") == "user":
+            content = with_turn_block(content, _turn_block(m, audience))
         # content 只是**可见文本**。一条 assistant 消息回填进下一轮
         # context 时还带着 thinking 块和 tool_call 的 JSON —— 这些都
         # 占 token。extra.blocks 里存了完整结构（thinking / text /
@@ -241,7 +249,7 @@ def compute_breakdown(
     message_rows: list[dict] = []
     try:
         from openprogram.runtime.context.compaction.view import load_compaction_view
-        view = load_compaction_view(db, session_id, head_id)
+        view = load_compaction_view(db, session_id, head_id, audience=audience)
         msgs = view.messages
         message_rows = view.history
     except (AttributeError, KeyError, TypeError):

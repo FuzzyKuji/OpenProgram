@@ -129,3 +129,47 @@ def test_branch_projection_observes_relocation_after_open(tmp_path):
             'user_message_id': 'user', 'assistant_message_id': tip}}}]
         branches = conversation_activity_branches(items, session_store=reader)
         assert [branch['head_msg_id'] for branch in branches] == [tip]
+
+
+def test_spawned_agent_branch_is_named_by_its_task_label_while_it_runs(tmp_path, monkeypatch):
+    """A background agent's branch shows its task's label from admission on:
+    in the branch list (list_agents reads it) and in Activity, before the
+    run has replied. A message to that agent later keeps the name."""
+    from types import SimpleNamespace
+    from openprogram.runtime.execution.activity_branches import conversation_activity_branches
+    from openprogram.runtime.jobs.runner import admission
+
+    db = SessionStore(tmp_path / 'sessions')
+    monkeypatch.setattr('openprogram.runtime.context.session_db.default_db', lambda: db)
+    db.create_session('c', 'main', title='t')
+    db.append_message('c', {'id': 'u1', 'role': 'user', 'content': 'go', 'predecessor': ''})
+    db.append_message('c', {'id': 'a1', 'role': 'assistant', 'content': 'spawning', 'predecessor': 'u1'})
+    db.set_branch_name('c', 'a1', 'Main line', name_locked=True)
+
+    job = SimpleNamespace(id='j1', parent_session_id='c', label='s1', target_branch_head_id=None,
+                          parent_msg_id='a1')
+    admission._name_job_branch(job, creates_agent=True)
+    db.spawn_branch('c', 'a1', source='agent_spawn', node_id='j1_user', prompt='work',
+                    register_head=False)
+    SessionNodeWriter(db, 'c', advance_head=False).append(
+        Call(id='j1_user_reply', role='llm', predecessor='j1_user'))
+
+    names = {row['head_msg_id']: row['name'] for row in db.list_branches('c')}
+    assert names['j1_user_reply'] == 's1'
+    items = [{'execution_id': 'j1', 'session_id': 'c', 'snapshot': {
+        'display': {'user_message_id': 'j1_user', 'assistant_message_id': 'j1_user_reply'}}}]
+    branches = conversation_activity_branches(items, conversation_session_id='c', session_store=db)
+    assert [(b['head_msg_id'], b['name']) for b in branches] == [('j1_user_reply', 's1')]
+
+    # The turn's end keeps the main line's record where it is.
+    db.carry_branch_entry('c', 'j1_user_reply')
+    assert db.get_branch_meta('c', 'a1')['name'] == 'Main line'
+    # A rename while it runs outlives the label written again at the end,
+    # and a message to the agent opens no second name.
+    db.set_branch_name('c', 'j1_user_reply', 'Renamed', name_locked=True)
+    db.name_spawned_branch('c', 'j1_user_reply', 's1')
+    admission._name_job_branch(SimpleNamespace(
+        id='j2', parent_session_id='c', label='hop', target_branch_head_id=None,
+        parent_msg_id='j1_user_reply'), creates_agent=True)
+    assert 'j2_user_reply' not in db.branch_entries('c')
+    assert db.get_branch_meta('c', 'j1_user_reply')['name'] == 'Renamed'

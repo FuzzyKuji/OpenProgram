@@ -1,5 +1,5 @@
 <title>存储一致性</title>
-<meta name="description" content="SessionStore 的时间、快照、merged heads、锁范围和目录删除合同。">
+<meta name="description" content="SessionStore 的时间、快照、分支记录、merged heads、锁范围和目录删除合同。">
 <h1 id="session-storage-consistency">存储一致性</h1>
 <p>数据模型见<a href="storage.zh.html">会话存储</a>。</p>
 
@@ -8,7 +8,7 @@
 <table class="stack fixed">
 <thead class="sr"><tr><th scope="col">操作</th><th scope="col">合同</th></tr></thead>
 <tbody>
-<tr><th scope="row"><code translate="no">_persist_meta</code></th><td>改名、置顶、已读、分支标记和 HEAD 不改变时间；追加才推进。</td></tr>
+<tr><th scope="row"><code translate="no">_persist_meta</code></th><td>改名、置顶、已读、分支标记和 HEAD 不改变时间；追加才推进。分支记录取盘上的（<a href="#branch-records">分支记录</a>）。</td></tr>
 <tr><th scope="row"><code translate="no">_index</code>、<code translate="no">list_sessions()</code></th><td>读者拿到每行的点时副本；并发创建、更新、删除不撕裂字段，也不破坏迭代。</td></tr>
 <tr><th scope="row">延迟 flush</th><td>旧快照不能覆盖新快照；发布期间的更新保持 dirty，由下一次 flush 保存。</td></tr>
 </tbody>
@@ -61,24 +61,49 @@
 </table>
 </details>
 
+<h2 id="branch-records">分支记录</h2>
+<p>分支记录（<code translate="no">meta["branches"][tip]</code>：名字、自动命名状态、轮数、归档标记）有几个可能同时落下的写入者：<code translate="no">close_agent</code> 归档正在运行的 Agent、被它打断的那一轮收尾（<code translate="no">carry_branch_entry</code>、<code translate="no">bump_branch_turns</code>）、后台自动命名（<code translate="no">set_branch_name</code>）、Web 端改名、删除。每个写入者只改自己负责的字段，改的是盘上的那份记录。</p>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">规则</th><th scope="col">做法</th></tr></thead>
+<tbody>
+<tr><th scope="row">唯一合并点</th><td><code translate="no">_update_meta</code> 在会话写锁内读 <code translate="no">meta.json</code>，应用写入者的改动并写盘，再只把写过的键复制进缓存。没有写入者用早先读到的副本整条替换记录。</td></tr>
+<tr><th scope="row">整份缓存写入</th><td><code translate="no">_persist_meta</code>、<code translate="no">commit_turn</code>、追加和删除节点写缓存时，<code translate="no">branches</code>、<code translate="no">branch_refs</code>、<code translate="no">active_branch_id</code> 取盘上的（<code translate="no">_meta_for_write</code>），漏掉别的写入者的缓存不会把旧记录写回去。追加在锁内读到的盘上那份上移动分支记录。</td></tr>
+<tr><th scope="row">切换与回退</th><td>切换分支和回退只说明要做的改动，不带整张表的副本：<code translate="no">compare_and_set_head</code> 在锁内读到的记录上应用 <code translate="no">branch_checkout</code>（<code translate="no">apply_checkout</code>）和 <code translate="no">branch_record_moves</code>。更新里整份的 <code translate="no">branches</code>、<code translate="no">branch_refs</code>、<code translate="no">active_branch_id</code> 一律丢弃，包括这条规则之前记进意图日志的。</td></tr>
+<tr><th scope="row">名字只有一处</th><td>所有读取者，包括分支列表，不论分支是否选中，都从分支末端的记录取名字（<code translate="no">branch_record</code>）。末端记录总是优先于暂存副本；后台运行带着未选中分支往前走时，记录一起带走。</td></tr>
+<tr><th scope="row">记录跟着末端走</th><td>分支每加一条消息，同一次写入就移动它的记录：选中分支在 <code translate="no">advance_branch</code> 里用 <code translate="no">follow_line</code>，其他分支用 <code translate="no">carry_branch</code> 和 <code translate="no">point_branch</code>。新末端上已有的记录合并进来，以它自己的字段为准。</td></tr>
+<tr><th scope="row">迟到的末端</th><td>写给分支已经越过的末端（最近一轮延伸的那条消息，或这一轮的用户消息）的写入，落到分支现在的记录上（<code translate="no">_record_tip</code>）。设置和 worktree 绑定按分支 id 存，不随末端移动。</td></tr>
+<tr><th scope="row">共用末端</th><td>回退到同一条消息的几个分支没法共用一条末端记录：选中的那个拥有它，其余的把自己的暂存在各自的 ref 上（<code translate="no">label</code>，离开时在锁内写下，再次选中时放回）。</td></tr>
+<tr><th scope="row">归档不可撤销</th><td>已归档的记录保留 <code translate="no">archived</code>、<code translate="no">archived_at</code>、<code translate="no">archived_reason</code>，之后的写入设什么都不变。</td></tr>
+<tr><th scope="row">不复活</th><td>对已不在会话里的消息计轮数或自动命名，什么都不写。分支写入从不创建会话。归档和普通命名可以给已受理、尚未写入的回复开记录。</td></tr>
+</tbody>
+</table>
+<details>
+<summary>归档为什么会丢</summary>
+<p>旧的写入者先在缓存里合并记录，再把整份缓存写盘。两步之间，一个在锁内读 <code translate="no">meta.json</code> 的写入者（收尾那一轮的 <code translate="no">update_branch_fields</code>）用盘上还没有归档的副本替换了缓存；归档自己的写入随后保存了不含归档的缓存，自动命名再开了一条新记录。</p>
+<p>分支设置（<code translate="no">update_branch_config</code>）、worktree 绑定（<code translate="no">update_session</code>）和 Goal（带版本检查的 <code translate="no">update_session_dict</code>）本来就在锁内对盘上数据读改写。</p>
+<p>切换分支时名字也是这样丢的。切换在加锁前读了整张 <code translate="no">branches</code> 和 <code translate="no">branch_refs</code>，用离开时暂存的副本覆盖了目标的记录，再随 HEAD 移动把两张表写回。</p>
+<p>所以未选中分支的改名（列表只读暂存副本，看不到）在切换时连同锁一起丢了，自动命名也一样。</p>
+<p>一轮运行时改名会丢掉分支的轮数。选中分支的记录一直留在旧末端直到这一轮结束，改名在屏幕上的末端另开一条记录，轮末带走的是这条。</p>
+<p>Worker 在移动分支 ref 和记录之间卡住时，会留下两行：一行在旧位置、用原始 id 命名，一行在回复上、有名字但没有分支 id。</p>
+<p>加载时不修复这一对。ref 落在一段延续之后，回退也会留下同样的形状，读取方不靠猜测分不开两者。现在 ref 和记录在同一把锁内一起移动。</p>
+<p>验收：两个线程写会话、计轮数的同时归档 60 个 tip，一个不丢；同一目录上的两个 store（两个进程）对同一批 tip 归档和命名，两个字段都在；删除后迟到的取消归档、命名和计轮数都不改变任何东西。</p>
+</details>
+
 <h2 id="merged-heads">Merged heads 原子更新</h2>
 <p><code translate="no">mark_merged(session_id, head_ids)</code> 是集合并集。子 Agent 完成、task runner 和 Web 分支操作可能同时调用，每次更新都要保留。</p>
 <table class="stack fixed">
 <thead class="sr"><tr><th scope="col">属性</th><th scope="col">要求</th></tr></thead>
 <tbody>
-<tr><th scope="row">原子性</th><td>读取、去重、追加和更新 <code translate="no">idx.meta</code> 在同一个 <code translate="no">idx._lock</code> 临界区内。</td></tr>
+<tr><th scope="row">原子性</th><td>在会话写锁内的同一个 <code translate="no">_update_meta</code> 中读盘、去重、追加并写盘。</td></tr>
 <tr><th scope="row">顺序</th><td>保留既有顺序；新的非空、strip 后的 ID 按输入顺序追加。</td></tr>
 <tr><th scope="row">幂等</th><td>重复不新增；没有新值就不写盘。</td></tr>
-<tr><th scope="row">持久化</th><td><code translate="no">_persist_meta</code> 在锁外执行；至少一个最终快照含完整并集。</td></tr>
 </tbody>
 </table>
 <details>
 <summary>范围与验收</summary>
-<p>只约束这次 read-modify-write：不引入 transaction API，不改分支命名、DAG 删除或索引 flush 协议。</p>
 <ul>
 <li>两个调用方并发写入不同 head：内存和重载后都含两者。</li>
 <li>空白和重复输入保持清理与幂等语义。</li>
-<li>持久化在 <code translate="no">idx._lock</code> 之外；异常和调用方行为不变。</li>
 </ul>
 </details>
 
@@ -88,7 +113,7 @@
 <thead><tr><th scope="col">资源</th><th scope="col">锁</th><th scope="col">要求</th></tr></thead>
 <tbody>
 <tr><th scope="row"><code translate="no">_locations</code>、<code translate="no">_sessions</code>、LRU 顺序</th><td><code translate="no">_lock</code></td><td>只碰内存：不扫目录、不原子写、不 fsync、不递归删除。</td></tr>
-<tr><th scope="row">单个会话的加载、重建、删除和失效</th><td>每会话 <code translate="no">RLock</code></td><td>同一会话串行，不同会话并行；没有 transaction 层。</td></tr>
+<tr><th scope="row">单个会话的加载、重建、删除和失效</th><td>会话的进程锁（<code translate="no">conversation_lock</code>）</td><td>同一会话串行，不同会话并行。每个进程每个会话一把，所有 store 共用；它是写锁的前一半。没有 transaction 层。</td></tr>
 <tr><th scope="row"><code translate="no">locations.json</code> 发布</th><td><code translate="no">_locations_write_lock</code></td><td>在状态锁内捕获，释放后写入；旧快照不能覆盖新快照。</td></tr>
 <tr><th scope="row"><code translate="no">SessionMemoryIndex</code> 持久化</th><td><code translate="no">_persist_lock</code>，然后 <code translate="no">idx._lock</code></td><td>保持锁序和 stale rebuild 语义；<code translate="no">idx._lock</code> 内不做 I/O。</td></tr>
 </tbody>
@@ -101,6 +126,30 @@
 <li>A 的递归删除阻塞时，B 的读取不等待。</li>
 <li>并发首次加载只发布一个缓存对象；加载不会重新发布已删除的对象。</li>
 <li>两个会话并发更新位置后，重载的 <code translate="no">locations.json</code> 含两项。</li>
+</ul>
+</details>
+
+<h2 id="lock-order">会话锁的顺序</h2>
+<p>所有路径按同一顺序取一个会话的锁；持有任何一把时都不等模型、网络或另一个会话的锁。</p>
+<ol>
+<li>进程锁：每个会话一把可重入锁，本进程的 store、服务端和 job、事件、checkpoint 辅助代码共用。</li>
+<li><code translate="no">projects/.locks/&lt;id&gt;.lock</code> 上的 flock，经 <code translate="no">session_interprocess_lock</code> 获取，它先取第 1 步。持有者只用一个文件描述符；同一线程里嵌套获取在它上面计数，不再打开第二个描述符（第二个会等第一个）。</li>
+<li>内层锁：索引的 <code translate="no">_persist_lock</code> 和 <code translate="no">_lock</code>、store 的映射、注册表文件、回退 intent 锁和工作区锁。</li>
+</ol>
+<p>回退，以及一轮文件的撤销和重做，从查幂等键开始，经过计划和写 intent，到出结果，一直持有第 1、2 步；恢复也在它们之下重放日志，所以恢复不会重放一个仍在执行的回退。</p>
+<p>同一个键的第二个请求等第一个结束，返回它记下的结果，不论提交还是失败：不会按第一个留下的状态重新计划，不会把未完成的 intent 当成待恢复的，也不会再执行一次。</p>
+<p>回退和撤销也在恢复范围内执行：持有工作区锁期间会话被挤出 store 缓存时，检查 head 引起的重新打开不会重放它自己的 intent；否则会第二次去拿工作区锁，等的是它自己。</p>
+<p>两步等待都有上限（默认 60 秒，调用方传了超时就用更短的）：超过后抛 <code translate="no">SessionLockTimeout</code>，写明会话和持有者（本进程的某个线程或另一个进程），请求失败，而不是让 Worker 线程一直卡住。</p>
+<details>
+<summary>原因与验收</summary>
+<p>分支记录合并把更多写入放进 flock 之下后，两条路径以相反顺序取这两半：切换分支持有 store 的锁、等 flock，页面加载持有 flock、等 store 的锁来读会话；运行准入也一样。</p>
+<p>之后这个会话上的所有请求都排在这一对后面，Worker 不再响应。</p>
+<ul>
+<li>十六个线程同时操作一个有五个分支的会话：两个分支上的轮次、改名、换模型、删分支、并发切换、回退计划、页面加载、运行准入和缓存失效，全部完成，连续 200 次；看门狗在卡住时带着各线程栈让测试失败，而不是挂住。</li>
+<li>会话被一个卡住的线程持有时，下一个写入者在等待期内拿到写明该会话的错误；其他会话不受影响。</li>
+<li>获取与释放之间出错（被拒的切换、过期的计划）会释放锁。</li>
+<li>两个进程和两个线程同时往一个会话追加，每条消息都写入；持有 flock 的进程被杀后，已在等待的写入者继续；执行中途会话被挤出缓存的撤销照常提交。</li>
+<li>同一个键的两次回退或两次撤销：第一个在写 intent 之前或之后暂停时，第二个等它，然后返回它提交的结果；第一个已提交或已失败时，第二个返回那个结果；文件和 head 只变一次。</li>
 </ul>
 </details>
 
@@ -136,5 +185,8 @@
 <tr><th scope="row"><code translate="no">openprogram/state/store/session/session_store/</code></th><td>时间、注册表锁、快照、延迟 flush、merged heads 和 store 锁</td></tr>
 <tr><th scope="row"><code translate="no">openprogram/state/store/session/session_node_writer.py</code></th><td>每次追加一个 activity 时间，元数据和索引共用</td></tr>
 <tr><th scope="row"><code translate="no">tests/component/store/test_session_index_consistency.py</code></th><td>排序、快照和并发写入的公共回归</td></tr>
+<tr><th scope="row"><code translate="no">openprogram/state/store/session/session_lock.py</code></th><td>会话锁：进程锁、flock 持有记录、有界等待</td></tr>
+<tr><th scope="row"><code translate="no">tests/component/store/test_session_lock_stress.py</code></th><td>多线程操作同一会话；卡住的会话返回错误</td></tr>
+<tr><th scope="row"><code translate="no">tests/component/store/test_session_lock_processes.py</code></th><td>两个进程操作同一会话；持有者被杀；缓存失效的撤销</td></tr>
 </tbody>
 </table>

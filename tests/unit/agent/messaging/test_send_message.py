@@ -150,14 +150,13 @@ def test_empty_to_errors(parent_turn):
 # --- target = existing branch (same session) ---
 
 def test_existing_branch_delivers_async_onto_head(parent_turn):
-    """to=SID:HEAD submits one turn continuing that head and returns a
-    delivery id immediately — the sender is never blocked."""
+    """to=SID:HEAD submits one tracked turn continuing that head and
+    returns its execution id immediately — the sender is never blocked;
+    the reply comes back as a notice."""
     out = _send_message_impl("more", to="p1:a0")
-    assert "[delivered, running async]" in out
-    assert "delivery_id=task_fake" in out
-    # The sender can wait in-turn without polling (and so without a notice
-    # that repeats the reply it already used).
-    assert "job_output" in out
+    assert out.startswith("[delivered]")
+    assert "execution_id=task_fake" in out
+    assert "comes back to you automatically" in out
     kw = parent_turn.async_calls[-1]
     assert kw["session_id"] == "p1"
     assert kw["branch_from"] == "a0"
@@ -211,8 +210,10 @@ def test_existing_missing_session_errors(parent_turn):
 
 
 def test_existing_missing_head_errors(parent_turn):
+    # A bare id names the conversation; this one's tip is the sender's own
+    # turn, so the message would loop back to it.
     out = _send_message_impl("hi", to="p1")
-    assert "needs the branch head" in out
+    assert "[send_message refused]" in out and "own current turn" in out
 
 
 # --- Existing-target normalization: SID:HEAD names the branch, not a
@@ -231,7 +232,7 @@ def test_existing_stale_head_lands_on_current_tip(parent_turn):
     s.commit_turn("p1", "advance")
 
     out = _send_message_impl("more", to="p1:a0")  # stale head
-    assert "[delivered, running async]" in out
+    assert out.startswith("[delivered]")
     # The submission continued from the CURRENT tip, not the stale head.
     assert s.async_calls[-1]["branch_from"] == "a2"
 
@@ -298,7 +299,7 @@ def test_delivery_inherits_chain_messages(parent_turn):
 def test_name_addressing_resolves_unique_branch(parent_turn):
     parent_turn.set_branch_name("p1", "a0", "research")
     out = _send_message_impl("hi there", to="research")
-    assert "[delivered, running async]" in out
+    assert out.startswith("[delivered]")
     assert parent_turn.async_calls[-1]["branch_from"] == "a0"
 
 
@@ -338,7 +339,7 @@ def test_a_finished_agent_answers_to_the_name_it_was_spawned_with(parent_turn):
     parent_turn.set_branch_name("p1", "a0", "2加3的计算结果", auto_named=True)
     parent_turn.mark_merged("p1", ["a0"])
     out = _send_message_impl("and 4*5?", to="scout")
-    assert "[delivered, running async]" in out
+    assert out.startswith("[delivered]")
     assert parent_turn.async_calls[-1]["branch_from"] == "a0"
     # The reply notice names the agent by the name it was spawned with.
     assert parent_turn.async_calls[-1]["label"] == "scout"
@@ -364,3 +365,18 @@ def test_an_agent_head_left_behind_by_a_running_message_keeps_its_name(parent_tu
         "openprogram.programs.tools.agents.send_message.send_message.addressing")
     monkeypatch.setattr(addressing, "agent_tips", lambda session_id: [("scout", "a0_running")])
     assert delivery.branch_name("p1", "a0", "p1") == "scout"
+
+
+def test_an_agent_named_with_spaces_is_reached_as_written_or_with_underscores(parent_turn):
+    """A name is addressed as written; the identifier spelling older
+    agents were stored with reaches the same agent, and the reverse."""
+    from openprogram.runtime.jobs.store import save_job
+    from openprogram.runtime.jobs.types import Job, JobStatus
+    save_job("p1", Job(id="j1", parent_session_id="p1", prompt="spell", agent_id="main",
+                       status=JobStatus.COMPLETED, head_id="a0", label="Spell the word harbor",
+                       creates_agent=True))
+    for to in ("Spell the word harbor", "Spell_the_word_harbor", "spell the word HARBOR"):
+        out = _send_message_impl("again", to=to)
+        assert out.startswith("[delivered]"), (to, out)
+        assert parent_turn.async_calls[-1]["branch_from"] == "a0"
+        assert parent_turn.async_calls[-1]["label"] == "Spell the word harbor"

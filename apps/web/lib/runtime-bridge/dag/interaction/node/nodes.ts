@@ -1,4 +1,5 @@
-import { requestSessionLoad } from "@/lib/runtime-bridge/session/session-load";
+import { hasPrimaryModifier } from "../../../../shortcut-keys";
+import { requestSessionLoad, sendRuntimeCommand } from "@/lib/runtime-bridge/session/session-load";
 /**
  * Renderer: click / dblclick / contextmenu / chat-scroll glue.
  *
@@ -82,11 +83,11 @@ export async function _checkout(
   const sock = getSocket();
   if (sock && sock.readyState === WebSocket.OPEN) {
     runtimeState._postCheckoutScrollTo = msgId;
-    sock.send(JSON.stringify({
+    sendRuntimeCommand({
       action: "checkout_branch",
       session_id: sessionId,
       head_msg_id: target,
-    }));
+    });
     requestSessionLoad({
       action: "load_session",
       session_id: sessionId,
@@ -229,7 +230,7 @@ export function _installInteractionHandlers(rerender: () => void): void {
     // or takes it out and does nothing else. A plain click then goes on
     // to the node's own action.
     releaseEditableFocus();
-    if (e.shiftKey || e.metaKey) {
+    if (e.shiftKey || hasPrimaryModifier(e)) {
       select([id], "toggle");
       return;
     }
@@ -297,7 +298,7 @@ export function _installInteractionHandlers(rerender: () => void): void {
   document.addEventListener("dblclick", (e) => {
     const tgt = e.target as HTMLElement;
     // With Shift/⌘ held both clicks were the selection's; no fork & edit.
-    if ((e.shiftKey || e.metaKey) && tgt.closest && tgt.closest(".history-body")) return;
+    if ((e.shiftKey || hasPrimaryModifier(e)) && tgt.closest && tgt.closest(".history-body")) return;
     const node = tgt.closest && tgt.closest(".history-node");
     const edgeHit = node
       ? null

@@ -15,15 +15,18 @@ async def handle_compact(ws, cmd: dict):
     """Manual /compact entry point — user-initiated compaction.
 
     Frontend sends ``{action: "compact", session_id, keep_recent_tokens?}``.
-    We delegate to ``dispatcher.trigger_compaction`` which walks the full
-    ``engine.compact`` pipeline (LLM summary, DAG re-parent, event
-    broadcast).
+    We delegate to ``trigger_compaction``, which compacts the chain ending
+    at the session's head through ``engine.compact`` (LLM summary, one
+    summary node spliced in, compaction frames).
 
-    Compaction rewrites the history a turn reads, so it holds the
-    session's run slot: while a turn runs the request is refused with
-    ``run_active``, and no turn starts until compaction ends. It runs as
-    a background task so the requesting socket keeps serving its other
-    actions during the summary call.
+    Compaction rewrites the history the branch's next turn reads, so it is
+    that branch's foreground operation (``op_kind: "compact"``): refused
+    with ``run_active`` naming what runs while the branch is busy, and no
+    turn starts on that branch until it ends. Other branches keep running.
+    Every client shows it as the branch's run with a Stop, which names its
+    ``op_id`` (``operation.cancel``). It runs as a background task so the
+    requesting socket keeps serving its other actions during the summary
+    call.
     """
     from openprogram.interfaces.server import server as _s
     from .turn_request import _send_chat_error
@@ -55,7 +58,10 @@ async def handle_compact(ws, cmd: dict):
             keep_recent_tokens = None
 
     reservation_id = "compact_" + uuid.uuid4().hex[:8]
-    if not await asyncio.to_thread(_s._try_reserve_run, session_id, reservation_id):
+    refusal = await asyncio.to_thread(
+        _s.reserve_operation, session_id, "compact", reservation_id,
+    )
+    if refusal is not None:
         # The same frame a failed compaction sends, so the context panel
         # resets its compaction state; nothing touches a queued message.
         await ws.send_text(json.dumps({
@@ -64,8 +70,9 @@ async def handle_compact(ws, cmd: dict):
                 "type": "compaction_failed",
                 "session_id": session_id,
                 "msg_id": "compact",
-                "code": "run_active",
-                "error": "A turn is running in this conversation; compact after it ends.",
+                "code": refusal.get("code") or "run_active",
+                "kind": refusal.get("kind"),
+                "error": refusal.get("error"),
                 "user_initiated": True,
             },
         }))
@@ -82,16 +89,35 @@ async def _run_compaction(_s, session_id: str, reservation_id: str,
                           agent_id: str, keep_recent_tokens) -> None:
     from openprogram.runtime.conversation.turn_runtime import trigger_compaction
 
+    # The frame that ends compaction goes out only after the slot is free:
+    # a client reloads the conversation on it, and a load that still found
+    # the reservation would show the conversation as running.
+    ending: list[dict] = []
+
     def _emit(envelope: dict) -> None:
         # Re-shape to the standard chat-response wire frame and
         # broadcast so every connected client sees compaction progress.
-        if envelope.get("type") == "chat_response":
-            _s._broadcast_chat_response(
-                session_id, "compact", envelope.get("data") or {},
-            )
+        if envelope.get("type") != "chat_response":
+            return
+        data = envelope.get("data") or {}
+        if data.get("type") in ("compaction_finished", "compaction_failed"):
+            ending.append(data)
+            return
+        if data.get("type") == "compaction_started" and op_id:
+            # The terminal's stop key names this operation (operation.cancel).
+            data = {**data, "op_id": op_id}
+        _s._broadcast_chat_response(session_id, "compact", data)
+
+    # A Stop of this operation (its op_id) ends the summary request.
+    from openprogram.interfaces.server.server_runtime.run_slots import cancel_event
+    with _s._running_tasks_lock:
+        slot = _s._running_tasks.get(session_id) or {}
+        op_id = slot.get("op_id") if slot.get("msg_id") == reservation_id else None
+    stop = cancel_event(op_id)
 
     # Compaction is a blocking sync call (it runs an LLM under the hood
     # via its own event loop), so it runs on a worker thread.
+    compacted = False
     try:
         await asyncio.to_thread(
             trigger_compaction,
@@ -99,15 +125,48 @@ async def _run_compaction(_s, session_id: str, reservation_id: str,
             agent_id=agent_id,
             on_event=_emit,
             keep_recent_tokens=keep_recent_tokens,
+            cancel_event=stop,
         )
-        await asyncio.to_thread(_s.refresh_context_stats, session_id, "compact")
+        compacted = True
     except Exception as e:  # noqa: BLE001
-        _s._broadcast_chat_response(session_id, "compact", {
+        ending.append({
             "type": "error",
             "content": f"compact failed: {type(e).__name__}: {e}",
         })
     finally:
         _s._release_run_reservation(session_id, reservation_id)
+        for data in ending:
+            _s._broadcast_chat_response(session_id, "compact", data)
+    if compacted:
+        # Accounting reads the new history; it rewrites none, so it runs
+        # outside the slot and broadcasts its own context_stats frame.
+        try:
+            await asyncio.to_thread(_s.refresh_context_stats, session_id, "compact")
+        except Exception as e:  # noqa: BLE001
+            _s._log(f"[compact] context stats {session_id}: {type(e).__name__}: {e}")
+
+
+async def handle_operation_cancel(ws, cmd: dict):
+    """Stop one foreground operation by its ``op_id``.
+
+    ``{action: "operation.cancel", session_id, op_id}``. An operation with
+    no execution (/compact, a rewind) ends through its cancel event and its
+    slot's clear; one that became a turn is stopped like any turn. Answers
+    ``operation_cancel_result`` with ``ok`` or ``code: "not_found"`` for an
+    operation that already ended.
+    """
+    from openprogram.interfaces.server import server as _s
+
+    session_id = (cmd.get("session_id") or "").strip()
+    op_id = (cmd.get("op_id") or "").strip()
+    if not session_id or not op_id:
+        result = {"ok": False, "code": "invalid_request", "error": "session_id and op_id are required"}
+    else:
+        result = await asyncio.to_thread(_s.cancel_operation, session_id, op_id)
+    await ws.send_text(json.dumps({
+        "type": "operation_cancel_result",
+        "data": {**result, "session_id": session_id or None, "op_id": op_id or None},
+    }, default=str))
 
 
 async def handle_sandbox(ws, cmd: dict):

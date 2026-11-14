@@ -148,3 +148,127 @@ def test_a_commit_leaves_no_probation_for_a_repair_to_bring_back(tmp_path):
 
     assert repaired.version == "new" and repaired.probation == "" and repaired.probation_deadline is None
     assert repaired.last_good == committed.last_good == "new" and repaired.previous_good == "old"
+
+
+# Windows: another handle on a pointer file refuses the open, rename or delete
+# for a moment. These run the Windows branches against stand-ins; they have not
+# run on Windows.
+
+
+def test_a_lock_that_cannot_be_removed_does_not_undo_a_finished_move(layout, monkeypatch):
+    _seed(layout)
+    real = type(layout.lock).unlink
+    refusals = []
+
+    def unlink(self, missing_ok=False):
+        if self.name == "current.lock":
+            refusals.append(self)
+            raise PermissionError(13, "The process cannot access the file because it is being used by another process")
+        return real(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(type(layout.lock), "unlink", unlink)
+    monkeypatch.setattr(pointers, "_WINDOWS", True)
+    monkeypatch.setattr(pointers, "_WINDOWS_RETRY_SECONDS", 0)
+    monkeypatch.setattr(pointers, "_replace", lambda source, target: os.replace(source, target))
+    moved = pointers.compare_and_set(layout, 1, writer="a", version="v2")
+    assert moved.version == "v2" and pointers.read(layout).version == "v2"
+    assert len(refusals) == pointers._WINDOWS_RETRIES, "the delete is retried through the sharing violation"
+    # The lock left behind expires by age, as a crashed writer's does.
+    monkeypatch.undo()
+    old = time.time() - pointers.LOCK_BREAK_SECONDS - 1
+    os.utime(layout.lock, (old, old))
+    assert pointers.compare_and_set(layout, 2, writer="a", version="v3").version == "v3"
+
+
+def test_a_lock_released_after_a_brief_refusal_is_removed(layout, monkeypatch):
+    _seed(layout)
+    real = type(layout.lock).unlink
+    refusals = []
+
+    def unlink(self, missing_ok=False):
+        if self.name == "current.lock" and len(refusals) < 2:
+            refusals.append(self)
+            raise PermissionError(13, "Access is denied")
+        return real(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(type(layout.lock), "unlink", unlink)
+    monkeypatch.setattr(pointers, "_WINDOWS", True)
+    monkeypatch.setattr(pointers, "_WINDOWS_RETRY_SECONDS", 0)
+    monkeypatch.setattr(pointers, "_replace", lambda source, target: os.replace(source, target))
+    pointers.compare_and_set(layout, 1, writer="a", version="v2")
+    assert not layout.lock.exists()
+
+
+def test_a_lock_that_cannot_be_read_ends_in_a_conflict_not_a_spin(layout, monkeypatch):
+    _seed(layout)
+    layout.lock.write_text("")
+    real = type(layout.lock).stat
+    calls = []
+
+    def stat(self, **options):
+        if self.name == "current.lock":
+            calls.append(self)
+            if len(calls) > 500:
+                raise AssertionError("the writer spins on a lock it cannot read")
+            raise PermissionError(13, "Access is denied")  # Windows: the file is being deleted.
+        return real(self, **options)
+
+    monkeypatch.setattr(type(layout.lock), "stat", stat)
+    with pytest.raises(pointers.PointerConflict):
+        pointers._acquire(layout, wait=0.2)
+    assert len(calls) < 20
+
+
+class _Kernel32:
+    """``MoveFileExW`` that fails with a sharing violation twice, then renames."""
+
+    def __init__(self, state):
+        self.state = state
+
+    @property
+    def MoveFileExW(self):
+        state = self.state
+
+        class Call:
+            argtypes = restype = None
+
+            def __call__(self, source, target, flags):
+                state["flags"] = flags
+                state["calls"] += 1
+                if state["calls"] <= 2:
+                    state["last_error"] = 32
+                    return 0
+                os.replace(source, target)
+                return 1
+
+        return Call()
+
+
+def test_a_windows_rename_reads_its_error_code_and_retries(layout, monkeypatch):
+    import ctypes
+
+    _seed(layout)
+    state = {"calls": 0, "last_error": 0}
+
+    def win_dll(name, use_last_error=False):
+        assert name == "kernel32"
+        state["saves_last_error"] = use_last_error
+        return _Kernel32(state)
+
+    def win_error(code=None):
+        # Without a code ctypes asks the thread, whose value Python may already have overwritten.
+        code = 0 if code is None else code
+        return PermissionError(13, "sharing violation") if code == 32 else OSError(22, "The operation completed successfully")
+
+    monkeypatch.setattr(ctypes, "WinDLL", win_dll, raising=False)
+    monkeypatch.setattr(ctypes, "windll", type("windll", (), {"kernel32": _Kernel32(state)})(), raising=False)
+    monkeypatch.setattr(ctypes, "get_last_error", lambda: state["last_error"] if state.get("saves_last_error") else 0,
+                        raising=False)
+    monkeypatch.setattr(ctypes, "WinError", win_error, raising=False)
+    monkeypatch.setattr(pointers, "_WINDOWS", True)
+    monkeypatch.setattr(pointers, "_WINDOWS_RETRY_SECONDS", 0)
+    source = layout.root / "current.1.tmp"
+    source.write_text("x")
+    pointers._replace(source, layout.root / "moved")
+    assert (layout.root / "moved").read_text() == "x" and not source.exists()
+    assert state["calls"] == 3 and state["flags"] == 0x1 | 0x8, "replace existing, write through"

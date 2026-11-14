@@ -187,16 +187,16 @@ def test_public_docs_follow_the_release_platform_policy() -> None:
 def test_install_docs_say_what_each_release_offers() -> None:
     expectations = {
         "docs/install/install.html": (
-            ">Terminal install only, x86_64 and arm64.</td>",
-            ">Adds the App: deb and AppImage, x86_64 and arm64.</td>",
-            ">No prebuilt files. The PowerShell command stops and says so; only a source checkout works.</td>",
-            ">Adds the App and the terminal install, x64. Windows on Arm comes later.</td>",
+            ">v1.1.0, latest published</th>",
+            ">App as deb and AppImage, and the terminal install; x86_64 and arm64.</td>",
+            '>No App. The x64 terminal archive is on the <a href="download.html#v1-1-0">Download</a> page.</td>',
+            ">Adds the App, x64. Windows on Arm comes later.</td>",
         ),
         "docs/install/install.zh.html": (
-            ">只有终端安装，x86_64 和 arm64。</td>",
-            ">增加 App：deb 和 AppImage，x86_64 和 arm64。</td>",
-            ">没有预构建文件。PowerShell 命令会停下并说明原因，只能用源码 checkout。</td>",
-            ">增加 App 和终端安装，x64。Windows on Arm 以后再做。</td>",
+            ">v1.1.0，最新已发布</th>",
+            ">App（deb 和 AppImage）和终端安装，x86_64 和 arm64。</td>",
+            '>没有 App。x64 终端压缩包在<a href="download.zh.html#v1-1-0">下载</a>页。</td>',
+            ">增加 App，x64。Windows on Arm 以后再做。</td>",
         ),
     }
     for relative, expected in expectations.items():

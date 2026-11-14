@@ -30,7 +30,9 @@ def start_recovery_turn(store, execution, event):
     if (request.get("interaction") not in {None, "interactive"}
             or request.get("source") not in {"web", "tui", "acp"}):
         return "noninteractive"
-    key = f"restart:{execution.execution_id}:{event.sequence}"
+    from openprogram.runtime.execution.execution_tree import continuation_key
+
+    key = continuation_key(execution.execution_id, event.sequence)
     new_id = store.admission_execution_id(execution.session_id, key)
     with chat.locked(execution.session_id):
         current = store.get_execution(execution.execution_id)

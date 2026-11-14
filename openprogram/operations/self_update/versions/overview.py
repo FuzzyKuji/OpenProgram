@@ -26,6 +26,7 @@ from . import layout as paths
 from . import pointer as pointers
 from . import store as sealed
 from .layout import Layout
+from openprogram.host._platform import filesystem
 
 NUMBERS_FILE = "version-numbers.json"
 SEEN_FILE = "notices-seen.json"
@@ -49,7 +50,7 @@ def _write_json(path: Path, value: Any) -> None:
     temporary = path.with_name(f"{path.name}.{os.getpid()}.tmp")
     try:
         temporary.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
-        os.replace(temporary, path)
+        filesystem.replace_file(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
 

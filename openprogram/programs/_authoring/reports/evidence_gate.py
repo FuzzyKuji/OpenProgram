@@ -129,6 +129,13 @@ class EvidenceGate:
                 raise TimeoutError('Weekly original-source read deadline expired')
             return False
 
+        # The model these receipts are read by: its window bounds each stored
+        # result as it does in a turn (``spill.result_cap``).
+        try:
+            window = getattr(runtime._resolve_session_model(), 'context_window', None)
+        except Exception:
+            window = None
+
         async def invoke(name, args):
             await checkpoint()
             if not allowed() or name not in {t.name for t in tools}:
@@ -146,7 +153,8 @@ class EvidenceGate:
                     consumer.result()
                 return await checkpoint(kind, payload)
             try:
-                result = await _execute_tool_calls(tools, message, None, stream, safe_point_hook=persist_checkpoint)
+                result = await _execute_tool_calls(tools, message, None, stream, safe_point_hook=persist_checkpoint,
+                    context_window=window)
             finally:
                 stream.end([])
                 await consumer

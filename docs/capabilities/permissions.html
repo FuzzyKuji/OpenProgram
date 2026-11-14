@@ -16,7 +16,7 @@
 <thead class="sr"><tr><th scope="col">Topic</th><th scope="col">Detail</th></tr></thead>
 <tbody>
 <tr><th scope="row">Pick</th><td>Web, App: bottom of the message box. Terminal: <code translate="no">/permissions</code>; <code translate="no">Shift+Tab</code> cycles the four in this order.</td></tr>
-<tr><th scope="row">Which applies</th><td>The conversation's own mode, else its project's default (project settings), else Bypass permissions. Every turn uses it, attended or not.</td></tr>
+<tr><th scope="row">Which applies</th><td>The current branch's own mode, else its project's default (project settings), else Bypass permissions. Every turn uses it, attended or not.</td></tr>
 <tr><th scope="row">Bypass permissions</th><td>Stored as <code translate="no">bypass</code>, the word <code translate="no">--permission</code> and project settings files use. Does not override explicit deny or ask rules, <a href="#messages-an-agent-sends-for-you">held messages</a>, plugin restrictions or identity limits.</td></tr>
 <tr><th scope="row">Auto</th><td>A review that cannot run refuses the call.</td></tr>
 <tr><th scope="row">Manual</th><td>App access is asked on first touch and can be allowed for the conversation.</td></tr>
@@ -82,7 +82,7 @@
 <li>The selection is sent at once when the interface knows the confirmed session version, and shown as effective only after confirmation. The change holds even while the model reasons, streams or generates arguments.</li>
 <li>The new mode enters later model requests; text being generated is not rewritten. A tool already authorized keeps its authorization. Switching into Plan stops pending writes from being authorized.</li>
 <li>An ordinary approval no longer required resolves through the execution's durable wait and the task continues. Explicit ask rules, questions, forms and Sandbox escalation are not answered by a mode change. Repeated answers, cancellation, timeout and recovery cannot run a completed call again.</li>
-<li>Session-specific. Other windows receive the confirmed mode; stale updates are rejected. A failed or disconnected update stays unconfirmed: reconnect, review the mode, then retry. An unsent draft stores its mode locally and sends it with the first message.</li>
+<li>Branch-specific. Other windows on that branch receive the confirmed mode; stale branch or version updates are rejected. A failed or disconnected update stays unconfirmed: reconnect, review the mode, then retry. An unsent draft stores its mode locally and sends it with the first message.</li>
 </ul>
 </details>
 <table class="stack fixed">
@@ -102,6 +102,8 @@
 <li>The next operation in an authenticated interactive owner session reads current rules, including changes made mid-turn. Authorized operations keep their authorization; approval waits still need an answer; admitted sub-agents keep their captured policy.</li>
 <li>Removing a rule affects future authorization, not what already ran.</li>
 <li>Windows paths: forward slashes avoid escaping ambiguity, as in <code translate="no">read(C:/Users/me/project/**)</code>. Ordinary backslashes in drive paths are preserved. The syntax escapes its own characters with <code translate="no">\\</code>, <code translate="no">\(</code> and <code translate="no">\)</code>. JSON configuration adds JSON's own backslash escaping.</li>
+<li>A path rule matches however the same file is written: either slash, a short name, a link to the folder. Deny and Ask rules ignore letter case and also catch a relative path from the working directory; Allow rules compare the full path in the case stored on disk. A network share is written <code translate="no">//server/share/**</code>, or pasted with backslashes throughout.</li>
+<li>When commands run in PowerShell, a command containing <code translate="no">{</code>, <code translate="no">}</code> or <code translate="no">,</code> matches an Allow rule only by its exact text, as <strong>Always allow</strong> saves it. Deny and Ask rules read it as usual.</li>
 </ul>
 </details>
 <h2 id="understand-a-refusal">Refusals</h2>
@@ -115,7 +117,7 @@
 </tbody></table>
 <p class="note">Missing or malformed arguments are not a refusal: they return to the model as an ordinary tool error.</p>
 <h2 id="sandbox">Sandbox</h2>
-<p>Off by default; turned on per conversation in the composer Plus menu. Changes affect later turns.</p>
+<p>Off by default; turned on per branch in the composer Plus menu. Changes affect later turns.</p>
 <table class="stack fixed">
 <thead class="sr"><tr><th scope="col">Setting or case</th><th scope="col">Effect</th></tr></thead>
 <tbody>

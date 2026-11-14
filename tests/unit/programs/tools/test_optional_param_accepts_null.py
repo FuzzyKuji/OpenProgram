@@ -146,19 +146,20 @@ def test_get_mcp_prompt_arguments_retain_dynamic_keys():
     assert args.get("additionalProperties") == {}  # dict[str, Any] values remain free-form.
 
 
-# ── the actual bug: the agent tool's agent_id ──
+# ── the actual bug: the agent tool's optional saved-Agent parameter ──
+# (named ``agent``; ``agent_id`` is its older name, accepted but not advertised)
 
-def test_agent_tool_agent_id_accepts_null():
+def test_agent_tool_agent_param_accepts_null():
     from openprogram.programs import agent_tools
     tool = next((t for t in agent_tools(toolset="full") if t.name == "agent"), None)
     assert tool is not None, "agent tool must be registered"
     params = tool.parameters
     assert params, "agent tool must expose a parameters schema"
     props = params["properties"]
-    assert "agent_id" in props
-    assert _accepts_null(props["agent_id"]), props["agent_id"]
-    # agent_id is optional → not in required
-    assert "agent_id" not in params.get("required", [])
+    assert "agent" in props
+    assert _accepts_null(props["agent"]), props["agent"]
+    # optional → not in required
+    assert "agent" not in params.get("required", [])
 
 
 # The Codex backend fails a request whose type list with "null" describes an

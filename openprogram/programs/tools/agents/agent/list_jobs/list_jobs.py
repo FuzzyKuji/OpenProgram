@@ -17,6 +17,8 @@ _SUBJECT_CLIP = 80
         "canonical nested resource view."
     ),
     toolset=["core"],
+    # list_agents shows running work now; kept for programs.
+    expose=False,
 )
 def list_jobs() -> str | AgentToolResult:
     """Render the current session's task table as text."""

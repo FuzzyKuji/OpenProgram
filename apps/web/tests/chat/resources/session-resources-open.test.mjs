@@ -870,7 +870,9 @@ test("type groups retain sidebar actions and collapse state without using page o
   let { host, root } = mountPanel();
   try {
     await act(async () => root.render(createElement(SessionResourcesPanel)));
-    assert.deepEqual([...host.querySelectorAll('[data-resource-group]')].map(el => el.dataset.resourceGroup), ['web', 'vm', 'terminal', 'application']);
+    assert.deepEqual([...host.querySelectorAll('[data-resource-group]')].map(el => el.dataset.resourceGroup), ['web', 'vm']);
+    // Groups with nothing in them are not listed, header included.
+    assert.doesNotMatch(host.textContent, /Terminal|Application/);
     assert.equal(host.querySelector('[data-resource-group="web"] [aria-expanded]').textContent, 'Webpage');
     assert.doesNotMatch(host.textContent, /Open Baidu/);
     assert.ok(previewInConversationButton(host, 'Baidu title'));

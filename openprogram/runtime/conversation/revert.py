@@ -75,46 +75,25 @@ def _apply(
             "linked_impacts": ownership["linked"],
         }
     owned_turn_ids = ownership["owned_turn_ids"]
-    if owned_turn_ids:
-        plan = journal.plan_rewind_operation(
-            owned_turn_ids + [assistant_msg_id], direction=direction,
-        )
-        if plan.get("status") != "ready":
-            result = {
-                **plan,
-                "transaction_id": None,
-                "restored_paths": [],
-                "new_head_id": None,
-                "head_changed": False,
-            }
-        else:
-            head_id = index.head_id
-            result = journal.apply_rewind_operation(
-                owned_turn_ids + [assistant_msg_id],
-                expected_head_id=head_id,
-                target_head_id=head_id,
-                get_head=lambda: (
-                    (store.get_session(session_id) or {}).get("head_id")
-                ),
-                compare_and_set_head=lambda expected, target, rollback=False: (
-                    expected == target == head_id
-                    and store.compare_and_set_head(session_id, expected, target)
-                ),
-                idempotency_key=(
-                    f"turn-closure:{direction}:"
-                    f"{idempotency_key or assistant_msg_id}"
-                ),
-                target_msg_id=f"{direction}:{assistant_msg_id}",
-                custom_actions=plan["actions"],
+    # One critical section from the plan to the outcome: a second request
+    # with the same key waits for the first and then replays its intent,
+    # instead of planning against the files the first one restored or
+    # reading its unfinished intent as one that needs recovery. The
+    # recovery scope keeps the head callbacks' opens from replaying this
+    # very intent: a cache miss inside the journal's workspace lock would
+    # otherwise take that lock again and hang.
+    with store._conversation_write_lock(session_id), store._rewind_recovery_scope(session_id):
+        if owned_turn_ids:
+            result = _apply_owned_closure(
+                store, journal, session_id, assistant_msg_id, direction,
+                idempotency_key, owned_turn_ids,
             )
-            result["head_changed"] = False
-            result["new_head_id"] = None
-    else:
-        result = journal.apply_history_operation(
-            assistant_msg_id,
-            direction,
-            idempotency_key=idempotency_key,
-        )
+        else:
+            result = journal.apply_history_operation(
+                assistant_msg_id,
+                direction,
+                idempotency_key=idempotency_key,
+            )
     result["owned_turn_ids"] = owned_turn_ids
     result["linked_impacts"] = ownership["linked"]
     payload = {**base, **result}
@@ -124,6 +103,50 @@ def _apply(
         session_log, node, reverted=direction == "revert", result=result,
     )
     return payload
+
+
+def _apply_owned_closure(
+    store, journal, session_id, assistant_msg_id, direction, idempotency_key, owned_turn_ids,
+) -> dict[str, Any]:
+    """Plan and apply a turn's file closure; the caller holds the write lock."""
+    key = f"turn-closure:{direction}:{idempotency_key or assistant_msg_id}"
+    target_msg_id = f"{direction}:{assistant_msg_id}"
+    turn_ids = owned_turn_ids + [assistant_msg_id]
+    head_id = (store.get_session(session_id) or {}).get("head_id")
+    existing = journal.read_rewind_intent(key)
+    if existing is None:
+        plan = journal.plan_rewind_operation(turn_ids, direction=direction)
+        if plan.get("status") != "ready":
+            return {
+                **plan,
+                "transaction_id": None,
+                "restored_paths": [],
+                "new_head_id": None,
+                "head_changed": False,
+            }
+        actions = plan["actions"]
+    else:
+        # The journal replays the outcome recorded under this key.
+        head_id = existing.get("expected_head_id")
+        actions = existing.get("actions") or []
+    result = journal.apply_rewind_operation(
+        turn_ids,
+        expected_head_id=head_id,
+        target_head_id=head_id,
+        get_head=lambda: (
+            (store.get_session(session_id) or {}).get("head_id")
+        ),
+        compare_and_set_head=lambda expected, target, rollback=False: (
+            expected == target == head_id
+            and store.compare_and_set_head(session_id, expected, target)
+        ),
+        idempotency_key=key,
+        target_msg_id=target_msg_id,
+        custom_actions=actions,
+    )
+    result["head_changed"] = False
+    result["new_head_id"] = None
+    return result
 
 
 def revert_turn(

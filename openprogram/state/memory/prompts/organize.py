@@ -10,7 +10,7 @@ Split every file the workspace structure marks as over the limit into the direct
 
 Apart from splitting, make each change with a small Edit. Never rewrite a whole file just to rearrange it: these files are mostly footnote definitions, and reproducing them costs far more than the organizing is worth. If a file is already well organized, say so and move on. Doing nothing is a valid outcome.
 
-Finish by bringing `MEMORY.md` up to date with what the tree now is. Read it, then fix what is stale: files added, moved, split or removed; a subject described by a quoted fact instead of by what it covers (a generated map starts out that way — replace each with a short phrase such as "visa requirements and application materials"); and what is currently active. Rewrite it in one Write when most of it changes, otherwise Edit the lines that did. Leave it alone when it is already right.
+Finish by bringing `MEMORY.md` up to date with what the tree now is. Read it, then fix what is stale: files added, moved, split or removed; a subject described by a bare title or a quoted fact instead of by what it covers (a generated map names each file by its title — replace each with a short phrase such as "visa requirements and application materials"); and what is currently active. Rewrite it in one Write when most of it changes, otherwise Edit the lines that did. Leave it alone when it is already right.
 
 If a paragraph remains, keep its existing block ID. Moving a paragraph carries its ID along. Splitting a paragraph keeps the original ID on one part; the other part gets no ID and the Runtime assigns one. When deleting a block, remove or update every link to that block in the same turn.
 

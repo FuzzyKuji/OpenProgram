@@ -137,7 +137,7 @@ replay:  transform(api, original) -&gt; shared_replay</code></pre>
 <ol>
 <li><code translate="no">RecordingSink</code> serializes and appends each line under a process-local <code translate="no">threading.RLock</code>.</li>
 <li>Each append opens with <code translate="no">O_WRONLY | O_CREAT | O_APPEND</code>, mode 0600, and takes an exclusive <code translate="no">flock</code> across processes.</li>
-<li>The header and next <code translate="no">call_index</code> are allocated under the file lock, by scanning for the maximum request index.</li>
+<li>The header and next <code translate="no">call_index</code> are allocated under the file lock: one past the highest request index. The sink remembers how far it has read, so each call reads only the lines appended since, by any process; a file shorter than that is read again from the start.</li>
 <li>A complete UTF-8 line plus newline goes out in an <code translate="no">os.write</code> loop.</li>
 <li><code translate="no">fsync</code> runs after <code translate="no">call_end</code> only; a crash leaves an incomplete call the strict parser detects.</li>
 <li>Events may interleave; <code translate="no">call_index</code> and <code translate="no">event_index</code> group them.</li>

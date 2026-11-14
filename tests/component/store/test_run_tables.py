@@ -100,3 +100,38 @@ def test_job_tables_are_the_profiles_run_tables(tmp_path, monkeypatch):
     monkeypatch.setattr(paths, "get_run_state_path", lambda: run_state)
 
     assert _tables_beside(tmp_path / "usage.db") is ExecutionStore(run_state).tables
+
+
+def test_a_turn_another_process_starts_in_a_loaded_session_is_found(tmp_path):
+    """A scheduled run's process adds its turn to a conversation the Worker has loaded already."""
+    worker = _tables(tmp_path)
+    with worker.transaction() as handle:
+        _insert_all(handle, "mine")
+        handle.update("executions", {"status": "running", "owner_lease_json": "{}"}, execution_id="mine")
+    run_process = _tables(tmp_path)
+    run_process.ensure_session("s1")
+    with run_process.transaction() as handle:
+        _insert_all(handle, "theirs", "dropped")
+        handle.insert("runs", {"run_id": "r2", "session_id": "s1", "created_at": 2.0})
+        handle.update("executions", {"status": "running", "run_id": "r2", "owner_lease_json": "{}"},
+                      execution_id="theirs")
+        handle.delete("executions", execution_id="dropped")
+
+    # Looking it up by id finds it, through the index the other process added to.
+    assert worker.handle.get("executions", "theirs") is None
+    worker.ensure_execution("theirs")
+    assert worker.handle.get("executions", "theirs")["status"] == "running"
+    assert worker.handle.get("runs", "r2") is not None
+    assert worker.handle.get("executions", "dropped") is None
+    # What this process holds is left as it is.
+    assert worker.handle.get("executions", "mine")["status"] == "running"
+
+    # Reading the session in again finds a turn started after the load as well.
+    later = _tables(tmp_path)
+    later.ensure_session("s1")
+    with run_process.transaction() as handle:
+        _insert_all(handle, "next")
+        handle.update("executions", {"owner_lease_json": "{}"}, execution_id="next")
+    later.take_up_other_process_turns("s1")
+    assert later.handle.get("executions", "next")["status"] == "queued"
+    assert sorted(row["execution_id"] for row in later.handle.rows("executions")) == ["mine", "next", "theirs"]

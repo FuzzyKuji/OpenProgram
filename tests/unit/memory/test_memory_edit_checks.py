@@ -71,8 +71,20 @@ def test_uncited_prose_is_reported_by_file(writer):
     _workspace, handlers, ref, _ = writer
     content = _paragraph("Owner likes tea.", "likes tea", ref) + "\n- a bullet with no evidence\n"
     reply = _call(handlers["Write"], file_path="topics/owner.md", content=content)
-    assert "required: owner.md" in reply
+    # Checked by who wrote it: a writer's paragraph must cite.
+    assert "in topics/owner.md cites no chat message" in reply
     assert "Bullet lists" in reply
+
+
+def test_an_edit_to_a_file_written_outside_is_reported(writer):
+    workspace, handlers, ref, _ = writer
+    (workspace.memory_dir / "topics/ext.md").write_text("# Ext\n\nA note.\n", encoding="utf-8")
+    workspace._refresh_stage()
+    workspace.turn_baseline = workspace.baseline()
+    reply = _call(handlers["Write"], file_path="topics/ext.md",
+                  content=_paragraph("Owner likes tea.", "likes tea", ref))
+    assert "written outside OpenProgram and is read-only" in reply
+    assert "Leave it exactly as it was" in reply
 
 
 def test_non_topic_files_are_not_checked(writer):

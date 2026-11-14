@@ -11,6 +11,8 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { SolarIcon } from "@/components/solar-icons";
 import { RailBadge, RailCount, RailItem } from "@/components/ui/secondary-rail";
 import { parseFrontmatter, renderMarkdown } from "./markdown/markdown";
+import { markOrigins, type TopicOrigins } from "./markdown/origin-marks";
+import { Badge } from "@/components/ui/badge";
 import { formatDate } from "./markdown/format";
 import { DocIcon } from "./icons";
 import { useTranslation } from "@/lib/i18n";
@@ -73,9 +75,11 @@ export function TreeGroup({ folder, pages, expanded, onToggle, selected, onSelec
   );
 }
 
-export function EditorPanel({ title, badge, meta, state, onChange, onViewMode, onDelete, onPreviewClick, tools, notices, detail, loading, onKeyDown, readOnly }: {
+export function EditorPanel({ title, badge, meta, state, onChange, onViewMode, onDelete, onPreviewClick, tools, notices, detail, loading, onKeyDown, readOnly, origins }: {
   title: string;
   badge?: React.ReactNode;
+  /** Where the file and its paragraphs came from; marks the preview. */
+  origins?: TopicOrigins | null;
   meta: string[];
   state: EditorState;
   onChange: (c: string) => void;
@@ -94,7 +98,9 @@ export function EditorPanel({ title, badge, meta, state, onChange, onViewMode, o
   const { frontmatter, body } = parseFrontmatter(state.content);
   const lines = state.content.split("\n").length;
   const words = state.content.trim() ? state.content.trim().split(/\s+/).length : 0;
-  const previewHtml = state.viewMode === "preview" ? renderMarkdown(body) : "";
+  const previewHtml = state.viewMode === "preview"
+    ? markOrigins(renderMarkdown(body), origins, text("Added by you", "你添加的"))
+    : "";
 
   return (
     <div className={styles.editor}>
@@ -105,6 +111,11 @@ export function EditorPanel({ title, badge, meta, state, onChange, onViewMode, o
             <div className="min-w-0 flex items-center gap-[8px]">
               <span className={styles.editorTitle}>{title}</span>
               {badge}
+              {origins?.origin === "outside" && (
+                <Badge variant="secondary" data-origin="outside">
+                  {text("Written outside OpenProgram · read only to memory", "OpenProgram 之外写的 · 记忆只读不改")}
+                </Badge>
+              )}
             </div>
             {meta.length > 0 && (
               <div className={styles.editorHeaderMeta}>{meta.map((m, i) => <span key={i}>{m}</span>)}</div>

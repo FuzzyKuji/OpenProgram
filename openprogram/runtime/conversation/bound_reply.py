@@ -28,6 +28,9 @@ Only the reply text goes out, through the channels' own reply path
 (``channel_link.open_reply``: paragraphs as they stream, text before a
 tool call before the tool runs, files as attachments). A failed send is
 logged and shown in the App as a ``channel_delivery_failed`` chat frame.
+A response sent again after a transport failure drops its unsent text;
+paragraphs already sent stay, and are not sent again when the new
+response repeats them.
 
 The end of a delivery (the rest of the reply, its files) runs on a
 background lane per recipient, in order, so a slow platform never holds
@@ -229,7 +232,11 @@ class BoundReply:
             if delivery is not None:
                 delivery.feed(event["text"])
         elif kind == "tool_use" and self._delivery is not None:
-            self._delivery.flush()
+            self._delivery.flush(response_ended=not event.get("provider_executed"))
+        elif kind == "retry" and event.get("restart") and self._delivery is not None:
+            # The request is sent again after a transport failure and what it
+            # streamed is void (``streaming/resend.py``).
+            self._delivery.restart()
 
     def _open(self) -> Any:
         """The delivery, opened on first use; None once opening failed
@@ -360,8 +367,10 @@ def attach(req: Any, assistant_msg_id: str, *, resumed: bool = False) -> Optiona
     checkpoint (see ``delivered_here``). A background turn (an always-on
     check-in) and a turn receiving a handoff message are not replies of
     the chat and send nothing."""
+    from openprogram.runtime.agent.turn_request import owns_conversation_effects
     from openprogram.runtime.permissions.identity import HANDOFF_MESSAGE
-    if getattr(req, "background", False) or getattr(req, "automation", None) == HANDOFF_MESSAGE:
+    if (not owns_conversation_effects(req)
+            or getattr(req, "automation", None) == HANDOFF_MESSAGE):
         return None
     try:
         from openprogram.runtime.context.session_db import default_db

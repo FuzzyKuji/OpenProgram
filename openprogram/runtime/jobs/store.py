@@ -98,7 +98,7 @@ def _load_raw(path) -> dict[str, dict[str, Any]]:
 
 def _write_raw(path, jobs: dict[str, dict[str, Any]]) -> None:
     payload = {"version": 1, "jobs": jobs}
-    path.write_text(json.dumps(payload, ensure_ascii=False, default=str, indent=2))
+    path.write_text(json.dumps(payload, ensure_ascii=False, default=str, indent=2), encoding="utf-8")
 
 
 def _ensure_session(session_id: str):
@@ -150,9 +150,27 @@ def mirror_linked_job_to_caller(job: Job) -> None:
 
     save_job(
         caller_session_id,
-        replace(job, parent_session_id=caller_session_id),
+        # Only the Job's own row carries its unsent notice.
+        replace(job, parent_session_id=caller_session_id, notice_pending=None),
         _mirror=False,
     )
+
+
+def settle_notice(session_id: str, job_id: str) -> None:
+    """The parent's notice for this Job is queued (or not owed): clear the mark."""
+    from openprogram.state.store.session.session_lock import session_interprocess_lock
+    with session_interprocess_lock(session_id):
+        path = _jobs_path(session_id)
+        if path is None or not path.exists():
+            return
+        with _session_lock(session_id):
+            with _session_file_lock(path):
+                jobs = _load_raw(path)
+                row = jobs.get(job_id)
+                if not row or not row.get("notice_pending"):
+                    return
+                row["notice_pending"] = None
+                _write_raw(path, jobs)
 
 
 def load_job(session_id: str, job_id: str) -> Optional[Job]:
@@ -285,6 +303,11 @@ def _update_job_status_locked(
                     t.started_at = now
                 elif is_terminal(new_status) and t.completed_at is None:
                     t.completed_at = now
+                if is_terminal(new_status):
+                    # The parent still has to hear this ended; settled once
+                    # its notice is queued (jobs/handoff.py).
+                    from openprogram.runtime.jobs.handoff import this_process
+                    t.notice_pending = this_process()
                 if new_status == JobStatus.CANCELLED and t.cancel_requested_at is None:
                     t.cancel_requested_at = now
                 for k, v in fields.items():

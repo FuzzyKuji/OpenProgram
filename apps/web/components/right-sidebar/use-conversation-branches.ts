@@ -14,6 +14,7 @@ import { LANE_COLORS } from "@/lib/format-utils/lane-colors";
 /** One row of `runtimeState._branchesByConv[sessionId]`. */
 interface BranchRow {
   head_msg_id: string;
+  branch_id?: string;
   name?: string;
   active?: boolean;
   updated_at?: number | null;
@@ -23,7 +24,7 @@ interface BranchRow {
   scheduled_task?: boolean;
 }
 
-export type ConversationBranch = { head: string; name: string | null; active: boolean; color: string; updatedAt: number | null };
+export type ConversationBranch = { branchId?: string; head: string; name: string | null; active: boolean; color: string; updatedAt: number | null };
 
 function read(sessionId: string | null): ConversationBranch[] {
   if (!sessionId) return [];
@@ -31,7 +32,7 @@ function read(sessionId: string | null): ConversationBranch[] {
   const colors = runtimeState._branchLaneColorMap as Record<string, string>;
   // A sub-agent's own conversation is reached through its main agent.
   return rows.map((row, index) => ({
-    head: row.head_msg_id, name: row.name || null, active: Boolean(row.active),
+    branchId: row.branch_id, head: row.head_msg_id, name: row.name || null, active: Boolean(row.active),
     color: colors[row.head_msg_id] || LANE_COLORS[index % LANE_COLORS.length],
     updatedAt: row.updated_at ?? null, subAgent: Boolean(row.sub_agent) || (Boolean(row.scheduled_task) && !row.active),
   })).filter(row => !row.subAgent).map(({ subAgent: _, ...row }) => row);

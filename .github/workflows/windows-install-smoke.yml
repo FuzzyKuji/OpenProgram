@@ -3,7 +3,10 @@ name: Windows install smoke
 # Smoke-tests scripts/install.ps1 on a real Windows runner: a complete
 # source-development install from a checkout, plus the minimal off-the-web
 # bootstrap path (clone + handoff). Given a release tag, it also walks what a
-# new Windows user does with that release on x64.
+# new Windows user does with that release's x64 files, on an x64 runner and
+# under emulation on an Arm one, through one real tool call; given a Release
+# rehearsal run as well, it installs that run's files before the tag is
+# published.
 # Runs only when started by hand: pushes, pull requests and schedules start
 # nothing, so publishing a version does not set off CI runs.
 on:
@@ -15,6 +18,10 @@ on:
         type: string
       older_tag:
         description: Older release to install first, to prove installing over it works
+        required: false
+        type: string
+      run_id:
+        description: Release rehearsal run to take the Windows files from, when the tag is not published yet
         required: false
         type: string
 
@@ -96,31 +103,64 @@ jobs:
 
   release-install:
     if: inputs.tag != ''
-    runs-on: windows-2025
+    strategy:
+      fail-fast: false
+      matrix:
+        # The x64 files on both: Windows on Arm runs them under emulation.
+        runner: [windows-2025, windows-11-vs2026-arm]
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     permissions:
       contents: read
+      actions: read
     env:
       GH_TOKEN: ${{ github.token }}
       TAG: ${{ inputs.tag }}
+      RUN_ID: ${{ inputs.run_id }}
       OLDER_TAG: ${{ inputs.older_tag }}
       OPENPROGRAM_REPOSITORY: ${{ github.repository }}
       OPENPROGRAM_WEB_PORT: "19100"
     steps:
       - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Show the Windows toolchain
+        continue-on-error: true
+        shell: pwsh
+        run: ./scripts/release/show-windows-toolchain.ps1
       - name: Download the release files
+        id: download
         shell: powershell
         run: |
           $Assets = "$env:RUNNER_TEMP\release-assets"
-          gh release download $env:TAG --repo $env:GITHUB_REPOSITORY --dir $Assets `
-            --pattern "OpenProgram-*-runtime-windows-x86_64.zip*" --pattern "OpenProgram-*-win-x64*.exe"
-          if ($LASTEXITCODE -ne 0) { throw "could not download the Windows files of $env:TAG" }
+          if ($env:RUN_ID) {
+            # A rehearsal publishes nothing; its files are the run's artifacts, one folder each.
+            $Downloaded = "$env:RUNNER_TEMP\run-artifacts"
+            gh run download $env:RUN_ID --repo $env:GITHUB_REPOSITORY --dir $Downloaded `
+              --name product-runtime-windows-x86_64 --name desktop-thin-win-x86_64
+            if ($LASTEXITCODE -ne 0) { throw "could not download the Windows files of run $env:RUN_ID" }
+            New-Item -ItemType Directory -Force -Path $Assets | Out-Null
+            Get-ChildItem -LiteralPath $Downloaded -Recurse -File | Move-Item -Destination $Assets
+          } else {
+            gh release download $env:TAG --repo $env:GITHUB_REPOSITORY --dir $Assets `
+              --pattern "OpenProgram-*-runtime-windows-x86_64.zip*" --pattern "OpenProgram-*-win-x64*.exe"
+            if ($LASTEXITCODE -ne 0) { throw "could not download the Windows files of $env:TAG" }
+          }
+          # gh succeeds when only one pattern matched, so name what the release lacks.
+          foreach ($Kind in "zip", "exe") {
+            if (-not (Get-ChildItem -LiteralPath $Assets -Filter "*.$Kind")) {
+              throw "$env:TAG has no Windows $Kind; see 'Not in this release' in its notes"
+            }
+          }
           if ($env:OLDER_TAG) {
             gh release download $env:OLDER_TAG --repo $env:GITHUB_REPOSITORY --dir "$env:RUNNER_TEMP\older-assets" `
               --pattern "OpenProgram-*-win-x64*.exe"
             if ($LASTEXITCODE -ne 0) { throw "could not download the Windows files of $env:OLDER_TAG" }
           }
+      # The bootstrap reads the published release, which a rehearsal does not have.
       - name: Windows PowerShell 5.1 under Restricted runs the piped bootstrap
+        if: inputs.run_id == ''
         shell: powershell
         run: |
           Set-ExecutionPolicy -ExecutionPolicy Restricted -Scope LocalMachine -Force
@@ -140,6 +180,8 @@ jobs:
           & "$env:OPENPROGRAM_BIN_DIR\openprogram.cmd" --version
           if ($LASTEXITCODE -ne 0) { throw "the bootstrap install does not run" }
       - name: The release ZIP installs and starts a healthy worker
+        id: zip
+        continue-on-error: true
         shell: pwsh
         run: |
           $env:OPENPROGRAM_VERSION = $env:TAG.Substring(1)
@@ -159,47 +201,52 @@ jobs:
           try {
             $Health = Invoke-RestMethod "http://127.0.0.1:$env:OPENPROGRAM_WEB_PORT/healthz"
             if ($Health.status -ne "ok") { throw "the worker is not healthy" }
+            # One real tool call through the worker, in the shell it resolves.
+            python scripts/release/smoke-tool-call.py --openprogram $Command --home $env:USERPROFILE
+            if ($LASTEXITCODE -ne 0) { throw "one tool call through the ZIP install failed" }
           } finally {
             & $Command worker stop
           }
+      # The ZIP check above does not stop the installer check below, so one
+      # run reports both; the step after them turns the job red for either.
+      # A new user's whole first run, under a user folder with a Chinese name:
+      # install, first launch, seed unpack, worker start. The newer App also
+      # proves no console window, a worker log, UTF-8 mode, the shortcut's id,
+      # path lengths, one tool call through its worker, and that uninstalling
+      # stops the worker and keeps the data.
       - name: Silent installer, first launch to a healthy worker, older then newer
         shell: pwsh
         run: |
-          function Install-App([string]$Directory) {
-            $Installer = Get-ChildItem $Directory -Filter "*.exe" | Select-Object -First 1
-            $Process = Start-Process -FilePath $Installer.FullName -ArgumentList "/S" -Wait -PassThru
-            if ($Process.ExitCode -ne 0) { throw "$($Installer.Name) exited with code $($Process.ExitCode)" }
-            $App = Get-ChildItem "$env:LOCALAPPDATA\Programs" -Recurse -Filter "OpenProgram.exe" | Select-Object -First 1
-            if (-not $App) { throw "the App was not installed" }
-            return $App
-          }
-          function Test-FirstLaunch($App, [string]$Label) {
-            $env:USERPROFILE = "$env:RUNNER_TEMP\app-home"
-            Remove-Item Env:OPENPROGRAM_WEB_PORT -ErrorAction SilentlyContinue
-            New-Item -ItemType Directory -Force -Path $env:USERPROFILE | Out-Null
-            $Process = Start-Process -FilePath $App.FullName -PassThru
-            try {
-              $Deadline = (Get-Date).AddMinutes(10)
-              do {
-                Start-Sleep -Seconds 2
-                try { $Health = Invoke-RestMethod "http://127.0.0.1:18100/healthz" -TimeoutSec 5 } catch { $Health = $null }
-              } until (($Health -and $Health.status -eq "ok") -or (Get-Date) -gt $Deadline)
-              if (-not $Health -or $Health.status -ne "ok") { throw "$Label did not reach a healthy worker" }
-              $Chat = Invoke-WebRequest "http://127.0.0.1:18100/chat" -UseBasicParsing
-              if ($Chat.StatusCode -ne 200) { throw "$Label did not serve /chat" }
-              Write-Output "$Label is healthy: $($App.VersionInfo.ProductVersion)"
-            } finally {
-              & "$env:USERPROFILE\.openprogram\runtime\bin\openprogram.cmd" worker stop
-              Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
-              Get-Process OpenProgram -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-            }
+          function Get-Installer([string]$Directory) {
+            (Get-ChildItem $Directory -Filter "*.exe" | Select-Object -First 1).FullName
           }
           if ($env:OLDER_TAG) {
-            $Older = Install-App "$env:RUNNER_TEMP\older-assets"
-            Test-FirstLaunch $Older "the older App"
+            ./scripts/release/smoke-windows-desktop.ps1 -Installer (Get-Installer "$env:RUNNER_TEMP\older-assets") -HealthOnly
           }
-          $Newer = Install-App "$env:RUNNER_TEMP\release-assets"
-          if ($Newer.VersionInfo.ProductVersion -ne $env:TAG.Substring(1)) {
-            throw "installing over the older App left version $($Newer.VersionInfo.ProductVersion)"
-          }
-          Test-FirstLaunch $Newer "the newer App"
+          ./scripts/release/smoke-windows-desktop.ps1 -Installer (Get-Installer "$env:RUNNER_TEMP\release-assets") `
+            -ExpectedVersion $env:TAG.Substring(1) -ToolCall -Uninstall `
+            -LogDirectory "$env:RUNNER_TEMP\windows-diagnostics\app-smoke"
+      # Windows PowerShell 5.1 is what a user's machine has; the same script must read there.
+      - name: The smoke script parses under Windows PowerShell 5.1
+        if: ${{ !cancelled() }}
+        shell: powershell
+        run: |
+          $Errors = $null
+          [void][Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path scripts/release/smoke-windows-desktop.ps1), [ref]$null, [ref]$Errors)
+          if ($Errors) { $Errors | Out-String | Write-Error; exit 1 }
+      - name: The release ZIP check passed
+        if: ${{ !cancelled() && steps.zip.outcome == 'failure' }}
+        shell: pwsh
+        run: |
+          Write-Error "The release ZIP did not install or answer; see 'The release ZIP installs and starts a healthy worker' above."
+          exit 1
+      - uses: actions/upload-artifact@v4
+        if: ${{ failure() || steps.zip.outcome == 'failure' }}
+        with:
+          name: diagnostics-windows-install-${{ runner.arch }}
+          path: |
+            ${{ runner.temp }}/windows-diagnostics
+            ${{ runner.temp }}/zip-home/.openprogram/**/*.log
+            ${{ runner.temp }}/zip-state/**/*.log
+          if-no-files-found: ignore

@@ -21,6 +21,7 @@ import urllib.request
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from openprogram.host._platform.filesystem import replace_file
 
 DEV_PROFILE = "dev"
 DEV_PORT = 18200
@@ -241,7 +242,7 @@ def copy_models() -> dict:
     staged = config_path.with_suffix(".json.incoming")
     staged.write_text(json.dumps(dev_config, ensure_ascii=False, indent=2), encoding="utf-8")
     os.chmod(staged, 0o600)
-    os.replace(staged, config_path)
+    replace_file(staged, config_path)
     return {"copied": copied, "oauth_not_copied": skipped}
 
 

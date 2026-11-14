@@ -144,7 +144,8 @@ def record(scope, pages: list[str], reason: str, listed: dict[str, set[str]] | N
     if lines:
         path = store_path(root)
         path.parent.mkdir(parents=True, exist_ok=True)
-        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+        # Binary: a text-mode descriptor on Windows would end each row CRLF.
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_BINARY", 0), 0o644)
         try:
             os.write(descriptor, ("\n".join(lines) + "\n").encode("utf-8"))
         finally:

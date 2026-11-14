@@ -11,7 +11,9 @@ through ports they own, filled in here:
 * ``host.runtime_facts`` — execution records, the worker stopping, the
   foreground turn, the running call and tool call, the turn's source and
   tool policy, a conversation's working directories and App surface, the
-  client broadcast, and loading the built-in Programs.
+  client broadcast, and loading the built-in Programs;
+* ``models.providers.recording.capture`` — the named sections of a
+  system prompt the runtime composed, for the prompt-cache check.
 
 Each provider imports its runtime module when it is called, never here,
 so loading the runtime package stays cheap and a test that replaces a
@@ -79,6 +81,26 @@ def _session_has_live_work(session_id: str) -> bool:
     except Exception:
         # Unknown execution state is unsafe to migrate through; fail closed.
         return True
+
+
+def _turn_branch(session_id: str):
+    from openprogram.runtime.agent.turn_request import get_turn_request
+
+    req = get_turn_request()
+    if req is not None and getattr(req, "session_id", None) == session_id:
+        return getattr(req, "branch_id", None) or None
+    return None
+
+
+def _unfinished_jobs(session_id: str):
+    from openprogram.runtime.jobs.store import list_jobs
+    from openprogram.runtime.jobs.types import is_terminal
+
+    return [
+        (job.id, getattr(job, "label", None) or getattr(job, "subject", None) or "", job.status.value)
+        for job in list_jobs(session_id, lock_timeout=1.0)
+        if not is_terminal(job.status)
+    ]
 
 
 def _agent_registry():
@@ -209,7 +231,16 @@ def _load_programs() -> None:
     services.load_programs()
 
 
+def _system_prompt_parts(text: str):
+    from openprogram.runtime.context.components import prompt_parts
+
+    return prompt_parts(text)
+
+
 def register() -> None:
+    from openprogram.models.providers.recording.capture import register_system_sections
+
+    register_system_sections(_system_prompt_parts)
     register_current_store_resolver(_current_store)
     execution_facts.register(
         current_session_id=_current_session_id,
@@ -222,6 +253,8 @@ def register() -> None:
         current_job_operation_timeout=_current_job_operation_timeout,
         record_current_job_activity=_record_current_job_activity,
         forget_session_runs=_forget_session_runs,
+        turn_branch=_turn_branch,
+        unfinished_jobs=_unfinished_jobs,
     )
     event_sink.register_event_sink(emit=_emit, emit_ws_frame=_emit_ws_frame)
     host_runtime_facts.register(

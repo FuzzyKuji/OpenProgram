@@ -6,6 +6,8 @@ launcher pointed at a fake root, so the launcher path is exercised too.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
+import ntpath
 import os
 from pathlib import Path
 import shutil
@@ -18,7 +20,10 @@ from ..verification.system_probe import ProbeTarget
 from ..versions import layout as paths
 from ..versions import pointer
 from ..versions.layout import Layout
+from ..versions.removal import remove_tree
 from . import sandbox
+
+_log = logging.getLogger(__name__)
 
 COLD_START_SECONDS = 120
 MIGRATION_LIMIT_SECONDS = 30 * 60
@@ -27,6 +32,7 @@ _STOP_SECONDS = 20
 KEPT_FAILED_SECONDS = 7 * 86400
 LIVE_PORTS = (18100, 18200)
 _LOOPBACK_HOSTS = "127.0.0.1,localhost,::1"
+_POSIX_SYSTEM_PATH = ("/usr/bin", "/bin", "/usr/sbin", "/sbin")
 WINDOWS_NOTE = (
     "Windows has no OS sandbox for a trial yet: the temporary data directory, "
     "the separate port and the sanitized copy are the only isolation."
@@ -35,6 +41,24 @@ WINDOWS_NOTE = (
 
 class TrialError(RuntimeError):
     """A check failed; the message is the reason the owner reads."""
+
+
+def windows_system_path(system_root: str) -> tuple[str, ...]:
+    """The directories Windows itself puts on ``PATH``.
+
+    ``System32`` holds ``cmd``, ``taskkill``, ``schtasks`` and ``where``, and
+    PowerShell has a directory of its own; ``%SystemRoot%`` alone finds none of
+    them from ``cmd`` or ``shutil.which``.
+    """
+    system32 = ntpath.join(system_root, "System32")
+    return (system32, system_root, ntpath.join(system32, "Wbem"),
+            ntpath.join(system32, "WindowsPowerShell", "v1.0"))
+
+
+def _remove(path: Path) -> None:
+    left = remove_tree(path)
+    if left:
+        _log.warning("a trial left %d entries behind under %s: %s", len(left), path, ", ".join(left[:5]))
 
 
 def _link(target: Path, link: Path) -> None:
@@ -88,12 +112,11 @@ class Workspace:
     def finish(self, *, passed: bool) -> None:
         """Gone on pass. On failure only logs and evidence stay, for 7 days."""
         if passed:
-            shutil.rmtree(self.directory, ignore_errors=True)
+            _remove(self.directory)
             return
         for path in (self.home, self.fake_root, self.temporary):
-            shutil.rmtree(path, ignore_errors=True)
-        relay = sandbox.relay_directory(self.directory)
-        shutil.rmtree(relay, ignore_errors=True)
+            _remove(path)
+        _remove(sandbox.relay_directory(self.directory))
         if self.directory.exists():
             os.utime(self.directory)
 
@@ -111,8 +134,9 @@ def prune_trials(layout: Layout, *, now: float | None = None) -> list[str]:
     for entry in layout.trials.iterdir():
         try:
             if entry.is_dir() and moment - entry.stat().st_mtime > KEPT_FAILED_SECONDS:
-                shutil.rmtree(entry, ignore_errors=True)
-                removed.append(entry.name)
+                _remove(entry)
+                if not entry.exists():
+                    removed.append(entry.name)
         except OSError:
             continue
     return removed
@@ -171,23 +195,30 @@ class TrialInstance:
             worker_port=self.port, model_port=self.model_port, live_ports=_live_ports(self.live_state),
         )
 
-    def environment(self) -> dict[str, str]:
-        """Nothing of the owner's environment; a credential cannot leak in through it."""
+    def environment(self, *, windows: bool | None = None, environ: Mapping[str, str] | None = None) -> dict[str, str]:
+        """Nothing of the owner's environment; a credential cannot leak in through it.
+
+        ``windows`` and ``environ`` default to this machine; a test names them.
+        """
+        windows = os.name == "nt" if windows is None else windows
+        environ = os.environ if environ is None else environ
         home, temporary = str(self.workspace.home), str(self.workspace.temporary)
         python_bin = paths.base_python(self.layout.base(self.base)).parent
-        system = (os.environ.get("SystemRoot", r"C:\Windows") if os.name == "nt" else "/usr/bin:/bin:/usr/sbin:/sbin")
+        system_root = environ.get("SystemRoot", r"C:\Windows")
+        system = windows_system_path(system_root) if windows else _POSIX_SYSTEM_PATH
         environment = {
             "HOME": home, "USERPROFILE": home, "TMPDIR": temporary, "TEMP": temporary, "TMP": temporary,
             "OPENPROGRAM_WEB_PORT": str(self.port), "OPENPROGRAM_TRIAL": "1",
-            "PATH": os.pathsep.join((str(python_bin), system)), "LANG": "en_US.UTF-8", "LC_ALL": "en_US.UTF-8",
+            "PATH": (";" if windows else ":").join((str(python_bin), *system)),
+            "LANG": "en_US.UTF-8", "LC_ALL": "en_US.UTF-8",
             "PYTHONUNBUFFERED": "1",
             # Setting these also stops Python consulting the system's proxy
             # settings, whose loopback proxy the sandbox would refuse; the
             # fake model and the trial's worker are reached directly.
             "NO_PROXY": _LOOPBACK_HOSTS, "no_proxy": _LOOPBACK_HOSTS,
         }
-        if os.name == "nt":
-            environment["SystemRoot"] = os.environ.get("SystemRoot", r"C:\Windows")
+        if windows:
+            environment["SystemRoot"] = system_root
         return environment
 
     def command(self, *arguments: str) -> list[str]:

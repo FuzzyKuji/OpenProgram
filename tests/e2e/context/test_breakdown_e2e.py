@@ -7,8 +7,8 @@
 from __future__ import annotations
 
 from openprogram.programs import (
-    apply_default_deferral, agent_tools, as_resident, install_loaded_deferred,
-    release_turn_tools, split_tools_for_dispatch,
+    apply_default_deferral, agent_tools, as_resident, note_request_loaded,
+    split_tools_for_dispatch,
 )
 from openprogram.runtime.context.breakdown import compute_call_breakdown
 
@@ -19,8 +19,7 @@ EXPECTED_MIN_DEFERRED = 22   # 实测 deferred 28 个，下浮
 
 
 def test_full_toolset_schema_shrunk_after_defer():
-    release_turn_tools()
-    install_loaded_deferred()
+    note_request_loaded(())
     apply_default_deferral()
     tools = agent_tools(toolset="full")
     b = compute_call_breakdown(
@@ -48,8 +47,7 @@ def test_full_toolset_schema_shrunk_after_defer():
 def test_deferred_catalog_is_a_small_fraction_of_the_schema_cost():
     """目录只发裸名字，成本必须远小于常驻 schema——两者曾经反过来
     （目录估 4665、常驻估 588），错误互相抵消才显得总数合理。"""
-    release_turn_tools()
-    install_loaded_deferred()
+    note_request_loaded(())
     apply_default_deferral()
     tools = agent_tools(toolset="full")
     _, catalog = split_tools_for_dispatch(list(tools))

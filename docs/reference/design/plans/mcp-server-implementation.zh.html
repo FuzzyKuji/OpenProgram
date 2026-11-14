@@ -43,7 +43,6 @@
 <tr><th scope="row"><code translate="no">prompt_cancel</code></th><td><code translate="no">session_id</code></td><td><code translate="no">{session_id,cancelled}</code>；只有同连接的活动 MCP 轮次为 true</td></tr>
 <tr><th scope="row"><code translate="no">tools_list</code></th><td>无</td><td><code translate="no">{name,description,inputSchema}</code>，按配置顺序去重</td></tr>
 <tr><th scope="row"><code translate="no">tool_call</code></th><td><code translate="no">name</code>，可选对象 <code translate="no">arguments</code>（默认 <code translate="no">{}</code>）</td><td>转换后的 <code translate="no">AgentToolResult</code> 内容和错误状态</td></tr>
-<tr><th scope="row"><code translate="no">web_use</code></th><td>浏览器服务的 schema</td><td>只在浏览器应用提供服务时列出</td></tr>
 </tbody>
 </table>
 <p class="note">字符串不能为空白。schema 设 <code translate="no">additionalProperties: false</code>，用 <code translate="no">Draft202012Validator</code> 校验；输入被复制，不被修改。结构化载荷是一个 UTF-8 JSON <code translate="no">TextContent</code>。文本、图片映射为 MCP 文本、图片；其他内容按执行错误失败关闭。</p>

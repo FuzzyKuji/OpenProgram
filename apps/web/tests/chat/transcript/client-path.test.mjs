@@ -245,16 +245,31 @@ test("a local row without a server copy keeps its kind and anchor", () => {
   assert.equal(row("local1").clientRequestId, "R1");
 });
 
-for (const [name, ending] of [
-  ["a no-op", { type: "compaction_finished", no_op: true }],
-  ["a failure", { type: "compaction_failed", error: "timeout" }],
+for (const [name, ending, rows] of [
+  ["a no-op", { type: "compaction_finished", no_op: true }, 1],
+  // Nothing changed and a later request tries again: nothing to say.
+  ["a failure", { type: "compaction_failed", error: "timeout" }, 0],
 ]) {
-  test(`compaction ending in ${name} takes the in-progress notice away`, () => {
+  test(`a turn's own compaction ending in ${name} names the step only while it lasts`, () => {
+    store().setRunningTaskFor(SID, { msg_id: "m1", execution_id: "e1" }, "never");
     handleChatResponse({ session_id: SID, type: "compaction_started" });
-    const started = order().find((id) => id.startsWith("compaction_started_"));
-    assert.ok(started);
+    // The run indicator names the step; no transcript row is added for it.
+    assert.equal(store().runningTasks[SID].phase, "compact");
+    assert.equal(order().filter((id) => id.startsWith("compaction_")).length, 0);
     handleChatResponse({ session_id: SID, ...ending });
-    assert.equal(row(started), undefined);
-    assert.equal(order().filter((id) => id.startsWith("compaction_")).length, 1);
+    assert.equal(store().runningTasks[SID].phase, undefined);
+    assert.equal(order().filter((id) => id.startsWith("compaction_")).length, rows);
+    store().setRunningTaskFor(SID, null, "never");
   });
 }
+
+test("a /compact the person stopped says stopped, and a failed one says why", () => {
+  handleChatResponse({
+    session_id: SID, type: "compaction_failed", user_initiated: true, cancelled: true,
+    error: "Compaction cancelled; history unchanged",
+  });
+  const stopped = order().filter((id) => id.startsWith("compaction_failed_"));
+  assert.equal(stopped.length, 1);
+  assert.match(row(stopped[0]).content, /stopped/i);
+  assert.doesNotMatch(row(stopped[0]).content, /failed/i);
+});

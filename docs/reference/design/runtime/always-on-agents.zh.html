@@ -1,6 +1,7 @@
 <title>常驻 Agent</title>
 <meta name="description" content="Agent 的 always_on 配置如何让它的每个对话唤醒、检查、汇报和交接工作。">
 <h1>常驻 Agent</h1>
+<p>会话 DAG 按运行时发言身份隐藏内部检查提示及其回复、调用子树，旧记录同样适用。正式报告和普通用户消息继续显示；原始执行记录保留。</p>
 
 <figure>
 <svg class="fig-wide" viewBox="0 0 680 226" role="img" aria-label="调度器每 30 秒检查一次，唤醒到期的对话。一次唤醒最多做一件事：在主链启动常驻 Goal，或在隐藏的侧分支上用只读工具运行检查。检查有内容时调用 always_on_report，在主链追加消息、设置未读圆点，并按汇报类型发到桌面和渠道。检查没有内容时不在对话中留痕。">
@@ -165,21 +166,61 @@
 
 <details id="scheduled-tasks">
 <summary>定时任务的独立分支</summary>
+<figure>
+<svg class="fig-wide" viewBox="0 0 680 352" role="img" aria-label="不是由窗口发起的运行，即定时运行、检查、Goal 轮次或聊天应用消息，以及它去拿每样东西时得到什么。页面：开成 App 里的标签页，在用户的工作后面；没有 App 窗口时开在驱动自己的浏览器里，没有窗口，也没有登录状态。向用户提问：没有人回答时不提供 ask_user_question，聊天应用里的人在聊天应用里被问。终端：没有 App 窗口时拒绝，并指出改用 bash。界面命令：除非指明窗口，否则拒绝。定时运行或检查结束时，它打开的页面关闭。">
+  <defs><marker id="ao-n" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path class="head" d="M0 0L8 4L0 8z"/></marker><marker id="ao-nx" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path class="head-no" d="M0 0L8 4L0 8z"/></marker></defs>
+  <text class="t-big" x="0" y="30">不是窗口发起的运行</text>
+  <text class="t-soft" x="0" y="56">定时运行、检查、Goal 轮次、聊天应用消息</text>
+  <text class="t-big" x="0" y="104">页面</text>
+  <line class="ln" x1="54" y1="97" x2="232" y2="97" marker-end="url(#ao-n)"/>
+  <text class="t-soft" x="244" y="102">App 里的标签页，在用户的工作后面</text>
+  <text class="t-soft" x="244" y="122">没有 App 窗口：驱动自己的浏览器，没有登录状态</text>
+  <text class="t-big" x="0" y="164">向用户提问</text>
+  <line class="ln-no" x1="114" y1="157" x2="232" y2="157" marker-end="url(#ao-nx)"/>
+  <text class="t-no" x="244" y="162">没有人回答时不提供 ask_user_question</text>
+  <text class="t-soft" x="244" y="182">聊天应用里的人在聊天应用里被问</text>
+  <text class="t-big" x="0" y="224">终端</text>
+  <line class="ln-no" x1="54" y1="217" x2="232" y2="217" marker-end="url(#ao-nx)"/>
+  <text class="t-no" x="244" y="222">没有 App 窗口：拒绝，指出改用 bash</text>
+  <text class="t-big" x="0" y="268">界面命令</text>
+  <line class="ln-no" x1="94" y1="261" x2="232" y2="261" marker-end="url(#ao-nx)"/>
+  <text class="t-no" x="244" y="266">除非指明窗口，否则拒绝</text>
+  <text class="t-big" x="0" y="312">运行结束</text>
+  <line class="ln" x1="94" y1="305" x2="232" y2="305" marker-end="url(#ao-n)"/>
+  <text class="t-soft" x="244" y="310">它打开的页面关闭</text>
+  <text class="t-soft" x="244" y="330">定时运行和检查</text>
+</svg>
+<ol class="flow fig-narrow">
+  <li><strong>不是窗口发起的运行</strong><small>定时运行、检查、Goal 轮次、聊天应用消息</small></li>
+  <li><strong>页面</strong><small>App 里的标签页，在用户的工作后面</small><small>没有 App 窗口：驱动自己的浏览器，没有登录状态</small></li>
+  <li><strong>向用户提问</strong><p class="refused">没有人回答时不提供 <code translate="no">ask_user_question</code></p><small>聊天应用里的人在聊天应用里被问</small></li>
+  <li><strong>终端</strong><p class="refused">没有 App 窗口：拒绝，指出改用 <code translate="no">bash</code></p></li>
+  <li><strong>界面命令</strong><p class="refused">除非指明窗口，否则拒绝</p></li>
+  <li class="flow-end"><strong>运行结束</strong><small>它打开的页面关闭：定时运行和检查</small></li>
+</ol>
+</figure>
 <table class="stack fixed">
 <thead class="sr"><tr><th scope="col">方面</th><th scope="col">规则</th></tr></thead>
 <tbody>
-<tr><th scope="row">分支</th><td><code translate="no">runtime/scheduler/task_branch.py</code>；meta 写明任务。第一次从 head 开，之后在分支顶端。标记 <code translate="no">scheduled_task</code>：客户端不显示，<code translate="no">list_agents</code> 显示绑定的任务。</td></tr>
+<tr><th scope="row">分支</th><td><code translate="no">runtime/scheduler/task_branch.py</code>；meta 写明任务。第一次从 head 开，在任务自己开出的对话里从 ROOT 开，之后在分支顶端。标记 <code translate="no">scheduled_task</code>：客户端不显示，<code translate="no">list_agents</code> 显示绑定的任务。</td></tr>
 <tr><th scope="row">运行</th><td>后台轮次，历史为空，只带上一次有内容的结果。不提供 <code translate="no">always_on_report</code>：回复本身就是汇报。超出上下文时运行结束，不压缩会话。</td></tr>
 <tr><th scope="row"><code translate="no">[nothing new]</code> 或空回复</th><td>不通知，记为无新内容；只有这个标记的回复、以及以 <code translate="no">[could not check]</code> 开头的回复，在聊天里不画气泡。常驻 Agent 只看最后一轮模型输出里有没有这个标记，所以前面的进度句不影响判断；发送了文件的运行除外</td></tr>
 <tr><th scope="row"><code translate="no">[could not check]</code></th><td>算失败</td></tr>
+<tr><th scope="row">没有人在</th><td>一次运行既不需要窗口，也不需要人。有 App 窗口连着时页面开在 App 里，否则开在标签页驱动自己启动的浏览器里：没有窗口，也没有 App 的登录状态（<code translate="no">host/resources/background_browser.py</code>）。背后没有人的轮次不提供 <code translate="no">ask_user_question</code>（<code translate="no">permissions/policy.py</code> 的 <code translate="no">nobody_answers</code>），需要批准的工具当场拒绝。终端是 App 窗口里的一个面板：没有窗口时拒绝，并指出改用 <code translate="no">bash</code></td></tr>
+<tr><th scope="row">触及窗口</th><td>不是由窗口发起的运行发出界面命令时，除非指明窗口，否则当场拒绝，用户的窗口不会被它挪动。每个会触及 App 窗口的模块都登记了没有窗口的运行从它那里得到什么（<code translate="no">tests/contracts/agent/test_app_window_users.py</code>）；新增的模块在登记之前测试不通过</td></tr>
+<tr><th scope="row">运行打开的页面</th><td>定时运行或检查结束时，这次运行打开的标签页关闭：<code translate="no">browser_tabs_opened</code> 在 <code translate="no">opened_in</code> 里记下执行，<code translate="no">runtime/scheduler/run_finish.py</code> 的 <code translate="no">close_run_tabs</code> 在执行结算时（不论怎么结束）以及后台服务得知定时运行结束时调用，它再调用 <code translate="no">tabs.close_run_tabs_soon</code>。一个对话最多保留 <code translate="no">TABS_PER_CONVERSATION</code>（8）个由它的 Agent 打开的标签页；多开出一个之后，关掉最久没用的（<code translate="no">Driver._keep_within_limit</code>），用户面前的那个不关。<a href="../integrations/browser-tab-driver.html">浏览器标签页驱动</a></td></tr>
+<tr><th scope="row">在自己进程里的运行的页面</th><td>进程在退出前亲自关闭并等它完成（<code translate="no">cron/worker.py</code>），因为交给线程的关闭会被进程退出打断</td></tr>
 <tr><th scope="row">上一次运行还没结束</th><td>记录为 <code translate="no">skipped</code>：不影响失败计数，连续跳过共用一行。Webhook 返回 409 <code translate="no">previous_run_active</code>；监视把这次变化留给下一次检查。执行存储里未结束的运行，只要进程还在或处于暂停，也算，所以 Worker 重启后保护依然有效，子进程死掉也不会挡住之后的触发</td></tr>
 <tr><th scope="row">会话已归档</th><td>不启动轮次，也不动任务分支。记录为 <code translate="no">skipped</code>，这次触发算用掉。唤醒提醒只发通知，不启动轮次</td></tr>
 <tr><th scope="row">单次任务</th><td>只触发一次。改了时间就清除触发记录，到新时间再触发。进程死掉时留下的 <code translate="no">starting</code> 认领，在下一次检查时触发</td></tr>
-<tr><th scope="row">其他回复</th><td><code translate="no">report_scheduled()</code>：主链消息、未读圆点、通知、<code translate="no">notify.finding.channels</code> 开启时发往聊天绑定的渠道，不发往选中的渠道；不进待处理收件箱</td></tr>
+<tr><th scope="row">其他回复</th><td><code translate="no">report_scheduled()</code>：接在 head 后面的主链消息，对话里只有任务分支时作为第一条从 ROOT 开始；未读圆点、通知、<code translate="no">notify.finding.channels</code> 开启时发往聊天绑定的渠道，不发往选中的渠道；不进待处理收件箱</td></tr>
 <tr><th scope="row">运行结束</th><td><code translate="no">runtime/scheduler/run_finish.py</code>。只有执行进入终态才算结束：暂停、副作用待核对、版本切换期间被保存的轮次都不记录、不发消息。一次执行只算一次。</td></tr>
 <tr><th scope="row">由谁收尾</th><td>轮次自己的进程、重启后接着跑的 Worker、接手比旧 Worker 活得久的运行的下一个 Worker（<code translate="no">run-endings/</code>）、保存轮次的重放，都走同一个收尾</td></tr>
 <tr><th scope="row">重启无法继续</th><td>记为失败。调用方在等待的子 Job，上面已没有运行时同样结束，记为出错的 Job；父运行还活着时，子运行不会被父运行挡住。</td></tr>
 <tr><th scope="row">用户停止，或任务已删除</th><td>不记录</td></tr>
+<tr><th scope="row">Worker 找到运行的轮次</th><td>运行的进程把轮次加进对话的运行日志，这个对话常常是 Worker 早已载入的：任务创建时所在的对话，或上一次运行之后任务自己的对话。按 id 查找没找到时，以及进程退出时的转发线程，都会读入其他进程加进来的内容（<code translate="no">RunTables.take_up_other_process_turns</code>）</td></tr>
+<tr><th scope="row">停止在自己进程里的运行</th><td>Worker 够不到那个轮次的 driver，控制服务就把停止写进执行的函数日志（<code translate="no">execution/control/stop_requests.py</code>）。运行的进程在轮次进行时每半秒读一次，自己停下轮次，包括正在跑的工具，之后照常以 cancelled 结束</td></tr>
+<tr><th scope="row">进程没收尾就退出</th><td>被杀或崩溃：启动它的进程的转发线程看到它没了时，以及其他情况下的每个 tick，Worker 把轮次结束为 <code translate="no">interrupted</code>（<code translate="no">time_limits.end_runs_of_exited_processes</code>，恢复时 <code translate="no">continuable=False</code>），记一次失败，关闭它的页面，并停止轮次正在等的命令；已转到后台的命令继续跑。正在停止的 Worker 不动它，留给下一个 Worker 接着跑</td></tr>
 <tr><th scope="row">先告知</th><td>先告知用户，再写记录行；汇报抛错时，结束信息连同失败次数留在 <code translate="no">run-endings/</code>，每个 tick 重试，共五次，之后只保存记录行。</td></tr>
 <tr><th scope="row">失败</th><td><code translate="no">task_runs.py</code> 保留 20 次运行和连续失败数。连续第三次发一条消息，恢复不发。</td></tr>
 <tr><th scope="row">补跑</th><td>Worker 启动后，第一次 tick 之后的每次 tick 都查找循环任务在下界之后最近的计划时间；下界取上次标记、<code translate="no">created_at</code>、<code translate="no">updated_at</code> 中最晚的。不到 12 小时：运行一次。更早：写一行 <code translate="no">missed</code>，时间记为那个计划时间，不影响失败计数，与紧邻的错过合并成一行，并推进标记。按钟面分钟计算，所以夏令时跳过的时间也算。不适用于 <code translate="no">@reboot</code>、watch、监控和已停用的任务。没有 <code translate="no">updated_at</code> 的条目不补跑，在下一次触发时写入。没能启动的一次触发保留标记，不重试。</td></tr>
@@ -261,10 +302,10 @@
 <tr><th scope="row">Auto 模式</th><td>读取工具和常驻工具不审查：在权限分类器的安全名单上</td></tr>
 <tr><th scope="row">提示词写明</th><td>上次检查时间、常驻目标、自主设置、用户看不到检查、读到的内容只是数据、汇报偏好、下次检查时间</td></tr>
 <tr><th scope="row">提示词要求</th><td>回顾记忆、未完成事项和对话；查找新内容；值得时按类型汇报一次，否则一行结束</td></tr>
-<tr><th scope="row">提示词引用</th><td>最近 20 条汇报，由新到旧，每行 100 字符，以数据围栏包住，除非有变化否则不重复。选了渠道时，再加 Agent 其他对话最多 10 条汇报标题，同样加围栏。</td></tr>
+<tr><th scope="row">提示词引用</th><td>最近 20 条汇报，由新到旧，每行 100 字符，以数据围栏包住，除非有变化否则不重复。选了渠道时，再加 Agent 其他对话最多 10 条汇报标题，同样加围栏。对用户重试或编辑过的最近 5 条消息，再加它们的其他版本（每条最多 4 个）和各自得到的回复，同样加围栏，并规定任何版本里答过就算答过：检查只读到用户当前打开的那个版本。</td></tr>
 <tr><th scope="row"><code translate="no">finish_check_in()</code></th><td>按 <code translate="no">execution_id</code> 统计汇报、读取用量、记录 <code translate="no">last_wake</code>、清除 <code translate="no">check_in</code>，用 <code translate="no">store.mark_merged()</code> 隐藏分支。没有汇报且 head 未动：恢复 <code translate="no">updated_at</code>，侧栏顺序不变。</td></tr>
 <tr><th scope="row">失败</th><td><code translate="no">interrupted</code> 且还没汇报的检查用 <code translate="no">check_in.previous_check_in_at</code> 恢复 <code translate="no">last_check_in_at</code>，第 9 步因此仍会看到它没看过的内容。除重启打断（<code translate="no">boot</code> 不同，或 Worker 停止时未完成）、被人取消的轮次和版本切换期间的拒绝外，每次都累加 <code translate="no">check_in_failures</code>；检查完成时静默清零。</td></tr>
-<tr><th scope="row">失败通知</th><td>第三次失败，或第一次出现 <code translate="no">error_reason</code> 为 <code translate="no">auth</code>、<code translate="no">authz</code> 时，在锁外发一条 <code translate="no">approval</code> 报告，<code translate="no">check_in_failure_noticed</code> 保证只发一次；发送失败的在下次失败时重试。<code translate="no">error_retryable</code> 决定措辞，账号类失败不带服务商原文，设了 <code translate="no">wake_minutes</code> 时不承诺放慢尝试。在该报告到期前，<code translate="no">wake_step</code> 回到 <code translate="no">previous_wake_step</code>，若用户消息已重置则保持更低的值；之后阶梯继续上升。</td></tr>
+<tr><th scope="row">失败通知</th><td>第三次失败，或第一次出现 <code translate="no">error_reason</code> 为 <code translate="no">auth</code>、<code translate="no">authz</code>、<code translate="no">blocked</code> 时，在锁外发一条 <code translate="no">approval</code> 报告，<code translate="no">check_in_failure_noticed</code> 保证只发一次；发送失败的在下次失败时重试。<code translate="no">error_retryable</code> 决定措辞，账号类失败不带服务商原文，设了 <code translate="no">wake_minutes</code> 时不承诺放慢尝试。在该报告到期前，<code translate="no">wake_step</code> 回到 <code translate="no">previous_wake_step</code>，若用户消息已重置则保持更低的值；之后阶梯继续上升。</td></tr>
 <tr><th scope="row">重启</th><td><code translate="no">check_in.boot</code> 不同时结束为 <code translate="no">interrupted</code>，"Cut off by a restart"，由调度器、<code translate="no">wake()</code>、<code translate="no">status()</code> 中先看到的完成。执行本身通过落盘的重启意图结束，只应答一次；自更新不会为了继续而暂停检查。不恢复，也不另开一轮代替；立即唤醒就是重试。</td></tr>
 </tbody>
 </table>
@@ -325,7 +366,7 @@
 <table class="stack fixed">
 <thead class="sr"><tr><th scope="col">方面</th><th scope="col">规则</th></tr></thead>
 <tbody>
-<tr><th scope="row">工具</th><td><code translate="no">handoff(to, message)</code>，与 <code translate="no">always_on_report</code> 一起提供，子 Agent 的轮次除外（不推进 head 且不是后台检查，或由其他会话派生）</td></tr>
+<tr><th scope="row">工具</th><td>模型不再看到 <code translate="no">handoff(to, message)</code>：<code translate="no">send_message</code> 接管了它的寻址和限制，消息是可追踪的 Job，答复以通知返回（<a href="collaboration/agent-collaboration.zh.html#tools">Agent 协作</a>）。Worker 启动时，仍在等待的已存记录转到 <code translate="no">send_message</code>（<a href="collaboration/agent-collaboration.zh.html#stored-handoffs">已存的交接</a>）；下面的链机制仍为运行中的回合和程序调用方运行。</td></tr>
 <tr><th scope="row"><code translate="no">to</code></th><td>依次尝试：对话 id、<code translate="no">SID:HEAD</code>、精确标题（不区分大小写）、Agent id 或名称（不区分大小写）。<code translate="no">HEAD</code> 必须在该对话下一轮接着走的那条线上。Agent 解析为它除发送方以外唯一的对话；有多个：拒绝并给出 id；没有：拒绝，说出该 Agent 并列出所有者的对话。标题歧义：拒绝并给出匹配 id。未知：列出所有者的对话，并提示 <code translate="no">list_agents scope="all"</code>。</td></tr>
 <tr><th scope="row">目标</th><td>任意 Agent</td></tr>
 <tr><th scope="row">审批</th><td>不在安全列表：Ask 等待，Auto 审查</td></tr>
@@ -532,7 +573,7 @@
 <tbody>
 <tr><th scope="row">被重启中断的检查</th><td>永不恢复，由恢复流程结束</td><td>检查重做很便宜；中断后的成本不计入</td></tr>
 <tr><th scope="row">时限</th><td>检查 15 分钟；定时运行和定时命令 2 小时，从接纳时算起，重启不清零。<code translate="no">time_limits.stop_overdue</code> 在每次常驻 tick 时运行，以原因 <code translate="no">time_limit</code> 停止能触及的所有运行；在自己进程里的定时运行用自己的计时器。子 Agent 与调用者共用一个时钟；Retry 或 Create 分支有自己的时钟。</td><td>检查以读为主，时间短；保留的定时运行最长 54 分钟，2 小时不变</td></tr>
-<tr><th scope="row">到时限被停止</th><td>检查以 <code translate="no">interrupted</code> 结束，原因写在 <code translate="no">last_wake.error</code>。一分钟后仍在停止的运行不再等它，直接结束，释放它占着的轮次；有自己进程的把进程杀掉，所以线程卡住时结局相同。定时运行或命令记为一次失败。命令的时限记在 <code translate="no">running-commands.json</code>，下一个 Worker 仍会执行。</td><td>和用户手动停止不同，这不是谁要求的</td></tr>
+<tr><th scope="row">到时限被停止</th><td>检查以 <code translate="no">interrupted</code> 结束，原因写在 <code translate="no">last_wake.error</code>。一分钟后仍在停止的运行不再等它，直接结束，释放它占着的轮次；有自己进程的把进程杀掉，它在等的命令也停下，留在后台的命令继续跑。线程卡住时结局相同。定时运行或命令记为一次失败。命令的时限记在 <code translate="no">running-commands.json</code>，下一个 Worker 仍会执行。</td><td>和用户手动停止不同，这不是谁要求的</td></tr>
 <tr><th scope="row">检查中的交接</th><td>只允许说话者为 <code translate="no">runtime/always_on</code> 时使用</td><td>定时运行同样是后台轮次，继续拒绝</td></tr>
 <tr><th scope="row">失败的检查</th><td>恢复上次查看时间和阶梯位置；重启中断同样恢复，但不计入通知</td><td>同一机制也覆盖空闲对话</td></tr>
 <tr><th scope="row">自动轮次的标记</th><td>用户行上的 <code translate="no">automation</code>，取值为 handoff_message（📨）、handoff（↩️）或 wake</td><td>改 <code translate="no">display</code> 会改变渲染</td></tr>
@@ -905,7 +946,7 @@
 <tr><th scope="row">43</th><td><code translate="no">/stop</code> 和 <code translate="no">/help</code> 在聊天应用里立即生效</td><td>真实 Telegram；对比</td><td>在 27 之后</td><td>已实现；待真实 Telegram 验证</td></tr>
 <tr><th scope="row">44</th><td>历史搜索结果正确；检查回溯有自己的查询</td><td>单元测试；对比</td><td>队列</td><td>已实现</td></tr>
 <tr><th scope="row">45</th><td>偏好进入定时运行；两条摘要规则</td><td>单元测试</td><td>与 42 协调</td><td>已构建</td></tr>
-<tr><th scope="row">47</th><td>没有窗口的轮次打开自己的浏览器标签页</td><td>单元测试；对比</td><td>无</td><td>未开始</td></tr>
+<tr><th scope="row">47</th><td>没有窗口的轮次打开自己的浏览器标签页</td><td>单元测试；对比</td><td>无</td><td>已实现</td></tr>
 </tbody>
 </table>
 

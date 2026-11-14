@@ -23,6 +23,7 @@ import re
 import tempfile
 import time
 from typing import Any
+from openprogram.host._platform.filesystem import replace_file
 
 KEEP = 20
 FAILURE_NOTICE = 3
@@ -49,7 +50,7 @@ def _write(path: str, data: dict[str, Any]) -> None:
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             json.dump(data, handle, ensure_ascii=False)
-        os.replace(temporary, path)
+        replace_file(temporary, path)
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)

@@ -41,7 +41,7 @@ After this call the write tools (bash, edit, write, apply_patch, execute_code, p
 )
 def enter_plan_mode() -> str:
     """Switch the active session into plan mode."""
-    session_id = _pm.current_session_id.get()
+    session_id = _pm.turn_session_id()
     if not session_id:
         # No session context — this happens in unit tests that call
         # the tool outside dispatcher. Be liberal: report instead of

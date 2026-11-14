@@ -43,6 +43,28 @@ def _tests_leave_the_front_application_alone(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_browser_of_its_own(monkeypatch):
+    """A test's turn has the browser only when the test gives it an App window, on a
+    machine with a browser installed as on one without; yields the real check."""
+    from openprogram.host.resources import background_browser
+
+    real = background_browser.available
+    monkeypatch.setattr(background_browser, "available", lambda: False)
+    yield real
+
+
+@pytest.fixture(autouse=True)
+def _env_keys_stay_with_their_print_run(monkeypatch):
+    """A ``--print`` run lets its own process read provider keys from the
+    environment (``read_env_keys_in_this_process``); one run in-process by a
+    test does not carry that over to the tests after it in the worker."""
+    from openprogram.models.providers.settings import env_api_keys
+
+    monkeypatch.setattr(env_api_keys, "_env_keys_in_process", False)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _this_process_writes_main_session_logs():
     """Tests stand where the worker stands: appends land in ``main.jsonl``."""
     from openprogram.state.store.session import session_log
@@ -339,6 +361,20 @@ def _forget_learned_provider_limits():
     prefill.forget()
     default_hold.clear()
     forget_affinity()
+
+
+@pytest.fixture(autouse=True)
+def _quota_reads_stay_in_their_test(monkeypatch):
+    """No test reads a provider's quota endpoint on a background thread, and
+    the quota one test observed is not held for the next."""
+    from openprogram.models.usage import quota, quota_fetchers
+
+    monkeypatch.setattr(quota_fetchers, "_spawn", lambda work: None)
+    yield
+    quota.default_store.reset()
+    quota.default_store.set_listener(None)
+    quota.forget_accounts()
+    quota_fetchers.reset_policy()
 
 
 @pytest.fixture(autouse=True)

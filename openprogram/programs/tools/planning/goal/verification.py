@@ -11,6 +11,11 @@ import openprogram.programs.tools.planning.goal as goals
 from . import chat
 
 
+def _goal_branch(sid, goal) -> list:
+    """The messages of the branch the Goal works on, not of the one selected."""
+    return goals._db().get_branch(sid, chat.goal_branch_tip(sid, goal)) or []
+
+
 def digest(value) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False,
                                      separators=(",", ":")).encode()).hexdigest()
@@ -101,7 +106,7 @@ def prepare(store, execution, goal) -> None:
         goal.update(status="paused_recoverable", phase="paused", pause_reason="verification_blocked",
                     last_reason=f"Completion cannot be verified: {reason}")
         return
-    branch = goals._db().get_branch(sid)
+    branch = _goal_branch(sid, goal)
     rows = branch[-24:]
     evidence = {"message:" + row["id"]: {
         "kind": "message", "message_id": row["id"], "sha256": digest(message_snapshot(row)),
@@ -221,7 +226,7 @@ def wrap_read(tool, request):
             return result
         if _stat(path) != before:
             return result
-        with chat.locked(request.session_id):
+        with chat.locked_when_free(request.session_id):
             goal, candidate = require_candidate(request.session_id, vars(request),
                                                 execution_id=get_current_execution_id())
             output_digest = digest(text)
@@ -256,7 +261,7 @@ def finish(store, execution, goal, request) -> None:
             raise ValueError("Verifier execution input is missing")
         require_candidate(sid, request, execution_id=execution.execution_id)
         problem = blockers(store, sid, execution.execution_id, goal)
-        user_inputs = {row["id"]: digest(message_snapshot(row)) for row in goals._db().get_branch(sid)
+        user_inputs = {row["id"]: digest(message_snapshot(row)) for row in _goal_branch(sid, goal)
                        if row.get("role") == "user" and row["id"] != source.user_message_id}
         if user_inputs != candidate["user_inputs"]:
             raise ValueError("User instructions changed during verification")

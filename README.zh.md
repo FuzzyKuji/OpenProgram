@@ -37,7 +37,7 @@
 curl -fsSL https://openprogram.io/install | sh
 ```
 
-Windows（v1.1.0 起）：`irm https://openprogram.io/install.ps1 | iex`。macOS 桌面 App 是 DMG，在[发行页](https://github.com/FuzzyKuji/OpenProgram/releases)下载；Linux 和 Windows App 从 v1.1.0 起提供。openprogram.io 打不开时：`curl -fsSL https://raw.githubusercontent.com/FuzzyKuji/OpenProgram/main/docs/_static_root/install.sh | sh`。更多方式见[安装说明](https://openprogram.io/docs/install/install.zh.html)。
+Windows（v1.2.0 起）：`irm https://openprogram.io/install.ps1 | iex`。macOS 桌面 App 是 DMG，在[发行页](https://github.com/FuzzyKuji/OpenProgram/releases)下载；Linux App 是同一页上的 deb 和 AppImage，Windows App 从 v1.2.0 起提供。openprogram.io 打不开时：`curl -fsSL https://raw.githubusercontent.com/FuzzyKuji/OpenProgram/main/docs/_static_root/install.sh | sh`。更多方式见[安装说明](https://openprogram.io/docs/install/install.zh.html)。
 
 ## 快速开始
 
@@ -88,7 +88,7 @@ class SupportAgent(Agent):
 
 | | |
 |---|---|
-| **[桌面与网页界面](https://openprogram.io/docs/reference/design/ui/README.zh.html)** | macOS 上用 App，v1.1.0 起 Linux 和 Windows 也有 App；网页界面可在这些系统或服务器上使用。 |
+| **[桌面与网页界面](https://openprogram.io/docs/reference/design/ui/README.zh.html)** | macOS 和 Linux 上用 App，v1.2.0 起 Windows 也有 App；网页界面可在这些系统或服务器上使用。 |
 | **[分屏](https://openprogram.io/docs/reference/design/ui/workspace/center-tabs-and-split-layout.zh.html)** | 聊天、文件、终端和网页并排摆开。 |
 | **[内置浏览器](https://openprogram.io/docs/reference/design/ui/browser/built-in-browser.zh.html)** | Agent 能读取和操作网页，你在旁边看着。 |
 | **[集成终端](https://openprogram.io/docs/reference/design/ui/workspace/integrated-terminal.zh.html)** | 工作区里的终端，和 Agent 共用。 |

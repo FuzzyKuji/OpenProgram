@@ -3,35 +3,16 @@ rather than appended to."""
 from __future__ import annotations
 
 import os
-import time
 import uuid
 from pathlib import Path
 
-from openprogram.host._platform.filesystem import filesystem_path
-
-
-def _retry_windows_file_access(operation):
-    """Retry the brief sharing violations around a Windows file replace."""
-    deadline = time.monotonic() + 1.0
-    delay = 0.002
-    while True:
-        try:
-            return operation()
-        except OSError as exc:
-            retryable = os.name == "nt" and (
-                isinstance(exc, PermissionError)
-                or getattr(exc, "winerror", None) in {5, 32, 33}
-            )
-            if not retryable or time.monotonic() >= deadline:
-                raise
-            time.sleep(delay)
-            delay = min(delay * 2, 0.05)
+from openprogram.host._platform.filesystem import filesystem_path, retry_sharing_violation
 
 
 def read_text_with_retry(fpath: Path) -> str:
     """Read UTF-8 text through Windows' transient replace window."""
     native_path = filesystem_path(fpath)
-    return _retry_windows_file_access(
+    return retry_sharing_violation(
         lambda: Path(native_path).read_text(encoding="utf-8")
     )
 
@@ -73,7 +54,7 @@ def atomic_write_text(fpath: Path, text: str) -> Path:
             os.fsync(handle.fileno())
         from openprogram.host._platform.filesystem import restrict_to_user
         restrict_to_user(native_tmp)
-        _retry_windows_file_access(
+        retry_sharing_violation(
             lambda: os.replace(native_tmp, native_target)
         )
         _fsync_directory(fpath.parent)

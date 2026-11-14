@@ -241,7 +241,7 @@ render_range['subcalls']        in-frame 节点最多保留多少（默认 -1 �
 
 ## 2. Token 预算
 
-三个文件分工：
+三个文件分工（文本的可加权重在 `state/store/session/weight.py`：中日韩和全角记 1，其余记 0.25，用来决定截断点，存储层的 `spill.py` 也用它）：
 
 ```
 tokens.py        估算单条消息和整段历史的 token 数；提供 real_context_window
@@ -307,42 +307,9 @@ Provider usage 反馈     有            部分          无         无
 CJK-aware 字符估算      有            无            无         无
 ```
 
-## 3. 历史瘦身（aging，不调 LLM）
+## 3. 旧工具结果（不老化）
 
-文件：`aging.py`、`tool_aging/`
-
-每个 turn 都跑一次，把旧的、大的、没人再用的 tool_result 块替换成占位符，省 token。**不调 LLM、不动消息结构、不动 SessionDB**——只在 prepare 的内存副本里替换 extra.blocks 里的 content 字段。
-
-### 3.1 两个闸门
-
-一条 tool_result 块要被 redact，必须**同时**通过两个闸门：
-
-```
-turn 距离闸门       消息所在 turn 离当前 ≥ keep_recent_turns（默认 4 个 assistant turn）
-wall-clock 闸门     消息 timestamp 离现在 ≥ keep_recent_seconds（默认 60 秒）
-```
-
-每条单独失败都不动。turn 距离闸门防止 agent 还在用刚抓的数据；wall-clock 闸门防止 agent 在 10 秒内连发 8 个 tool_call 时把刚来的输出也 redact 掉。
-
-通过两个闸门后，再看 tool_result 的 content token 数 ≥ 800 才动手——更小的 redact 收益太低（占位符本身也占字数）。
-
-替换后的内容：`[Old tool result content cleared (was N tokens)]`，并在 block 上加 `_redacted: true` 标记，下次 prepare 时遇到这个标记就跳过（避免反复处理）。
-
-### 3.2 保护前 N
-
-`protect_first_n` 默认 2。前 2 条消息（通常是用户的初始任务描述）永远不被 aging 触碰，即使过了几小时也保留原文。否则在长会话里 LLM 会忘了一开始要干嘛。
-
-**对比**
-
-```
-                       OpenProgram   Claude Code   OpenClaw   Hermes
-Tool-result aging       有            有            无         无
-wall-clock 闸门         有            有            无         无
-turn 距离闸门           有            有            无         无
-引用追踪保护            有            无            无         有
-保护前 N 条             有            无            无         有
-800-tok 大小门槛        有            无            无         无
-```
+旧的工具结果按本轮发出的样子原样再发，渲染从不把它们换成存根。逐轮老化每移动一次边界就改写一次已缓存的前缀；Codex、Claude Code、Pi 和试过又删掉的 OpenCode 1.19 都没有它，所以这里也不做。历史太长时由压缩（第 4 节）统一处理。设计和对比见 `docs/reference/design/context/overview.html` 的“Old tool results”。
 
 ## 4. 历史压缩（compaction，调 LLM）
 
@@ -434,26 +401,25 @@ context_window  desired_keep    max_safe_keep   effective_keep   tail 占比
 
 ### 4.4 链式 summary
 
-不是每次都从头总结，而是基于上一次的 summary 增量更新。
+不是每次都从头总结，而是基于这条链上生效的 summary 增量更新。
 
 ```
-prepare 时        从 session.extra_meta._last_summary_text 读出上次 summary
-                  Summarizer.summarise(previous_summary=...)
-                  → 命中走 UPDATE_PROMPT，没有走 FRESH_PROMPT
-compact 完成后    把新 summary 写回 session.extra_meta._last_summary_text
+compact 输入      load_compaction_view(db, session_id, head_id) 渲染调用方指定的链：
+                  生效的 summary（nodes.active_summary_for_chain）在前，未覆盖的轮次在后
+                  → 生效的 summary 作为被覆盖前缀的第一条，和新轮次一起交给摘要器
+compact 完成后    新 summary 节点一次写入（covers_ids 展开成真实轮次，并带 trigger、
+                  model、前后占用、覆盖数、时间、render_role、restored_state）；
+                  每条链用 active_summary_for_chain 选自己的 summary，图构建器同一规则
 ```
 
-**FRESH_PROMPT** 让 LLM 按 5 段结构产出第一次的 summary：
+**SUMMARY_PROMPT** 一份分段提示词，每次（首次和滚动）都用，生效的旧 summary 作为被覆盖前缀的第一条交给它。要求输出这些 `## ` 段：
 
 ```
-1. User intent       用户总目标（1-2 句）
-2. Decisions         用户表达的每一条具体指令/约束（接近原话）
-3. Work completed    动过的文件、跑过的命令、得出的结论（带路径和 id）
-4. Outstanding       用户还在等什么、有什么 dangling 问题
-5. Active context    需要知道的活动状态（"连着 db X，开着文件 Y，env Z 是 W"）
+User intent / All user messages / Decisions and constraints / Completed work /
+Current work / Next step / Relevant files
 ```
 
-**UPDATE_PROMPT** 包一个 `<previous-summary>` 标签把上一版扔给 LLM，让它"合并新消息、删过期细节、刷进度"，同样输出 5 段结构。冲突时新消息为准。
+缺段时带 **NUDGE** 再问一次，仍缺段就失败（不写节点，计入 hold）；输出上限 20K，碰到上限也算失败。新 summary 作为带前缀的 user 消息渲染，旧节点按原样渲染。
 
 **SYSTEM_PROMPT** 框定 summariser 的工作风格：要具体（路径、id、命令名、错误信息），不要 hedging、不要前言"Here is a summary..."、不要 moralising。它带上 **SUMMARY_RULES**（请求期压缩也用）：用户取消或替换的请求要标明，不算待办；助手和工具说的话要注明出处，不写成事实。
 
@@ -495,7 +461,8 @@ except Exception as e:
 ```
 id            summary_xxx
 role          system
-content       "[Previous conversation summary]\n<summary_text>"
+content       "The earlier part of this conversation was compacted into this summary:\n<summary_text>"
+              （render_role=user；之前写的节点仍是 "[Previous conversation summary]" 前缀的 assistant）
 parent_id     None                  这是关键——summary 作为新链的根
 timestamp     first_kept_ts - 1e-6  必须早于第一条 kept 消息
 type          compactionSummary

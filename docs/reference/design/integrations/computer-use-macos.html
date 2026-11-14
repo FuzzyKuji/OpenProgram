@@ -1,6 +1,7 @@
 <title>macOS delivery</title>
 <meta name="description" content="How the macOS backend delivers input in the background, handles file dialogs and Spaces, waits for busy apps and refuses.">
 <h1>macOS delivery</h1>
+<p>If a previously observed control disappears and cannot be safely rebound, the tool reads a fresh full state and returns <code translate="no">observation_required</code>. The Agent chooses its next action from that state. The missing-control step and later batch steps are not dispatched; earlier completed steps are retained and never replayed. A refresh that itself fails remains an error.</p>
 
 
 <h2 id="background-delivery">Background delivery</h2>
@@ -9,6 +10,7 @@
 <thead class="sr"><tr><th scope="col">Item</th><th scope="col"></th></tr></thead>
 <tbody>
 <tr><th scope="row">Element actions</th><td>Element actions go through Accessibility: <code translate="no">AXPress</code> / <code translate="no">AXConfirm</code> / <code translate="no">AXPick</code>, then <code translate="no">AXSelected</code>, then focus, then a pointer click at the element's centre as the last resort; <code translate="no">AXShowMenu</code> for right clicks; <code translate="no">AXValue</code> for <code translate="no">set_value</code>; <code translate="no">AXSelectedTextRange</code> (UTF-16 offsets) for <code translate="no">select_text</code>; page scrolling actions, then the scrollbar's value, then wheel events for <code translate="no">scroll</code>.</td></tr>
+<tr><th scope="row">Rows of a list</th><td>A click on a row, or on a cell up to three levels inside one, sets <code translate="no">AXSelected</code> on the row, which is what a click on it does. A press that returns an error counts when the row is selected afterwards. Measured on Outlook: a message cell lists <code translate="no">AXPress</code> and answers it with -25205, and its row takes <code translate="no">AXSelected</code> in 0.2 s with the reading pane following. No mouse-down is sent, so the application has nothing to activate itself on.</td></tr>
 <tr><th scope="row">Pointer reach</th><td>A pointer click or hover on an element first checks that its centre lies inside the window cut by its scroll and web areas (<code translate="no">_reachable_center</code>); if not, it runs <code translate="no">AXScrollToVisible</code>, and where the element lacks it (native lists and tables) sets each enclosing scroll area's scroll bars to centre it, then reads the frame again once two reads agree.</td></tr>
 <tr><th scope="row">Out of view</th><td>An element still out of view, or with no frame, is refused with <code translate="no">NotDispatched</code>.</td></tr>
 </tbody>

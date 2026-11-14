@@ -40,6 +40,7 @@ from openprogram.operations.self_update.versions import build as builder
 from openprogram.operations.self_update.versions import layout as paths
 from openprogram.operations.self_update.versions import store
 from openprogram.operations.self_update.versions.layout import Layout
+from openprogram.host._platform import filesystem
 
 MANIFEST_FILE = "update-manifest.json"
 SIGNATURE_FILE = f"{MANIFEST_FILE}.sig"
@@ -534,7 +535,7 @@ def _install_tree(archive: Path, staging: Path, target: Path, check: Callable[[P
         _extract(archive, staging)
         if not check(staging):
             raise ReleaseError(f"{archive.name} holds no {what}")
-        os.replace(staging, target)
+        filesystem.replace_file(staging, target)
     finally:
         shutil.rmtree(staging, ignore_errors=True)
 

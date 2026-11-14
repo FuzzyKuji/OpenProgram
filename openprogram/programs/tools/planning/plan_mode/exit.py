@@ -60,7 +60,7 @@ def exit_plan_mode(plan: str) -> str:
             the user verbatim — write it for a human reviewer, not
             for the LLM.
     """
-    session_id = _pm.current_session_id.get()
+    session_id = _pm.turn_session_id()
     if not session_id:
         return "[plan-mode] no active session — flag not cleared"
     _pm.exit(session_id)

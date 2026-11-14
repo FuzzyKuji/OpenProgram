@@ -250,13 +250,13 @@ def _wrap_agentic_runtime_block(
                         from openprogram.runtime.permissions.policy import permission_decision, surface_grant_applies
                         from openprogram.programs import get_agent_tool
 
-                        web_tool = get_agent_tool("web_use")
-                        list_pages = {"command": "list_pages"}
+                        screen_tool = get_agent_tool("computer_use_agent")
+                        list_tabs = {"target": "browser", "action": "tabs"}
                         decision = permission_decision(
-                            web_tool, effective_req, list_pages,
-                        ) if web_tool is not None else None
+                            screen_tool, effective_req, list_tabs,
+                        ) if screen_tool is not None else None
                         if (decision is not None and decision.outcome == "allow"
-                                and surface_grant_applies("web_use", effective_req, list_pages)):
+                                and surface_grant_applies("computer_use_agent", effective_req, list_tabs)):
                             try:
                                 captured_surface = surface_context.capture_pages()
                             except RuntimeError:
@@ -548,6 +548,7 @@ def _wrap_agentic_runtime_block(
         "_is_agent_method", "_python_callable", "_method_options", "_dag_expose", "_defer", "_tier", "_program_owner", "_workflow_owner", "_run_in_worker", "_mcp_server",
         "_runtime_implementation", "_requires_approval", "_accept_edits_safe",
         "_permission_preflight", "_permission_managed", "_permission_visible",
+        "_permission_epoch_visible",
     ):
         # A frozen/slotted tool object rejects the copy; the wrapper just
         # loses an optional marker attribute.

@@ -11,7 +11,7 @@
 <tr><th scope="row">Refused for its shape</th><td><a href="request-repair.html">Mended and resent</a></td></tr>
 <tr><th scope="row">Long silence on a stream</th><td>Fails after 10 min with no bytes or 15 min with no real data; no total limit</td></tr>
 <tr><th scope="row">Dead connection</th><td>30 s connect, TCP keepalive notices in about 60 s</td></tr>
-<tr><th scope="row">Break after content</th><td>Never blindly retried. Codex keeps the partial reply as <code translate="no">stop_reason="length"</code>.</td></tr>
+<tr><th scope="row">Break after content</th><td>Codex keeps the partial reply as <code translate="no">stop_reason="length"</code>. Other providers re-send the whole request on a transport failure and void the partial, see <a href="error-and-timeout-mechanism.html#resend">Re-sending a failed reply</a>.</td></tr>
 <tr><th scope="row">Network unreachable</th><td><a href="error-and-timeout-mechanism.html#network-wait">Waits for it</a></td></tr>
 <tr><th scope="row">Another model</th><td>Off by default; before the first token only</td></tr>
 <tr><th scope="row">Still failing</th><td><a href="error-taxonomy-propagation.html">Structured error in the UI</a></td></tr>
@@ -24,7 +24,7 @@
 <thead><tr><th scope="col">Budget</th><th scope="col">Reset by</th><th scope="col">Catches</th></tr></thead>
 <tbody>
 <tr><th scope="row"><code translate="no">SSE_IDLE_TIMEOUT_S</code> 600</th><td>Any line, pings included</td><td>A dead connection. Codex's own client allows 5 min; 10 leaves room for a buffering proxy.</td></tr>
-<tr><th scope="row"><code translate="no">SSE_DATA_STALL_TIMEOUT_S</code> 900</th><td>Parsed events only</td><td>Ping-flood stalls a byte-level timeout cannot see</td></tr>
+<tr><th scope="row">Stream idle bound 300</th><td>Parsed events only</td><td>A reply that stops while the connection stays open, pings included; retried. Every provider, see <a href="error-and-timeout-mechanism.html#idle-bound">Idle bound</a></td></tr>
 <tr><th scope="row"><code translate="no">OPENPROGRAM_SSE_TOTAL_TIMEOUT_S</code> 0</th><td>Nothing</td><td>Positive values opt into a deadline</td></tr>
 </tbody>
 </table>
@@ -60,7 +60,8 @@
 <thead><tr><th scope="col">Variable</th><th scope="col">Default</th><th scope="col">Meaning</th></tr></thead>
 <tbody>
 <tr><th scope="row"><code translate="no">OPENPROGRAM_SSE_IDLE_TIMEOUT_S</code></th><td>600</td><td>No bytes</td></tr>
-<tr><th scope="row"><code translate="no">OPENPROGRAM_SSE_DATA_STALL_TIMEOUT_S</code></th><td>900</td><td>No real data</td></tr>
+<tr><th scope="row"><code translate="no">OPENPROGRAM_STREAM_IDLE_TIMEOUT_S</code></th><td>300</td><td>No event; 0 turns the bound off</td></tr>
+<tr><th scope="row"><code translate="no">OPENPROGRAM_SSE_DATA_STALL_TIMEOUT_S</code></th><td>the idle bound</td><td>No real data, Codex only</td></tr>
 <tr><th scope="row"><code translate="no">OPENPROGRAM_SSE_TOTAL_TIMEOUT_S</code></th><td>0</td><td>One-stream deadline; 0 is none</td></tr>
 <tr><th scope="row"><code translate="no">OPENPROGRAM_HTTPX_CONNECT_TIMEOUT_S</code></th><td>30</td><td>Connect</td></tr>
 <tr><th scope="row"><code translate="no">OPENPROGRAM_HTTPX_WRITE_TIMEOUT_S</code>, <code translate="no">_POOL_TIMEOUT_S</code></th><td>30</td><td>Write, pool</td></tr>
@@ -101,7 +102,7 @@
 <tr><th scope="row">Connection reuse</th><td>keep-alive</td><td>WS pool, 55 min recycle</td><td>shared, rebuilt when stale</td><td>n/a</td><td>shared, loop-keyed</td></tr>
 <tr><th scope="row">Key rotation</th><td>yes</td><td>no</td><td>pool, cooldowns</td><td>n/a</td><td>pool, cooldowns</td></tr>
 <tr><th scope="row">Model failover</th><td>yes</td><td>WS to HTTP only</td><td>chain</td><td>n/a</td><td>chain, off by default</td></tr>
-<tr><th scope="row">Break after first token</th><td>error</td><td>error</td><td>partial, continue</td><td>error</td><td>partial, continue (Codex)</td></tr>
+<tr><th scope="row">Break after first token</th><td>error</td><td>error</td><td>partial, continue</td><td>error</td><td>partial, continue (Codex); re-send (others)</td></tr>
 <tr><th scope="row">OAuth refresh</th><td>n/a</td><td>n/a</td><td>per-request provider</td><td>per call</td><td>per call</td></tr>
 <tr><th scope="row">Rate-limit headers</th><td>n/a</td><td>yes</td><td>Nous</td><td>n/a</td><td>yes</td></tr>
 <tr><th scope="row">Classification</th><td>yes</td><td>tagged union</td><td>yes</td><td>basic</td><td><code translate="no">ErrorReason</code></td></tr>

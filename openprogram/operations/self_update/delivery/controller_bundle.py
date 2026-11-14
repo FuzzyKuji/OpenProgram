@@ -17,6 +17,7 @@ import time
 from ..control.supervisor import _tree_digest
 from ..store import SelfUpdateStore
 from openprogram.state.store.session.atomic_file import atomic_write_text
+from openprogram.host._platform import filesystem
 
 
 # Official release hashes (electron's checksums.json); a package.json bump must
@@ -137,7 +138,7 @@ def _download_electron_archive(cache: Path, filename: str, expected: str, *, dea
                     output.write(chunk)
         if digest.hexdigest() != expected:
             raise ValueError("Electron download does not match the pinned archive")
-        os.replace(partial, target)
+        filesystem.replace_file(partial, target)
     return target
 
 
@@ -270,7 +271,7 @@ def prepare_controller(update_dir: Path) -> ControllerBundle:
         _load_bundle(staged)
         if _tree_digest(runtime) != digest or installer.read_bytes() != content:
             raise ValueError("installed controller resources changed during snapshot")
-        os.replace(staged, target)
+        filesystem.replace_file(staged, target)
         SelfUpdateStore._fsync_directory(update_dir)
     # Paths used in the relocation probe refer to the staging directory.
     return ControllerBundle(_runtime_python(target / "runtime"), hashlib.sha256(content).hexdigest(), digest)
@@ -320,7 +321,7 @@ def clone_private_runtime(update_dir: Path, runtime: Path,
             result = subprocess.run([*clone, str(runtime), str(staged)], capture_output=True, text=True, timeout=600)
             if result.returncode != 0:
                 raise ValueError("could not copy the runtime for the controller: " + result.stderr.strip()[:500])
-            os.replace(staged, target)
+            filesystem.replace_file(staged, target)
     python = _private_python(target)
     _probe_runtime(target, python, module)
     return python

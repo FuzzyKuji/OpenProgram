@@ -49,7 +49,7 @@ type CanvasLayout = { root: LayoutNode; focusedPaneId: string; zoomedPaneId?: st
 </details>
 
 <h2 id="tiling-menu">Tiling menu</h2>
-<p>Mirrors the macOS green-button menu with small layout glyphs. A hint line names the glyph under the pointer and its shortcut, otherwise says to hold Option for quarters.</p>
+<p>Mirrors the macOS green-button menu with small layout glyphs. A hint line names the glyph under the pointer, otherwise says to hold Option for quarters. On macOS it also names the shortcut; on Windows and Linux the tiling keys do not exist, the line names none, and Option reads Alt.</p>
 <table class="stack fixed">
 <thead class="sr"><tr><th scope="col">Group</th><th scope="col">Items</th></tr></thead>
 <tbody>

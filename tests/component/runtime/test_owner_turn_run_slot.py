@@ -95,3 +95,26 @@ def test_owner_turn_holds_the_slot_until_it_ends(owner_turn_env):
         assert not env.server._is_run_active(session_id)
     finally:
         _clear(env.server, session_id)
+
+
+def test_an_owner_turn_stopped_before_it_starts_ends_without_a_result(owner_turn_env, monkeypatch):
+    """Activation returning ``None`` (a stop won the race) frees the slot and fails nothing."""
+    env = owner_turn_env
+    session_id = "owner-stopped"
+    done = []
+
+    async def stopped(self, admission):
+        return None
+
+    monkeypatch.setattr(
+        "openprogram.runtime.conversation.production_driver.CanonicalAgentAdapter.activate",
+        stopped, raising=False)
+    _clear(env.server, session_id)
+    try:
+        env.owner_turn.start_owner_turn(session_id, "main", "⏰ wake", on_done=done.append)
+        env.started[0].target()
+        assert env.failed == []
+        assert done == [None]
+        assert not env.server._is_run_active(session_id)
+    finally:
+        _clear(env.server, session_id)

@@ -5,8 +5,8 @@ turn. When its summaries never come (the model cuts each one short, the
 provider answers 429s, the summary does not shrink anything) each try
 still pays for the whole conversation as input, and nothing gets shorter.
 
-After :data:`FAILS_MOST` failures in a row of one conversation's
-compaction on one model, each within :data:`HELD_FOR_S` of the one
+After :data:`FAILS_MOST` failures in a row of one branch's compaction on
+one model, each within :data:`HELD_FOR_S` of the one
 before, automatic compaction of it is held until :data:`HELD_FOR_S` has
 passed since the last failure; then one is tried again. A summary that
 installs clears the count. A compaction the user asks for (``/compact``)
@@ -39,10 +39,10 @@ class CompactionHold:
     def __init__(self, *, fails_most: int = FAILS_MOST, held_for_s: float = HELD_FOR_S) -> None:
         self._fails_most = fails_most
         self._held_for_s = held_for_s
-        self._failures: OrderedDict[tuple[str, str], _Failures] = OrderedDict()
+        self._failures: OrderedDict[tuple[str, ...], _Failures] = OrderedDict()
         self._lock = threading.Lock()
 
-    def held(self, key: tuple[str, str], *, now: float | None = None) -> str | None:
+    def held(self, key: tuple[str, ...], *, now: float | None = None) -> str | None:
         """Why automatic compaction of ``key`` is held now, or ``None`` when it may go."""
         now = time.monotonic() if now is None else now
         with self._lock:
@@ -56,7 +56,7 @@ class CompactionHold:
                 f"(last: {failures.why})"
             )
 
-    def failed(self, key: tuple[str, str], why: str, *, now: float | None = None) -> None:
+    def failed(self, key: tuple[str, ...], why: str, *, now: float | None = None) -> None:
         now = time.monotonic() if now is None else now
         with self._lock:
             failures = self._failures.pop(key, None)
@@ -69,7 +69,7 @@ class CompactionHold:
             while len(self._failures) > _REMEMBERED:
                 self._failures.popitem(last=False)
 
-    def done(self, key: tuple[str, str]) -> None:
+    def done(self, key: tuple[str, ...]) -> None:
         with self._lock:
             self._failures.pop(key, None)
 
@@ -81,8 +81,10 @@ class CompactionHold:
 default_hold = CompactionHold()
 
 
-def hold_key(session_id: str, model: object) -> tuple[str, str]:
-    """The conversation and model a compaction is of."""
+def hold_key(session_id: str, model: object, branch_id: str | None = None) -> tuple[str, ...]:
+    """The conversation, branch and model a compaction is of. Branches run
+    in parallel and each compacts its own chain, so one branch's failures
+    never hold another's."""
     model_id = getattr(model, "id", None) or str(model)
     provider = getattr(model, "provider", None) or ""
-    return (str(session_id), f"{provider}/{model_id}")
+    return (str(session_id), f"{provider}/{model_id}", str(branch_id or ""))

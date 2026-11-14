@@ -15,6 +15,7 @@ from ..types import UpdatePhase
 from ..types import _validate_update_id
 from ..verification.verification_channel import _read
 from ..verification.verification_channel import _digest
+from ..verification.verification_channel import job_digest
 
 PREFIX = "diagnosis-config-sha256:"
 TOOLS = ["read", "glob", "grep", "list"]
@@ -153,7 +154,7 @@ def _finish(store, record, status, reason, *, diagnosis=None, job=None):
         store._write_json(_path(store, record, "result"), dict(
             schema=1, update_id=record.request.update_id, candidate_sha=record.request.candidate_sha,
             attempt=record.state.attempt, status=status, reason=reason, at=time.time(),
-            diagnosis=diagnosis, job_sha256=_digest(job.to_dict()) if job is not None else None,
+            diagnosis=diagnosis, job_sha256=job_digest(job) if job is not None else None,
         ))
     if _result(store, record)["status"] == "completed":
         from .source_repair import prepare_after_diagnosis

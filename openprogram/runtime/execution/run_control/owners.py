@@ -301,7 +301,18 @@ def _try_finalize(execution_id: str) -> bool:
                 if owner.diagnostics is not None:
                     owner.diagnostics.append("finalize skipped: owner alive")
                 return False
-            found = _find_execution(store, execution_id)
+            # The owner names its session, as it did when it registered:
+            # look there, not in every session's log (a turn's end would
+            # otherwise read the whole store twice).
+            try:
+                found = _find_execution(
+                    store, execution_id,
+                    session_id=owner.session_id if owner is not None and owner.session_id else None,
+                )
+            except Exception:
+                # A session that cannot be read has no record to finalize.
+                _log.debug("execution %s: session read failed", execution_id, exc_info=True)
+                found = None
             if found is None:
                 retire_execution_owner(execution_id)
                 return False

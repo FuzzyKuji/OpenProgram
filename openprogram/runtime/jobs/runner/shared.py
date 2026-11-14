@@ -91,7 +91,9 @@ if TYPE_CHECKING:
 _log = logging.getLogger(__name__)
 
 
-_DEFAULT_MAX_WORKERS = 4
+from openprogram.runtime.jobs.resource_governance.limits import (  # noqa: E402
+    DEFAULT_JOB_WORKERS as _DEFAULT_MAX_WORKERS,
+)
 
 
 _MAX_CANONICAL_JOB_INPUT_BYTES = 1_000_000

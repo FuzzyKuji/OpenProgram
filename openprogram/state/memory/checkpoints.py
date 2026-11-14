@@ -31,7 +31,7 @@ def checkpoint(root: Path, *, force: bool = False) -> str | None:
     with workspace_write_lock(root):
         if not path.is_file():
             return None
-        due = json.loads(path.read_text())["due"]
+        due = json.loads(path.read_text(encoding="utf-8"))["due"]
         if not force and time.time() < due:
             return None
         revision = git_commit_state(root, "memory: manual editing checkpoint")

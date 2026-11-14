@@ -227,7 +227,29 @@ def convert_messages(model: "Model", context: "Context") -> list[dict[str, Any]]
 
     if pending_audio:
         contents.append({"role": "user", "parts": pending_audio})
-    return contents
+    return _merge_adjacent_user_turns(contents)
+
+
+def _merge_adjacent_user_turns(contents: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """One user turn for two that follow each other with no model turn between.
+
+    A reply stopped before it said anything is not sent (``context.render``),
+    so the person's next message follows the one it answered; Gemini wants
+    the roles to alternate. Parts keep their order; a turn holding function
+    responses is left as it is.
+    """
+    def responses(turn: dict[str, Any]) -> bool:
+        return any(isinstance(p, dict) and "functionResponse" in p for p in turn.get("parts") or [])
+
+    merged: list[dict[str, Any]] = []
+    for turn in contents:
+        previous = merged[-1] if merged else None
+        if (previous is not None and previous.get("role") == "user" and turn.get("role") == "user"
+                and not responses(previous) and not responses(turn)):
+            merged[-1] = {**previous, "parts": [*previous["parts"], *turn["parts"]]}
+            continue
+        merged.append(turn)
+    return merged
 
 
 # ---------------------------------------------------------------------------

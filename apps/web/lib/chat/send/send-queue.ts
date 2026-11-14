@@ -404,7 +404,7 @@ export function queueFor(sessionId: string): QueuedMessage[] {
 export function reconcileAfterSessionLoad(
   sessionId: string,
   runActive: boolean,
-  runTask?: { msg_id?: string; execution_id?: string; status_version?: number } | null,
+  runTask?: { msg_id?: string; execution_id?: string; status_version?: number; op_kind?: string; op_id?: string } | null,
   runFresh = true,
 ): void {
   // Confirm restored receipts only after authoritative session hydration.
@@ -429,12 +429,19 @@ export function reconcileAfterSessionLoad(
     // 只能发无 id 的 stop，服务端可能解析不到 execution）。
     const existing = sessions.runningTasks[sessionId];
     const version = typeof runTask?.status_version === "number" ? runTask.status_version : undefined;
-    if (!existing || (!existing.msg_id && !existing.execution_id)) {
+    // A slot naming another turn is replaced too: after a branch switch
+    // the selected branch's turn is a different one.
+    const turnKey = (task?: { execution_id?: string; op_id?: string } | null) => task?.execution_id || task?.op_id || "";
+    const otherTurn = !!existing && !!turnKey(existing) && !!turnKey(runTask) && turnKey(existing) !== turnKey(runTask);
+    if (!existing || (!existing.msg_id && !existing.execution_id) || otherTurn) {
       sessions.setRunningTaskFor(sessionId, {
         session_id: sessionId,
         msg_id: runTask?.msg_id || "",
         ...(runTask?.execution_id ? { execution_id: runTask.execution_id } : {}),
         ...(runTask?.execution_id && version !== undefined ? { status_version: version } : {}),
+        // An operation with no execution (/compact, a rewind) is stopped by its op_id.
+        ...(runTask?.op_kind ? { op_kind: runTask.op_kind } : {}),
+        ...(runTask?.op_id ? { op_id: runTask.op_id } : {}),
       });
     } else if (
       version !== undefined && runTask?.execution_id
@@ -442,7 +449,7 @@ export function reconcileAfterSessionLoad(
       && typeof existing.status_version !== "number"
     ) {
       // The slot knew the turn but not its version (a reconnect handed it
-      // over without one): the exact Stop needs it.
+      // over without one): keep what the server says now.
       sessions.setRunningTaskFor(sessionId, { ...existing, status_version: version }, "never");
     }
     return;
@@ -452,80 +459,6 @@ export function reconcileAfterSessionLoad(
   if (!wasRunning) {
     queueMicrotask(() => useSendQueue.getState().drain(sessionId));
   }
-}
-
-// Stops pressed on a turn the client knew by id but not by version: the
-// server is asked for the turn's identity and the Stop goes out, as an exact
-// cancel, once a running-slot write brings the version. A write that frees
-// the slot means the turn ended on its own, and the Stop is dropped.
-type DeferredStop = { executionId: string; fire: () => void; timer?: ReturnType<typeof setTimeout>; asks: number };
-const deferredStops = new Map<string, DeferredStop>();
-const DEFERRED_STOP_ASK_MS = [300, 600, 1000, 2000];
-const DEFERRED_STOP_MAX_ASKS = 20;
-let unsubscribeDeferredStops: (() => void) | null = null;
-
-function askRunState(sessionId: string): void {
-  void import("@/lib/runtime-bridge/state").then(({ getSocket }) => {
-    const socket = getSocket();
-    if (socket?.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify({ action: "get_run_state", session_id: sessionId }));
-    }
-  }).catch(() => {});
-}
-
-function settleDeferredStops(state: { runningTasks: Record<string, RunningTask | undefined> }): void {
-  for (const [sid, pending] of Array.from(deferredStops)) {
-    const task = state.runningTasks[sid];
-    if (task && task.execution_id === pending.executionId && typeof task.status_version !== "number") continue;
-    dropDeferredStop(sid);
-    if (!task || task.execution_id !== pending.executionId) continue;
-    pending.fire();
-  }
-}
-
-function dropDeferredStop(sessionId: string): void {
-  const pending = deferredStops.get(sessionId);
-  if (!pending) return;
-  if (pending.timer !== undefined) clearTimeout(pending.timer);
-  deferredStops.delete(sessionId);
-  if (!deferredStops.size) {
-    unsubscribeDeferredStops?.();
-    unsubscribeDeferredStops = null;
-  }
-}
-
-/** Stop pressed on a turn whose running slot names the execution but not
- *  its version: hold the Stop, ask the server for the turn's identity and
- *  run ``fire`` (the caller's Stop again) when the version arrives. The slot
- *  stays as it is, so the composer keeps showing the turn as running until
- *  the server stops it; pressing Stop again is harmless. */
-export function deferStopUntilIdentified(sessionId: string, executionId: string, fire: () => void): void {
-  const prior = deferredStops.get(sessionId);
-  if (prior?.timer !== undefined) clearTimeout(prior.timer);
-  const pending: DeferredStop = { executionId, fire, asks: 0 };
-  deferredStops.set(sessionId, pending);
-  if (!unsubscribeDeferredStops && typeof useSessionStore.subscribe === "function") {
-    unsubscribeDeferredStops = useSessionStore.subscribe((state, previous) => {
-      if (state.runningTasks === previous.runningTasks) return;
-      settleDeferredStops(state);
-    });
-  }
-  const ask = () => {
-    if (deferredStops.get(sessionId) !== pending) return;
-    if (pending.asks >= DEFERRED_STOP_MAX_ASKS) {
-      dropDeferredStop(sessionId);
-      return;
-    }
-    pending.asks += 1;
-    askRunState(sessionId);
-    pending.timer = setTimeout(ask, DEFERRED_STOP_ASK_MS[Math.min(pending.asks, DEFERRED_STOP_ASK_MS.length - 1)]);
-  };
-  ask();
-}
-
-/** Whether a Stop still waits for the turn's version before it can go out. */
-export function stopDeferred(sessionId: string): boolean {
-  return deferredStops.has(sessionId);
 }
 
 const STOP_CHECK_MS = [300, 600, 1000, 2000];

@@ -6,15 +6,22 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing immutable release tag to rebuild
+        description: Release tag (vX.Y.Z); an existing one, or with rehearse the one about to be made
         required: true
         type: string
+      rehearse:
+        description: Build and check everything from this branch without publishing; the tag need not exist
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
 
 env:
   RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+  # A rehearsal builds the commit it was started on, before its tag exists.
+  RELEASE_REF: ${{ inputs.rehearse && github.sha || inputs.tag || github.ref_name }}
 
 jobs:
   platforms:
@@ -30,7 +37,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ env.RELEASE_TAG }}
+          ref: ${{ env.RELEASE_REF }}
       - uses: astral-sh/setup-uv@v10.0.1
         with:
           version: "0.11.16"
@@ -79,7 +86,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ env.RELEASE_TAG }}
+          ref: ${{ env.RELEASE_REF }}
       - uses: actions/setup-node@v7
         with:
           node-version: "22"
@@ -123,7 +130,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ env.RELEASE_TAG }}
+          ref: ${{ env.RELEASE_REF }}
           fetch-depth: 0
       - uses: actions/setup-node@v7
         with:
@@ -139,6 +146,12 @@ jobs:
       - name: Verify version on Windows
         if: matrix.platform == 'windows'
         run: python scripts/release/verify-release-version.py --tag "$env:RELEASE_TAG"
+      # What this runner gave the build, so a failure below can be read from one run.
+      - name: Show the Windows toolchain
+        if: matrix.platform == 'windows'
+        continue-on-error: true
+        shell: pwsh
+        run: ./scripts/release/show-windows-toolchain.ps1
       - name: Install Linux runtime test dependencies
         if: matrix.platform == 'linux'
         run: |
@@ -194,11 +207,14 @@ jobs:
         with:
           name: product-runtime-${{ matrix.platform }}-${{ matrix.arch }}
           path: ${{ runner.temp }}/runtime-artifacts/*
+      # Python 3.12 or newer: the build reads tomllib and, on Windows,
+      # os.path.isjunction; without --python uv takes whatever the image
+      # puts first on PATH.
       - name: Build official update assets
         if: needs.platforms.outputs.update_key == 'true'
         shell: bash
         run: |
-          uv run --no-project --with zstandard --with cryptography \
+          uv run --no-project --python 3.12 --with zstandard --with cryptography \
             python scripts/release/create-update-assets.py platform \
             --repository . --commit "$(git rev-parse HEAD)" \
             --root "$RUNNER_TEMP/update-store" \
@@ -224,7 +240,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ env.RELEASE_TAG }}
+          ref: ${{ env.RELEASE_REF }}
           # The seed carries a Git bundle of this history.
           fetch-depth: 0
       - uses: actions/setup-python@v6
@@ -307,7 +323,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ env.RELEASE_TAG }}
+          ref: ${{ env.RELEASE_REF }}
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
@@ -329,6 +345,59 @@ jobs:
       - name: Verify version
         shell: bash
         run: python scripts/release/verify-release-version.py --tag "${RELEASE_TAG}"
+      # A thin App updates only from its platform's update files, and publish
+      # leaves it out without them. Say so here, before the build, rather than
+      # at the end of the run.
+      - uses: actions/download-artifact@v8
+        id: update-files
+        if: matrix.layout == 'thin'
+        continue-on-error: true
+        with:
+          name: update-assets-${{ matrix.runtime_platform }}-${{ matrix.arch }}
+          path: update-files-check
+      # Said here, before the build, rather than at the end of the run. The
+      # build and its checks still run, so one run shows every problem;
+      # publish leaves the App out and names why.
+      - name: Require this platform's update files
+        id: update-files-required
+        if: matrix.layout == 'thin' && steps.update-files.outcome != 'success'
+        continue-on-error: true
+        shell: bash
+        run: |
+          echo "::error::No update files for ${{ matrix.runtime_platform }}-${{ matrix.arch }}: the product-runtime leg's 'Build official update assets' step failed or did not run, so this App could never update and would be left out of the release. Fix that leg first."
+          exit 1
+      - uses: astral-sh/setup-uv@v10.0.1
+        if: matrix.platform == 'win'
+        with:
+          version: "0.11.16"
+      - name: Show the Windows toolchain
+        if: matrix.platform == 'win'
+        continue-on-error: true
+        shell: pwsh
+        run: ./scripts/release/show-windows-toolchain.ps1
+      - name: Prepare native Windows ARM64 OpenSSL
+        if: matrix.platform == 'win' && matrix.arch == 'arm64'
+        shell: pwsh
+        run: scripts/release/prepare-windows-native-deps.ps1 -Architecture arm64
+      # A failure keeps only this Windows package out (the gate before the
+      # upload); the installer is still built and smoke-tested, so one run
+      # reports both.
+      - name: Windows platform contracts
+        id: contracts
+        if: matrix.platform == 'win'
+        continue-on-error: true
+        timeout-minutes: 30
+        shell: pwsh
+        run: |
+          uv sync --locked --extra dev
+          if ($LASTEXITCODE -ne 0) { throw "uv sync exited with code $LASTEXITCODE" }
+          $Tests = @(Get-Content -LiteralPath scripts/release/windows-contracts.txt |
+            Where-Object { $_.Trim() -and -not $_.TrimStart().StartsWith("#") } |
+            ForEach-Object { $_.Trim() })
+          New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP\windows-diagnostics" | Out-Null
+          uv run --locked --extra dev python -m pytest -q -rfEs `
+            --junitxml "$env:RUNNER_TEMP\windows-diagnostics\windows-contracts.xml" @Tests
+          if ($LASTEXITCODE -ne 0) { throw "the Windows platform contracts failed" }
       - name: Install desktop dependencies
         run: npm ci --workspace apps/desktop --include-workspace-root
       - name: Prepare embedded runtime from release archive
@@ -423,8 +492,11 @@ jobs:
         if: matrix.platform == 'win' && matrix.signing == 'unsigned'
         shell: pwsh
         run: |
-          Get-ChildItem -LiteralPath apps/desktop/dist -Filter "OpenProgram-*.exe" -File |
-            Rename-Item -NewName { $_.BaseName + "-unsigned.exe" }
+          # Listed in full first: a renamed file still matches the filter and
+          # must not be picked up again while the folder is being read.
+          @(Get-ChildItem -LiteralPath apps/desktop/dist -Filter "OpenProgram-*.exe" -File) |
+            Where-Object { $_.BaseName -notlike "*-unsigned" } |
+            ForEach-Object { Rename-Item -LiteralPath $_.FullName -NewName ($_.BaseName + "-unsigned.exe") }
       - name: Check the Windows seed is in the App
         if: matrix.platform == 'win'
         shell: pwsh
@@ -437,6 +509,27 @@ jobs:
               throw "the seed in the Windows App is missing $Name"
             }
           }
+      # What a new user does with the installer, on this runner: install,
+      # first launch to a healthy worker, one real tool call through it, and
+      # an uninstall that keeps the data. A failure keeps this App out, as
+      # the macOS and Linux checks below do for theirs.
+      - name: Verify the Windows App
+        if: matrix.platform == 'win'
+        timeout-minutes: 30
+        shell: pwsh
+        run: |
+          $Installer = (Get-ChildItem -LiteralPath apps/desktop/dist -Filter "OpenProgram-*.exe" -File |
+            Select-Object -First 1).FullName
+          if (-not $Installer) { throw "the Windows installer is missing" }
+          ./scripts/release/smoke-windows-desktop.ps1 -Installer $Installer `
+            -ExpectedVersion $env:RELEASE_TAG.Substring(1) -ToolCall -Uninstall `
+            -LogDirectory "$env:RUNNER_TEMP\windows-diagnostics\app-smoke"
+      - name: Keep the Windows App out when its contracts failed
+        if: matrix.platform == 'win' && steps.contracts.outcome == 'failure'
+        shell: bash
+        run: |
+          echo "::error::The Windows platform contracts failed (see that step and the diagnostics-windows-desktop artifact), so this App is not uploaded."
+          exit 1
       - name: Install Linux packaging tools
         if: matrix.platform == 'linux'
         run: |
@@ -492,9 +585,11 @@ jobs:
               }
               "$Hash  $($_.Name)"
             }
-          [IO.File]::WriteAllLines(
+          # LF line ends, as shasum writes the other platforms' files, so
+          # sha256sum -c reads it on any system.
+          [IO.File]::WriteAllText(
             "apps/desktop/dist/SHA256SUMS-${{ matrix.platform }}-${{ matrix.arch }}",
-            $Lines,
+            ((@($Lines) -join "`n") + "`n"),
             [Text.UTF8Encoding]::new($false)
           )
       - uses: actions/upload-artifact@v7
@@ -507,6 +602,14 @@ jobs:
             apps/desktop/dist/*.AppImage
             apps/desktop/dist/*.deb
             apps/desktop/dist/SHA256SUMS-*
+      # The contracts' report and the App smoke's logs, kept whenever the leg
+      # failed or its contracts did, so one run is enough to diagnose it.
+      - uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() && matrix.platform == 'win' && (failure() || steps.contracts.outcome == 'failure') }}
+        with:
+          name: diagnostics-windows-desktop-${{ matrix.arch }}
+          path: ${{ runner.temp }}/windows-diagnostics
+          if-no-files-found: ignore
 
   cli-installer:
     needs: [platforms, product-runtime]
@@ -518,7 +621,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ env.RELEASE_TAG }}
+          ref: ${{ env.RELEASE_REF }}
+      - uses: actions/setup-python@v6
+        if: matrix.platform == 'windows'
+        with:
+          python-version: "3.12"
       - uses: actions/download-artifact@v8
         with:
           name: product-runtime-${{ matrix.platform }}-${{ matrix.arch }}
@@ -549,6 +656,12 @@ jobs:
           $env:OPENPROGRAM_BIN_DIR = "$env:RUNNER_TEMP\openprogram-bin"
           scripts/install-release.ps1
           & "$env:RUNNER_TEMP\openprogram-bin\openprogram.cmd" --version
+          if ($LASTEXITCODE -ne 0) { throw "the installed command does not run" }
+          # One real tool call through the installed command, in the shell it resolves.
+          python scripts/release/smoke-tool-call.py `
+            --openprogram "$env:RUNNER_TEMP\openprogram-bin\openprogram.cmd" `
+            --home "$env:RUNNER_TEMP\openprogram-home"
+          if ($LASTEXITCODE -ne 0) { throw "one tool call through the installed command failed" }
       # The publish job ships only runtimes that got this far.
       - name: Record the verified install
         shell: bash
@@ -559,6 +672,14 @@ jobs:
         with:
           name: cli-verified-${{ matrix.platform }}-${{ matrix.arch }}
           path: ${{ runner.temp }}/cli-verified/verified.txt
+      - uses: actions/upload-artifact@v7
+        if: ${{ failure() && matrix.platform == 'windows' }}
+        with:
+          name: diagnostics-windows-cli-${{ matrix.arch }}
+          path: |
+            ${{ runner.temp }}/openprogram-home/.openprogram/**/*.log
+            ${{ runner.temp }}/openprogram-state/**/*.log
+          if-no-files-found: ignore
 
   publish:
     needs: [platforms, python, product-runtime, seed, desktop, cli-installer]
@@ -568,7 +689,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ env.RELEASE_TAG }}
+          ref: ${{ env.RELEASE_REF }}
           fetch-depth: 0
       - uses: actions/download-artifact@v8
         with:
@@ -643,13 +764,15 @@ jobs:
             --plan "$RELEASE_PLAN" \
             --notes ".github/release-notes/$RELEASE_TAG.md" \
             --notes-output "$RUNNER_TEMP/release-notes.md" \
-            --links-output "$RUNNER_TEMP/release-links"
+            --links-output "$RUNNER_TEMP/release-links" \
+            --incomplete-output "$RUNNER_TEMP/release-incomplete.txt"
       - name: Create release manifest
         run: |
           python scripts/release/create-release-manifest.py release-artifacts \
             --version "$RELEASE_TAG" \
             --output release-artifacts/release-manifest.json
       - name: Publish GitHub Release
+        if: ${{ !inputs.rehearse }}
         run: |
           final_notes="$RUNNER_TEMP/release-notes.md"
           release_version="${RELEASE_TAG#v}"
@@ -672,6 +795,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
       - name: Verify public latest Release entry
+        if: ${{ !inputs.rehearse }}
         run: |
           api="https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/latest"
           for attempt in $(seq 1 12); do
@@ -698,3 +822,27 @@ jobs:
           exit 1
         env:
           GH_TOKEN: ${{ github.token }}
+      - name: List what a release of this commit would carry
+        if: ${{ inputs.rehearse }}
+        run: |
+          {
+            echo "### Rehearsal of $RELEASE_TAG at $(git rev-parse --short HEAD): nothing was published"
+            echo
+            echo '```'
+            find release-artifacts "$RUNNER_TEMP/release-links" -type f -printf '%12s  %f\n' | sort -k2
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      # The release above is public with what was built. This step makes the
+      # job red and names each planned package that is not in it.
+      - name: Check every planned package is in the release
+        run: |
+          incomplete="$RUNNER_TEMP/release-incomplete.txt"
+          if [ -s "$incomplete" ]; then
+            {
+              echo "### Planned for $RELEASE_TAG but not in the release"
+              echo
+              sed 's/^/- /' "$incomplete"
+            } >> "$GITHUB_STEP_SUMMARY"
+            sed 's/^/::error::Not in this release: /' "$incomplete"
+            exit 1
+          fi

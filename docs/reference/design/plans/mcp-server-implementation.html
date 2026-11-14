@@ -43,7 +43,6 @@
 <tr><th scope="row"><code translate="no">prompt_cancel</code></th><td><code translate="no">session_id</code></td><td><code translate="no">{session_id,cancelled}</code>; true only for a same-connection active MCP turn</td></tr>
 <tr><th scope="row"><code translate="no">tools_list</code></th><td>none</td><td><code translate="no">{name,description,inputSchema}</code>, configured order, de-duplicated</td></tr>
 <tr><th scope="row"><code translate="no">tool_call</code></th><td><code translate="no">name</code>, optional object <code translate="no">arguments</code> (default <code translate="no">{}</code>)</td><td>Converted <code translate="no">AgentToolResult</code> content and error state</td></tr>
-<tr><th scope="row"><code translate="no">web_use</code></th><td>browser service's schema</td><td>Listed only while the browser application provides the service</td></tr>
 </tbody>
 </table>
 <p class="note">Strings are non-blank. Schemas set <code translate="no">additionalProperties: false</code> and validate with <code translate="no">Draft202012Validator</code>; input is copied, never mutated. Structured payloads are one UTF-8 JSON <code translate="no">TextContent</code>. Text and image map to MCP text and image; other content fails closed as an execution error.</p>

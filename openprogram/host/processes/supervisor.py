@@ -78,7 +78,7 @@ def main():
         launch.pop("sandboxed", None)
         expected_scope = launch.pop("_supervisor_scope", None)
         if expected_scope is not None:
-            cgroups = Path("/proc/self/cgroup").read_text()
+            cgroups = Path("/proc/self/cgroup").read_text(encoding="utf-8")
             if not any(expected_scope in line.split(":", 2)[-1].split("/") for line in cgroups.splitlines()):
                 raise RuntimeError("managed supervisor is not in its independent systemd scope")
         # The command gets its own process group; stopping the managed shell

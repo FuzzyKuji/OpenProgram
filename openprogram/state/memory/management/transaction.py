@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from ..markdown import parse_topic_tree
+from ..markdown import read_topic_tree
 from ..runtime.state import RuntimeStateStore
 from ..workspace_layout import (
     ensure_runtime_dir,
@@ -71,14 +71,8 @@ class TransactionLimits:
     max_commit_message_chars: int = 500
 
 
-def workspace_revision(memory_dir: Path) -> str:
-    """Content fingerprint of the committed workspace.
-
-    Derived from bytes rather than mtime so a revision cannot silently repeat
-    when two writes land inside one filesystem timestamp granule.
-    """
+def _revision_files(memory_dir: Path):
     root = Path(memory_dir)
-    digest = hashlib.sha256()
     for path in sorted(root.rglob("*")):
         if not path.is_file() or path.is_symlink():
             continue
@@ -88,11 +82,31 @@ def workspace_revision(memory_dir: Path) -> str:
         # so neither may look like a concurrent write.
         if is_internal_path(relative) and not is_state_file(relative):
             continue
-        digest.update(relative.as_posix().encode("utf-8"))
+        yield relative.as_posix(), path.read_bytes()
+
+
+def workspace_revision(memory_dir: Path) -> str:
+    """Content fingerprint of the committed workspace.
+
+    Derived from bytes rather than mtime so a revision cannot silently repeat
+    when two writes land inside one filesystem timestamp granule.
+    """
+    digest = hashlib.sha256()
+    for relative, data in _revision_files(memory_dir):
+        digest.update(relative.encode("utf-8"))
         digest.update(b"\0")
-        digest.update(path.read_bytes())
+        digest.update(data)
         digest.update(b"\0")
     return digest.hexdigest()[:32]
+
+
+def workspace_files(memory_dir: Path) -> dict[str, str]:
+    """The files ``workspace_revision`` covers, each with its own hash, so
+    a write can tell which of them moved."""
+    return {
+        relative: hashlib.sha256(data).hexdigest()
+        for relative, data in _revision_files(memory_dir)
+    }
 
 
 @contextmanager
@@ -225,6 +239,7 @@ def staged_edit(
     ``deleting`` names a topic whose block IDs go away on purpose. Every
     other committed ID must still be reachable after the edit.
     """
+    from ..policy import owner_edit
     from .config import load_memory_config
     from .workspace import MemoryWorkspace
 
@@ -232,7 +247,7 @@ def staged_edit(
         # The lock spans staging, validation and install: the background
         # writer stages from this same tree and would otherwise install
         # over the edit, or be installed over by it.
-        with workspace_write_lock(root, timeout_s=timeout_s):
+        with owner_edit(), workspace_write_lock(root, timeout_s=timeout_s):
             from ..store import _ensure_git_history
 
             _ensure_git_history(root)
@@ -272,9 +287,18 @@ def committed_baseline(workspace: Any) -> tuple[list[Any], set[str]]:
     the committed tree at that point. A record edit is applied to the stage
     first, so the baseline must come from ``memory_dir`` instead — reading
     the stage afterwards would treat the edit's own text as pre-existing.
+
+    The tree is read the way memory is read: a file nobody can parse
+    strictly is a baseline all the same, and refuses no edit. The IDs an
+    edit must keep are those of memory's own files.
     """
-    units = parse_topic_tree(workspace.memory_dir / "topics")
-    return units, {unit.memory_id for unit in units}
+    from .workspace import own_block_ids
+
+    units = read_topic_tree(
+        workspace.memory_dir / "topics",
+        outside=getattr(workspace, "outside", frozenset()),
+    ).units
+    return units, own_block_ids(units)
 
 
 def preserve_creation_order(workspace: Any, before_units: list[Any]) -> None:
@@ -298,19 +322,22 @@ def install_state(
 ) -> None:
     """Validate staged topics and install them over the committed workspace.
 
-    Mirrors the successful branch of ``MemoryWorkspace.shell()``.
+    Mirrors the successful branch of ``MemoryWorkspace.shell()``. Every
+    committed block ID must survive the edit except those ``allow_removed``
+    names; ``True`` lets the edit remove any, as a writer's may.
     """
+    adopt = getattr(workspace, "adopt_person_edits", None)
+    if adopt is not None:
+        adopt()
+    refuse = getattr(workspace, "_refuse_outside_edits", None)
+    if refuse is not None:
+        refuse(workspace.stage_dir)
     preserve_creation_order(workspace, before_units)
     workspace._normalize_topic_edits(before_block_ids, before_units)
-    required_ids = before_block_ids
-    if isinstance(allow_removed, set):
-        required_ids = before_block_ids - allow_removed
-    elif allow_removed:
-        staged_ids = {
-            unit.memory_id
-            for unit in parse_topic_tree(workspace.stage_dir / "topics")
-        }
-        required_ids = before_block_ids & staged_ids
+    if allow_removed is True:
+        required_ids: set[str] = set()
+    else:
+        required_ids = before_block_ids - (allow_removed or set())
     workspace._validate_topic_contract(before_units, required_ids)
     workspace._synchronize()
 

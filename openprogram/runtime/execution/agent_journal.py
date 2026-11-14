@@ -193,17 +193,31 @@ class JournalState:
         return None
 
     def display_blocks(self) -> list[dict[str, Any]]:
-        """Every text, thinking and tool card this turn has produced."""
+        """Every text, thinking and tool card this turn has produced.
+
+        Each decision is one provider response, and its first card is marked
+        ``round_start`` as the live turn marks it (``turn_runtime.loop_runner``).
+        A resumed turn is stored with these cards, and the next turn renders
+        its earlier responses from the marks the way they were sent
+        (``context/render.py``), so the cached prefix holds.
+        """
         blocks: list[dict[str, Any]] = []
         for decision in self.decisions:
+            first = len(blocks)
             for item in decision.message.get("content") or ():
                 if not isinstance(item, Mapping):
                     continue
                 kind = item.get("type")
                 if kind == "text" and isinstance(item.get("text"), str) and item["text"]:
-                    blocks.append({"type": "text", "text": item["text"]})
-                elif kind == "thinking" and isinstance(item.get("thinking"), str) and item["thinking"]:
-                    blocks.append({"type": "thinking", "text": item["thinking"]})
+                    blocks.append(_signed({"type": "text", "text": item["text"]}, item.get("text_signature")))
+                elif kind == "thinking" and (item.get("thinking") or item.get("thinking_signature")):
+                    # A reasoning item with no summary is still sent back
+                    # (its signature), as the live turn's card keeps it.
+                    block = _signed({"type": "thinking", "text": str(item.get("thinking") or "")},
+                                    item.get("thinking_signature"))
+                    if item.get("redacted"):
+                        block["redacted"] = True
+                    blocks.append(block)
                 elif kind == "toolCall":
                     block = {
                         "type": "tool", "tool": item.get("name"), "tool_call_id": item.get("id"),
@@ -214,7 +228,16 @@ class JournalState:
                         block.update(result=_result_text(step.result), is_error=step.is_error,
                                      outcome=step.outcome)
                     blocks.append(block)
+            if len(blocks) > first:
+                blocks[first]["round_start"] = True
         return blocks
+
+
+def _signed(block: dict[str, Any], signature: Any) -> dict[str, Any]:
+    """``block`` with the provider's signature, as ``turn_runtime.loop_runner`` stores it."""
+    if isinstance(signature, str) and signature:
+        block["signature"] = signature
+    return block
 
 
 def _result_text(result: Mapping[str, Any]) -> str:

@@ -194,6 +194,9 @@ function canWriteBeside(file) {
 function runVersionStoreUpdate() {
   const launch = shellContext.resolveWorker();
   const env = { ...process.env, OPENPROGRAM_WEB_PORT: WEB_PORT, ...launch.env };
+  // The worker lists this App among the version store's users, so the last
+  // uninstaller knows whether the store is still needed.
+  if (app.isPackaged) env.OPENPROGRAM_APP_PATH = path.dirname(process.execPath);
   delete env.PYTHONHOME;
   if (!launch.env.PYTHONPATH) delete env.PYTHONPATH;
   return new Promise((resolve, reject) => {
@@ -396,13 +399,18 @@ function themePrefsPath() {
   return path.join(app.getPath("userData"), themeChrome.PREFS_FILE_NAME);
 }
 
-function resolveStartupChrome(source = "startup") {
-  let systemDark = true;
+/** The OS appearance; the App's pages read it through the preload (theme.systemDark). */
+function systemPrefersDark() {
   try {
-    systemDark = require("electron").nativeTheme.shouldUseDarkColors !== false;
+    return require("electron").nativeTheme.shouldUseDarkColors !== false;
   } catch {
     /* older Electron or tests without nativeTheme */
+    return true;
   }
+}
+
+function resolveStartupChrome(source = "startup") {
+  const systemDark = systemPrefersDark();
   const resolved = themeChrome.loadResolvedChrome({
     userDataPath: app.getPath("userData"),
     systemDark,
@@ -478,6 +486,9 @@ async function spawnManagedWorker(action) {
     return;
   }
   const env = { ...process.env, OPENPROGRAM_WEB_PORT: WEB_PORT, ...launch.env };
+  // The worker lists this App among the version store's users, so the last
+  // uninstaller knows whether the store is still needed.
+  if (app.isPackaged) env.OPENPROGRAM_APP_PATH = path.dirname(process.execPath);
   delete env.PYTHONHOME;
   if (!launch.env.PYTHONPATH) delete env.PYTHONPATH;
   const log = fs.openSync(launch.logFile, "a");
@@ -521,8 +532,8 @@ function spawnWorker(action = "start") {
   } else {
     launch = { command: "openprogram", args: ["worker", "start"] };
   }
-  if (action === "restart") {
-    launch = { ...launch, args: [...launch.args.slice(0, -1), "restart"] };
+  if (action === "restart" || action === "stop") {
+    launch = { ...launch, args: [...launch.args.slice(0, -1), action] };
   }
   const child = spawn(launch.command, launch.args, {
     detached: true,
@@ -2246,6 +2257,14 @@ const registerMainWindow = () => registerSingleMainWindow({
       BrowserWindow, ipcMain, path, screen: require("electron").screen,
       uiOrigin: overlayUiOrigin,
     });
+    require("./main/windows/pane-recording").createPaneRecording({
+      ipcMain, session: session.defaultSession, fs, path, homeDir: app.getPath("home"),
+      // Only a window's own page records, never an overlay or an embedded site.
+      ownsPage: (event) => {
+        const ctx = contextForSender(event);
+        return Boolean(ctx && event.sender === ctx.win.webContents);
+      },
+    });
     registerNativeTitleBarIpc({ ipcMain, BrowserWindow, platform: process.platform, getChrome: () => currentChrome });
     ipcMain.on("theme:trace", (event, payload) => {
       // Only the app document can write diagnostics, not embedded websites.
@@ -2255,8 +2274,24 @@ const registerMainWindow = () => registerSingleMainWindow({
     ipcMain.on("theme:set-chrome", (_event, payload) => {
       applyWindowChrome(payload || {});
     });
+    ipcMain.on("theme:system-dark", (event) => {
+      event.returnValue = systemPrefersDark();
+    });
     try {
+      let announcedDark = systemPrefersDark();
       require("electron").nativeTheme.on("updated", () => {
+        const dark = systemPrefersDark();
+        if (dark !== announcedDark) {
+          announcedDark = dark;
+          // Windows, menus and overlays each resolve "auto" themselves.
+          for (const contents of require("electron").webContents.getAllWebContents()) {
+            try {
+              if (!contents.isDestroyed()) contents.send("theme:system-changed", dark);
+            } catch (_error) {
+              /* A page being torn down reads the value on its next load. */
+            }
+          }
+        }
         const resolved = resolveStartupChrome("native-system");
         applyWindowChrome({
           theme: resolved.theme,
@@ -2271,8 +2306,31 @@ const registerMainWindow = () => registerSingleMainWindow({
     // The development App moves with each deploy, never by release updates.
     if (!INSTANCE.development) initializeDesktopUpdates();
     buildMenu();
+    createBackgroundTray();
   },
 });
+
+// The worker in the menu bar or notification area (main/worker/worker-tray.js).
+// "Stop background" stops the worker the way switching versions does, then
+// quits, because the App's windows would otherwise start it again.
+let workerTray = null;
+function createBackgroundTray() {
+  if (workerTray) return;
+  const electron = require("electron");
+  workerTray = require("./main/worker/worker-tray").createWorkerTray({
+    Tray: electron.Tray,
+    Menu,
+    nativeImage: electron.nativeImage,
+    iconRoot: path.join(__dirname, "main", "worker", "tray"),
+    probe: async () => ({ running: await probe(HEALTH_URL, 1000) }),
+    open: () => { void ensureMainWindow(); },
+    stop: async () => {
+      if (shellContext) await shellContext.stopWorker();
+      else spawnWorker("stop");
+      app.quit();
+    },
+  });
+}
 
 let firstWindowLoaded = null;
 let started = null;

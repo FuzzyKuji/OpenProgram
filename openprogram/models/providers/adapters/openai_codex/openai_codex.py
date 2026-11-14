@@ -7,6 +7,10 @@ turns and a continuing turn is sent as a delta after
 ``previous_response_id``), and over HTTP SSE otherwise, its body
 zstd-compressed (``request_compression``). Both are read under the same
 budgets (``read_budget``) and feed the shared Responses processor.
+Every request names its conversation in the ``session_id`` and
+``conversation_id`` headers as well as ``prompt_cache_key``, which is what
+lands a new connection on the replica holding the conversation's cache
+(``CONVERSATION_HEADERS``).
 
 Mirrors openai-codex-responses.ts
 """
@@ -22,7 +26,9 @@ from typing import TYPE_CHECKING, Any
 from openprogram.models.providers.streaming.budget import provider_retry_attempts
 from openprogram.models.providers.shared.openai_responses import (
     convert_responses_messages,
+    carried_tool_names,
     convert_responses_tools,
+    native_tool_search,
     process_responses_stream,
 )
 from openprogram.models.providers.shared.validate_modalities import validate_input_modalities
@@ -35,7 +41,6 @@ from openprogram.models.providers.utils.http_client import (
     build_async_client,
     get_shared_async_client,
 )
-from openprogram.models.providers.utils.rate_limit import parse_rate_limit
 from openprogram.models.providers.utils.stream_retry import (
     PROVIDER_STREAM_MAX_ATTEMPTS,
     ProviderStreamError,
@@ -213,68 +218,16 @@ def stream_openai_codex_responses(
             if not api_key:
                 raise ValueError(f"No API key for provider: {model.provider}")
             base_url = getattr(model, "base_url", None) or _DEFAULT_CODEX_BASE_URL
-            messages = convert_responses_messages(model, context, include_system_prompt=False)
+            messages = convert_responses_messages(
+                model, context, include_system_prompt=False,
+                native_tool_search=native_tool_search(model, context),
+            )
             request_body = _build_request_body(model, context, opts, messages)
 
             if opts.get("on_payload"):
                 opts["on_payload"](request_body)
-
-            # Per-request debug print — useful for tracing prompt cache
-            # hits / payload growth, but it polluted the chat UI on every
-            # turn ("[openai-codex req] key=... text_chars=... reasoning=
-            # {...}" landing between the user's message and the model's
-            # reply). Gate it behind an opt-in env var.
-            if os.environ.get("OPENPROGRAM_DEBUG_PROVIDER", "").strip() in ("1", "true", "yes"):
-                try:
-                    import hashlib as _hashlib
-
-                    _cache_key = request_body.get("prompt_cache_key", "")
-                    _instr_len = len(request_body.get("instructions") or "")
-                    _tool_names = sorted(t.get("name", "") for t in (request_body.get("tools") or []))
-                    _reasoning = request_body.get("reasoning")
-                    _tool_hash = _hashlib.sha256(
-                        json.dumps(
-                            request_body.get("tools") or [],
-                            ensure_ascii=False,
-                            sort_keys=True,
-                            separators=(",", ":"),
-                        ).encode("utf-8")
-                    ).hexdigest()[:12]
-                    _input_items = request_body.get("input") or []
-                    _input_parts = [
-                        len(item.get("content") or [])
-                        for item in _input_items
-                        if isinstance(item, dict)
-                    ]
-                    _input_part_lengths = [
-                        [
-                            len(part.get("text") or "")
-                            for part in (item.get("content") or [])
-                            if isinstance(part, dict)
-                        ]
-                        for item in _input_items
-                        if isinstance(item, dict)
-                    ]
-                    _input_text_len = sum(
-                        len(c.get("text", ""))
-                        for item in _input_items
-                        if isinstance(item, dict)
-                        for c in (item.get("content") or [])
-                        if isinstance(c, dict) and isinstance(c.get("text"), str)
-                    )
-                    _log.info(
-                        "%s req key=%r items=%s parts=%s part_chars=%s text_chars=%s "
-                        "instr=%s tools=%s tool_hash=%s choice=%r parallel=%r tier=%r "
-                        "reasoning=%s",
-                        model.api, _cache_key, len(_input_items), _input_parts,
-                        _input_part_lengths, _input_text_len, _instr_len, _tool_names,
-                        _tool_hash, request_body.get("tool_choice"),
-                        request_body.get("parallel_tool_calls"),
-                        request_body.get("service_tier"), _reasoning,
-                    )
-                except Exception:
-                    # Diagnostic print only; never affects the request.
-                    _log.debug("request debug summary failed for %s", model.id, exc_info=True)
+            from ...recording.capture import RESPONSES, capture_request
+            capture_request(model, request_body, wire=RESPONSES)
 
             headers: dict[str, str] = {
                 "Authorization": f"Bearer {api_key}",
@@ -303,6 +256,7 @@ def stream_openai_codex_responses(
                     acct = _get_account_id_from_jwt(api_key) or ""
                     if acct:
                         headers["chatgpt-account-id"] = acct
+            _route_to_conversation(headers, request_body.get("prompt_cache_key"))
 
             ev_stream.push({"type": "start", "partial": output})
 
@@ -400,7 +354,23 @@ def stream_openai_codex_responses(
                             request_body["prompt_cache_key"] = (
                                 f"op-retry-{digest}"
                             )
+                            _route_to_conversation(
+                                headers, request_body["prompt_cache_key"], replace=True
+                            )
                     raise
+
+            def _observe_quota(response_headers: Any) -> None:
+                """Keep the Codex windows (``x-codex-*``) or an API key's
+                ``x-ratelimit-*`` headroom this answer carries."""
+                from openprogram.models.usage.quota import observe_headers
+                bearer = headers.get("Authorization", "").removeprefix("Bearer ")
+                observe_headers(model.provider, bearer, response_headers)
+
+            def _observe_frame(frame: dict) -> None:
+                if frame.get("type") == "codex.rate_limits":
+                    from openprogram.models.usage.quota import observe_codex_frame
+                    bearer = headers.get("Authorization", "").removeprefix("Bearer ")
+                    observe_codex_frame(model.provider, bearer, frame)
 
             async def _socket_turn() -> Any:
                 """The turn begun on the backend's WebSocket, or ``None`` for HTTP."""
@@ -413,6 +383,7 @@ def stream_openai_codex_responses(
                         headers=headers,
                         body=request_body,
                         receive_next=lambda connection: _receive_frame(connection, budget),
+                        on_frame=_observe_frame,
                     )
                 except websocket_transport.SocketUnavailable as exc:
                     _log.debug("%s: turn goes over HTTP (%s)", model.api, exc)
@@ -467,6 +438,8 @@ def stream_openai_codex_responses(
                         headers={**headers, **encoding_headers},
                         content=content,
                     ) as response:
+                        # The plan windows ride on every answer, a 429 included.
+                        _observe_quota(response.headers)
                         if response.status_code not in (200, 201):
                             error_text_bytes = await response.aread()
                             try:
@@ -495,16 +468,6 @@ def stream_openai_codex_responses(
                                     response.status_code, err_text
                                 ) and not output.content,
                                 provider=model.provider,
-                            )
-
-                        # Rate-limit telemetry (no-op if the backend omits the
-                        # headers). Warn when a bucket is exhausted / nearly so.
-                        rl = parse_rate_limit(response.headers)
-                        if rl.present and (rl.is_throttled or rl.is_low):
-                            _log.info(
-                                "%s rate limit: requests %s/%s · tokens %s/%s", model.api,
-                                rl.remaining_requests, rl.limit_requests,
-                                rl.remaining_tokens, rl.limit_tokens,
                             )
 
                         sse_events = _parse_sse_stream(response, signal=_sig)
@@ -590,7 +553,10 @@ def stream_openai_codex_responses(
             # auto-retried — a single idle timeout could busy-loop.)
             ev_stream.fail(exc)
 
-    asyncio.ensure_future(_run())
+    # Owned by the stream: a consumer that stops reading (a stopped turn)
+    # cancels and awaits it through ``close_stream``, so the read in flight
+    # and the socket it holds end with the turn, not when the loop is torn down.
+    ev_stream.attach_producer(asyncio.ensure_future(_run()))
     return ev_stream
 
 
@@ -644,7 +610,16 @@ def _build_request_body(
     tool_list: list[dict[str, Any]] = []
     tools = getattr(context, "tools", None)
     if tools:
-        tool_list.extend(convert_responses_tools(tools, model.api, model.id))
+        # A deferred tool is loaded where it was searched for: its definition
+        # rides in the input's tool_search_output, and the array, rendered
+        # before the conversation, keeps the bytes the backend has cached.
+        if native_tool_search(model, context):
+            tool_list.extend(convert_responses_tools(
+                tools, model.api, model.id, native_tool_search=True,
+                carried=carried_tool_names(messages),
+            ))
+        else:
+            tool_list.extend(convert_responses_tools(tools, model.api, model.id))
     # Built-in server-side web search. The Codex backend (chatgpt.com
     # /backend-api/codex/responses) natively supports the Responses API
     # ``{"type": "web_search"}`` tool — the model runs the search on the
@@ -686,10 +661,25 @@ def _build_request_body(
             # fire. Callers can override by passing reasoning_summary.
             "summary": reasoning_summary or "auto",
         }
+    if getattr(model, "reasoning", False):
+        # Codex asks for the encrypted reasoning on every request, whatever
+        # the effort: the request is not stored, so without it the next
+        # tool round has no reasoning to continue from.
         body["include"] = ["reasoning.encrypted_content"]
 
     if opts.get("text_verbosity"):
         body["text"] = {"verbosity": opts["text_verbosity"]}
+
+    if "prompt_cache_key" not in body:
+        # A call that names no conversation (a summary, a permission check,
+        # a title made straight through the adapter) is keyed by its prefix,
+        # with the same derivation a Runtime call uses.
+        from openprogram.models.providers.shared.cache_key import prefix_cache_key
+        body["prompt_cache_key"] = prefix_cache_key(
+            getattr(model, "provider", None), getattr(model, "id", None), body.get("instructions"),
+            [tool.get("name") or tool.get("type") for tool in body.get("tools") or []
+             if isinstance(tool, dict)],
+        )
 
     return body
 
@@ -700,6 +690,34 @@ __all__ = [
     "stream_openai_codex_responses",
     "stream_simple_openai_codex_responses",
 ]
+
+
+#: Headers the ChatGPT backend routes a conversation by, as Codex's own
+#: client sends them. ``prompt_cache_key`` in the body is not enough: a new
+#: connection (a new WebSocket, a new HTTP client, a new process) carrying
+#: only the body key lands on a replica without the conversation's cached
+#: prefix, while one carrying these headers lands on the replica that has it.
+CONVERSATION_HEADERS = ("session_id", "conversation_id")
+
+
+def _route_to_conversation(
+    headers: dict[str, str], cache_key: Any, *, replace: bool = False
+) -> None:
+    """Name the conversation in ``headers`` so its turns share one cache.
+
+    A header the caller set is kept, unless ``replace`` (a retry moving the
+    request to a new cache route on purpose).
+    """
+    if not cache_key:
+        return
+    present = {name.lower(): name for name in headers}
+    for name in CONVERSATION_HEADERS:
+        existing = present.get(name)
+        if existing is not None and not replace:
+            continue
+        if existing is not None:
+            del headers[existing]
+        headers[name] = str(cache_key)
 
 
 def _chatgpt_sign_in(base_url: str, headers: dict[str, str]) -> bool:

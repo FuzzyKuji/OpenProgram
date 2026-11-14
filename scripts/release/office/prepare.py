@@ -209,7 +209,7 @@ def prepare(args: argparse.Namespace) -> Path:
         for name in ("README.md", "prepare.py", "font_assets.py", "font-generation.mjs", "font-verification.mjs"):
             shutil.copy2(Path(__file__).with_name(name), materials / name)
         # Keep portable source names and digests, not the build machine's paths.
-        (materials / "font-provenance.json").write_text(json.dumps(font_provenance, indent=2) + "\n")
+        (materials / "font-provenance.json").write_text(json.dumps(font_provenance, indent=2) + "\n", encoding="utf-8")
         manifest = _manifest(pack_stage, source, patch, lock, runtime_manifest)
         manifest["assembly"]["fonts"] = font_provenance
 

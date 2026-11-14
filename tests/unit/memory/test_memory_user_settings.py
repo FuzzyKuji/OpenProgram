@@ -101,7 +101,13 @@ def test_organize_topics_uses_live_recent_limit(tmp_path, monkeypatch):
     from openprogram.state.memory.management import api
 
     (tmp_path / "topics").mkdir()
-    (tmp_path / "topics/note.md").write_text("# Note\n", encoding="utf-8")
+    # A never-recorded file is ours, and the organizer's to rewrite, only
+    # when every paragraph cites; anything else came from outside.
+    (tmp_path / "topics/note.md").write_text(
+        "# Note\n\nA fact.[^e-1f4c7a2b90] ^abc12345\n\n"
+        "[^e-1f4c7a2b90]: Time: `2026-01-01`; Sources: [D1:1](/s/s1#d1-1)\n",
+        encoding="utf-8",
+    )
     monkeypatch.setattr(
         "openprogram.state.config.read_config",
         lambda: {"memory": {"recent": {"limit": 25}}},
@@ -443,7 +449,7 @@ def test_hybrid_search_fuses_results(
     seen = {}
 
     class FakeBM25:
-        def __init__(self, _root, *, persist):
+        def __init__(self, _root):
             pass
 
         def search(self, _query, **kwargs):
@@ -486,7 +492,7 @@ def test_hybrid_search_fuses_results(
     assert seen["embedding_prefix"] is None
 
 
-def test_bm25_search_reuses_persistent_index_until_workspace_changes(
+def test_bm25_search_reuses_its_index_until_workspace_changes(
     tmp_path, monkeypatch,
 ):
     from openprogram.state.memory.retrieval import bm25, inspect
@@ -494,25 +500,28 @@ def test_bm25_search_reuses_persistent_index_until_workspace_changes(
     topic = tmp_path / "topics/one.md"
     topic.parent.mkdir()
     topic.write_text("# One\n", encoding="utf-8")
-    hashed = []
-    original_hash = bm25._file_hash
+    # A per-file cache an older build left beside the workspace goes away.
+    stale = tmp_path / ".scriptorium-bm25.json"
+    stale.write_text("{}", encoding="utf-8")
+    built = []
+    original = bm25.topic_events
 
-    def counted_hash(path):
-        hashed.append(path)
-        return original_hash(path)
+    def counted(*args, **kwargs):
+        built.append(args)
+        return original(*args, **kwargs)
 
-    monkeypatch.setattr(bm25, "_file_hash", counted_hash)
+    monkeypatch.setattr(bm25, "topic_events", counted)
     inspect._clear_search_index_cache_for_tests()
 
     inspect.search(tmp_path, "first")
-    assert len(hashed) == 1
+    assert len(built) == 1
     inspect.search(tmp_path, "second")
-    assert len(hashed) == 1
+    assert len(built) == 1
     topic.write_text("# One\n\nChanged.\n", encoding="utf-8")
     inspect.search(tmp_path, "third")
 
-    assert len(hashed) == 2
-    assert any(tmp_path.glob(".*-bm25.json"))
+    assert len(built) == 2
+    assert not stale.exists()
 
 
 def test_embedding_search_reuses_document_vectors_until_workspace_changes(

@@ -8,36 +8,36 @@
 <thead><tr><th scope="col">Domain</th><th scope="col">What it is</th><th scope="col">Tools</th></tr></thead>
 <tbody>
 <tr><th scope="row">Planning: todo</th><td>A hand-kept plan. Editing runs nothing.</td><td><code translate="no">todo_create</code>, <code translate="no">todo_update</code>, <code translate="no">todo_list</code></td></tr>
-<tr><th scope="row">Execution: job</th><td>An admitted record with <code translate="no">execution_id</code>, state and result</td><td><code translate="no">list_jobs</code>, <code translate="no">job_output</code>; <code translate="no">execution.cancel</code> is a command, not a model tool, and there is no <code translate="no">job_stop</code></td></tr>
-<tr><th scope="row">Entities: agent</th><td>A running conversation branch. A saved <code translate="no">AgentSpec</code> is separate configuration chosen by <code translate="no">agent_id</code>.</td><td><code translate="no">agent</code>, <code translate="no">list_agents</code>, <code translate="no">archive_agent</code></td></tr>
+<tr><th scope="row">Execution: job</th><td>An admitted record with <code translate="no">execution_id</code>, state and result</td><td><code translate="no">read_conversation(execution_id)</code>, <code translate="no">list_agents</code>, <code translate="no">close_agent</code>; <code translate="no">execution.cancel</code> is a command for the UI and API</td></tr>
+<tr><th scope="row">Entities: agent</th><td>A running conversation branch. A saved <code translate="no">AgentSpec</code> is separate configuration chosen by <code translate="no">agent</code>.</td><td><code translate="no">agent</code>, <code translate="no">list_agents</code>, <code translate="no">close_agent</code></td></tr>
 <tr><th scope="row">Communication: message</th><td>Continues a branch or reads its history</td><td><code translate="no">send_message</code>, <code translate="no">read_conversation</code></td></tr>
 </tbody>
 </table>
 <p class="note">The domains describe resources, not disjoint namespaces. Cancelling work neither archives the branch nor deletes its configuration.</p>
-<p class="note">Background dispatch returns <code translate="no">execution_id</code>. <code translate="no">job_output(job_id=…)</code>, <code translate="no">details.job_id</code> and <code translate="no">attach.job_id</code> keep their names: pass the execution ID there. No <code translate="no">task_id</code> aliases.</p>
+<p class="note">Background dispatch returns <code translate="no">execution_id</code>. <code translate="no">details.job_id</code> and <code translate="no">attach.job_id</code> keep their names: pass the execution ID there. No <code translate="no">task_id</code> aliases.</p>
 
 <h2 id="four">Four actions</h2>
 <table class="stack">
 <thead><tr><th scope="col">Action</th><th scope="col">Call</th><th scope="col">Effect</th><th scope="col">Returns</th></tr></thead>
 <tbody>
 <tr><th scope="row">Create</th><td><code translate="no">agent(prompt, description, …)</code></td><td>New branch named by <code translate="no">description</code>; runs <code translate="no">prompt</code>; admits a Job</td><td>Foreground: waits, final result. <code translate="no">run_in_background=true</code>: <code translate="no">execution_id</code>.</td></tr>
-<tr><th scope="row">Assign</th><td><code translate="no">agent(to="name", prompt=…)</code></td><td>Existing branch; admits a Job; queues if busy</td><td><code translate="no">execution_id</code></td></tr>
-<tr><th scope="row">Message</th><td><code translate="no">send_message(to="name", message=…)</code></td><td>Existing branch, no new one; the target decides after reading</td><td>Direct: <code translate="no">delivery_id=job_id</code>. Busy: inbox receipt, not yet admission.</td></tr>
-<tr><th scope="row">Query</th><td><code translate="no">list_agents</code>, <code translate="no">list_jobs</code>, <code translate="no">read_conversation</code>, <code translate="no">todo_list</code></td><td>Read-only, starts nothing</td><td>Text</td></tr>
+<tr><th scope="row">Assign</th><td><code translate="no">send_message(to="name", message=…)</code></td><td>Existing branch, conversation or Agent; admits a Job; queues if busy</td><td><code translate="no">execution_id</code></td></tr>
+<tr><th scope="row">Wait</th><td><code translate="no">send_message(to="name", notify_when_idle=true)</code></td><td>Delivers nothing; one notice when the target is idle</td><td>The latest reply now, or a watch</td></tr>
+<tr><th scope="row">Query</th><td><code translate="no">list_agents</code>, <code translate="no">read_conversation</code>, <code translate="no">todo_list</code></td><td>Read-only, starts nothing</td><td>Text</td></tr>
 </tbody>
 </table>
 <p class="note">Foreground creation goes through <code translate="no">run_agent_turn</code> and <code translate="no">runner.spawn_job(wait=True)</code>: waiting neither exempts it from admission and resource limits nor removes its execution identity.</p>
 
 <h2 id="power">Messages and assignments</h2>
 <table class="stack">
-<thead><tr><th scope="col">Guarantee</th><th scope="col"><code translate="no">send_message</code></th><th scope="col"><code translate="no">agent()</code>, <code translate="no">agent(to=)</code></th></tr></thead>
+<thead><tr><th scope="col">Guarantee</th><th scope="col"><code translate="no">send_message</code></th><th scope="col"><code translate="no">agent()</code></th></tr></thead>
 <tbody>
 <tr><th scope="row">Who may initiate</th><td>An enabled sender, to a resolvable unarchived branch</td><td>An enabled caller; output ownership and control authority constrain the resulting <code translate="no">execution_id</code></td></tr>
-<tr><th scope="row">Execution ID</th><td>On direct delivery; the turn behind a receipt still needs admission</td><td>Always; foreground returns the result instead</td></tr>
+<tr><th scope="row">Execution ID</th><td>Always, queued or direct</td><td>Always; foreground returns the result instead</td></tr>
 <tr><th scope="row">Result</th><td colspan="2">Background work tells its sender automatically when it ends (below). An explicit <code translate="no">send_message</code> reply is optional. Terminal outcome: result, error or cancellation.</td></tr>
 <tr><th scope="row">Cancel</th><td>Cancelling cannot withdraw a recorded message; its admitted execution follows canonical authority. A receipt is not an execution ID.</td><td><code translate="no">execution.cancel</code> with <code translate="no">execution_id</code> and <code translate="no">expected_version</code>: queued work is withdrawn, running work enters cancellation</td></tr>
 <tr><th scope="row">Cascade</th><td colspan="2">Follows the execution-parent relationship: stopping a task stops all it spawned</td></tr>
-<tr><th scope="row">Someone else's task</th><td>A known delivery or execution ID grants no control</td><td><code translate="no">job_output</code> allows the target execution session, the caller session or a qualifying ancestor. Control separately checks owner, project, session, action and expected version.</td></tr>
+<tr><th scope="row">Someone else's task</th><td>A known execution ID grants no control</td><td><code translate="no">read_conversation</code> and <code translate="no">close_agent</code> allow the target execution session, the caller session or a qualifying ancestor. Control separately checks owner, project, session, action and expected version.</td></tr>
 <tr><th scope="row">Concurrent</th><td>A receipt acknowledges delivery or queueing, not completion</td><td>A busy target queues the task and is not interrupted</td></tr>
 </tbody>
 </table>
@@ -46,7 +46,7 @@
 <summary>Automatic completion notice</summary>
 <ul>
 <li>Every path ending a job goes through <code translate="no">_update_attach_card</code>: patches the card, finalizes <code translate="no">archive_when_done</code>, then <code translate="no">notices.queue(job)</code>.</li>
-<li>A finished background agent, <code translate="no">agent(to=…)</code> or <code translate="no">send_message</code> starts a turn in the sending conversation. Nothing is said if the sender already read the result with <code translate="no">job_output</code>.</li>
+<li>A finished, failed or stopped background agent, or the reply to a <code translate="no">send_message</code>, starts a notice turn in the sending conversation, in one result shape. Nothing is said for an agent the sender closed with <code translate="no">close_agent</code>.</li>
 <li>A mid-turn conversation gets it when the foreground turn ends; everything finished meanwhile shares one notice. Pending notices live in <code translate="no">&lt;caller-session-dir&gt;/notices.json</code> and survive a restart.</li>
 <li>The notice lands at the delivery session's HEAD and advances it, so results form one serial chain. A spawn's report is in context through its attach pointer; a delivery to an existing branch carries the reply inline.</li>
 <li><code translate="no">send_message(to=…, notify_when_idle=true)</code> with no message rides the same queue and reports the target's latest reply once it goes idle.</li>
@@ -57,12 +57,12 @@
 <table class="stack">
 <thead><tr><th scope="col">Setting, default 0 = no limit</th><th scope="col">Counts</th><th scope="col">When exceeded</th></tr></thead>
 <tbody>
-<tr><th scope="row"><code translate="no">agent.max_spawn_depth</code></th><td>Generations of new branches. Only creation adds. 1: a worker cannot spawn; 2: one more generation.</td><td>The creation is refused with a reason ("complete it yourself"). Dispatch and messages stay if message budget remains.</td></tr>
-<tr><th scope="row"><code translate="no">agent.max_messages</code></th><td>Creation, <code translate="no">send_message</code> and <code translate="no">agent(to=…)</code> across the chain, including A and B exchanges</td><td>New delivery refused. <code translate="no">job_output</code> and cancellation are unaffected.</td></tr>
+<tr><th scope="row"><code translate="no">agent.max_spawn_depth</code></th><td>Generations of new branches, default 1. Only creation adds. 1: a worker cannot spawn; 2: one more generation.</td><td>The creation is refused with a reason ("complete it yourself"). Messages stay if the hop and message budgets remain.</td></tr>
+<tr><th scope="row"><code translate="no">agent.max_messages</code></th><td>Creation and <code translate="no">send_message</code> across the chain, including A and B exchanges</td><td>New delivery refused. <code translate="no">read_conversation</code> and <code translate="no">close_agent</code> are unaffected.</td></tr>
 <tr><th scope="row"><code translate="no">agent.max_spawn_fanout</code></th><td>Agents created per (session, turn). A spawn passes counters to the child and leaves the parent's, so chain counters cannot count siblings.</td><td>That call is refused and tools stay: the list is frozen at turn start.</td></tr>
 </tbody>
 </table>
-<pre translate="no"><code>openprogram config set agent.max_spawn_depth 1
+<pre translate="no"><code>openprogram config set agent.max_spawn_depth 2
 openprogram config set agent.max_messages 8
 openprogram config set agent.max_spawn_fanout 8</code></pre>
 <p class="note">Live, stored in the <code translate="no">agent</code> section of <code translate="no">~/.openprogram/config.json</code>, and in Settings → Agent.</p>
@@ -77,7 +77,7 @@ openprogram config set agent.max_spawn_fanout 8</code></pre>
 <table class="grid">
 <thead><tr><th scope="col">Call on an archived branch</th><th scope="col">Result</th></tr></thead>
 <tbody>
-<tr><th scope="row"><code translate="no">send_message(to=…)</code>, <code translate="no">agent(to=…)</code></th><td class="deny">Refused by the shared address resolver, once the address resolves to the tip</td></tr>
+<tr><th scope="row"><code translate="no">send_message(to=…)</code></th><td class="deny">Refused by the shared address resolver, once the address resolves to the tip</td></tr>
 <tr><th scope="row"><code translate="no">list_agents</code> default view</th><td>Left out</td></tr>
 <tr><th scope="row"><code translate="no">list_agents(scope="archived")</code></th><td>Listed</td></tr>
 <tr><th scope="row"><code translate="no">read_conversation(…)</code></th><td>Full transcript</td></tr>
@@ -91,7 +91,7 @@ openprogram config set agent.max_spawn_fanout 8</code></pre>
 <ol>
 <li><code translate="no">todo_create(subject=…)</code>, with <code translate="no">blocked_by</code> for dependencies.</li>
 <li>One background <code translate="no">agent(prompt, description, run_in_background=true)</code> call per task; each hands back its <code translate="no">execution_id</code> immediately.</li>
-<li><code translate="no">list_jobs()</code> for states; <code translate="no">job_output(job_id=…)</code> for output; cancel from the UI or command surface.</li>
+<li><code translate="no">list_agents()</code> for running work; <code translate="no">read_conversation(execution_id)</code> for output; <code translate="no">close_agent</code> or the UI to stop.</li>
 <li>Completion notices arrive in the caller.</li>
 <li><code translate="no">todo_update(todo_id, status="completed")</code>.</li>
 </ol>
@@ -100,7 +100,7 @@ openprogram config set agent.max_spawn_fanout 8</code></pre>
 <summary>Reuse an existing agent</summary>
 <ol>
 <li><code translate="no">list_agents(scope="all")</code>: grouped by session, with name, usable <code translate="no">to="SID:HEAD"</code>, turn count, approximate word count and tail preview.</li>
-<li><code translate="no">send_message(to="name", message=…)</code> to ask or notify, or <code translate="no">agent(to="name", prompt=…)</code> when it must do the work and return a result.</li>
+<li><code translate="no">send_message(to="name", message=…)</code> to ask, notify, or give it work; its reply comes back as a notice.</li>
 <li>A busy target queues the work, without interruption or loss, until the current turn finishes.</li>
 </ol>
 </details>
@@ -119,10 +119,10 @@ openprogram config set agent.max_spawn_fanout 8</code></pre>
 <thead class="sr"><tr><th scope="col">Interface</th><th scope="col">Contract</th></tr></thead>
 <tbody>
 <tr><th scope="row"><code translate="no">agent</code></th><td>Create and run a branch, or dispatch with <code translate="no">to</code>. Saved AgentSpec creation is a different operation.</td></tr>
-<tr><th scope="row"><code translate="no">list_jobs</code></th><td>Current-session jobs with status and resource view</td></tr>
-<tr><th scope="row"><code translate="no">job_output(job_id, block, timeout)</code></th><td>Read or wait. <code translate="no">block=true</code>; timeout in ms, default 30000, maximum 600000</td></tr>
+<tr><th scope="row"><code translate="no">read_conversation(execution_id)</code></th><td>Status, and the reply once terminal, without waiting</td></tr>
+<tr><th scope="row"><code translate="no">close_agent(target)</code></th><td>Stops an owned execution with its descendants and archives its branch</td></tr>
 <tr><th scope="row"><code translate="no">execution.cancel</code></th><td>The Web UI submits execution ID, expected status version and command ID through the control endpoint</td></tr>
-<tr><th scope="row"><code translate="no">list_agents</code>, <code translate="no">archive_agent</code></th><td>Conversation branches only, not the AgentSpec registry</td></tr>
+<tr><th scope="row"><code translate="no">list_agents</code></th><td>Conversation branches and running work, not the AgentSpec registry</td></tr>
 </tbody>
 </table>
 <p class="note">The <a href="agent-collab-comparison.html">comparison</a> is design context; external tool names are not aliases.</p>
@@ -145,7 +145,7 @@ openprogram config set agent.max_spawn_fanout 8</code></pre>
 <thead class="sr"><tr><th scope="col">State</th><th scope="col">Items</th></tr></thead>
 <tbody>
 <tr><th scope="row">Verified</th><td>Tool inventory, identifier compatibility, Job admission, message delivery and receipts, attach fields, manual and <code translate="no">archive_when_done</code> archive, automatic completion notice, output reads after message-budget exhaustion</td></tr>
-<tr><th scope="row">Open</th><td><code translate="no">archive_agent</code> has no creator check: any local session with the tool may archive another branch. <code translate="no">read_conversation</code> has no target-level owner or project ACL. The full AttachCard's cross-session Open navigates to T without selecting H, while the execution strip checks out T and H; both should open the same branch and show an unavailable target without moving the card.</td></tr>
+<tr><th scope="row">Open</th><td>Archiving an address with <code translate="no">close_agent</code> has no creator check: any local session with the tool may archive another branch. <code translate="no">read_conversation</code> has no target-level owner or project ACL. The full AttachCard's cross-session Open navigates to T without selecting H, while the execution strip checks out T and H; both should open the same branch and show an unavailable target without moving the card.</td></tr>
 </tbody>
 </table>
 <details>

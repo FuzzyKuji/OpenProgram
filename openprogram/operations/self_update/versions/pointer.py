@@ -13,6 +13,7 @@ directory, release the lock.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+import logging
 import os
 from pathlib import Path
 import time
@@ -25,6 +26,10 @@ LOCK_BREAK_SECONDS = 10.0
 LOCK_WAIT_SECONDS = 15.0
 _WINDOWS_RETRIES = 20
 _WINDOWS_RETRY_SECONDS = 0.05
+# Windows refuses to open, rename or delete a file another handle holds: the
+# launcher or the shell reading it, an indexer, an antivirus scan.
+_WINDOWS = os.name == "nt"
+_log = logging.getLogger(__name__)
 _KNOWN = (
     "schema", "generation", "version", "base", "last_good", "last_good_base",
     "previous_good", "previous_good_base", "probation", "probation_deadline", "writer",
@@ -128,7 +133,7 @@ def _retrying(operation: Callable[[], object]) -> object:
         try:
             return operation()
         except PermissionError:
-            if os.name != "nt" or attempt == _WINDOWS_RETRIES - 1:
+            if not _WINDOWS or attempt == _WINDOWS_RETRIES - 1:
                 raise
             time.sleep(_WINDOWS_RETRY_SECONDS)
     raise AssertionError("unreachable")
@@ -153,7 +158,7 @@ def read_or_recover(layout: Layout) -> Pointer:
 
 
 def _fsync_directory(path: Path) -> None:
-    if os.name == "nt":
+    if _WINDOWS:
         return
     descriptor = os.open(path, os.O_RDONLY)
     try:
@@ -164,14 +169,20 @@ def _fsync_directory(path: Path) -> None:
 
 def _replace(source: Path, target: Path) -> None:
     """Rename ``source`` over ``target`` durably."""
-    if os.name == "nt":
+    if _WINDOWS:
         import ctypes
+        from ctypes import wintypes
 
-        move = ctypes.windll.kernel32.MoveFileExW
+        # The error is read from ctypes' own copy: the thread's last error can
+        # be overwritten before Python reads it, and a lost code is not retried.
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        move = kernel32.MoveFileExW
+        move.argtypes = (wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD)
+        move.restype = wintypes.BOOL
         replace_existing_write_through = 0x1 | 0x8
         def attempt() -> None:
             if not move(str(source), str(target), replace_existing_write_through):
-                raise ctypes.WinError()
+                raise ctypes.WinError(ctypes.get_last_error())
         _retrying(attempt)
         return
     os.replace(source, target)
@@ -198,22 +209,34 @@ def _acquire(layout: Layout, *, wait: float = LOCK_WAIT_SECONDS) -> int:
         except FileExistsError:
             pass
         except PermissionError:
-            if os.name != "nt":
+            if not _WINDOWS:
                 raise
         try:
             if time.time() - layout.lock.stat().st_mtime > LOCK_BREAK_SECONDS:
                 layout.lock.unlink(missing_ok=True)
                 continue
+        except FileNotFoundError:
+            continue  # Released since the open: take it now.
         except OSError:
-            continue
+            # Windows: the lock is being deleted or scanned and cannot be read
+            # or removed yet. Wait like for any other holder, up to the deadline.
+            pass
         if time.monotonic() >= deadline:
             raise PointerConflict("another writer holds the pointer lock")
         time.sleep(0.05)
 
 
 def _release(layout: Layout, descriptor: int) -> None:
+    """Give the lock back. Never raises: the write it guarded has already landed or failed.
+
+    A lock that cannot be removed (Windows, while a scanner holds it) is
+    broken by the next writer once it is ``LOCK_BREAK_SECONDS`` old.
+    """
     os.close(descriptor)
-    layout.lock.unlink(missing_ok=True)
+    try:
+        _retrying(lambda: layout.lock.unlink(missing_ok=True))
+    except OSError:
+        _log.warning("the pointer lock could not be removed; it expires by age", exc_info=True)
 
 
 def _write_new(layout: Layout, pointer: Pointer) -> None:

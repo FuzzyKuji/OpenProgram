@@ -35,6 +35,15 @@ input and ``acknowledged`` or ``failed`` after, a click with where it
 landed; a read, and a tab just opened, as a read the preview follows
 without marking the page operated.
 
+A page needs somewhere to open. With an App window there, that is the App:
+the user can see the tab and it has the App's sign-ins. With no App window to
+open it in (the App is closed, or this process cannot reach it), the driver
+starts a browser of its own with no window and a fresh profile
+(``host/resources/background_browser.py``) and the tab opens there, with the
+same id rules, actions and results; ``open`` says so, since such a page has
+none of the App's sign-ins. Those tabs live in this process: they close with
+it, or once none has been used for ``OWN_IDLE_SECONDS``.
+
 In a workflow subprocess the same code runs in the child: the renderer
 calls go through the parent's bridge, which confines them to the
 originating window and closes the tabs the child opened when it ends, and
@@ -59,7 +68,8 @@ import time
 from typing import Any
 from urllib.parse import urlparse
 
-from .web_use import page_actions as pa
+from . import page_actions as pa
+from . import video
 
 _log = logging.getLogger(__name__)
 
@@ -71,6 +81,16 @@ _VIEWER: contextvars.ContextVar[str] = contextvars.ContextVar("browser_tab_viewe
 # The tab locks a list of actions holds until it ends; None outside a list.
 _HELD: contextvars.ContextVar[list | None] = contextvars.ContextVar("browser_tab_held", default=None)
 TAB_WAIT_SECONDS = 60.0
+# The window id of tabs in the driver's own browser, which no App window holds.
+OWN_WINDOW = "background"
+# The driver's own browser closes once none of its tabs was used for this long.
+OWN_IDLE_SECONDS = 30 * 60.0
+# Tabs one conversation's agents hold at once; one more closes the least recently used.
+TABS_PER_CONVERSATION = 8
+_ROOM_NOTE = ("closed {count} tab(s) this conversation opened earlier and used least recently: "
+              f"a conversation keeps {TABS_PER_CONVERSATION} of its own open")
+_OWN_NOTE = ("no OpenProgram App window is available to this turn, so this page is in a background browser with "
+             "none of the App's sign-ins; a page that needs the user's sign-in has to wait for the App")
 _LOG_LIMIT = 300
 # "- button "Next" [ref=e12]" -> role, name, ref.
 _REF_LINE = re.compile(r'^\s*- (?:<changed> )?([\w-]+)(?: "((?:[^"\\]|\\.)*)")?[^\n]*?\[ref=(\w+)\]', re.M)
@@ -101,6 +121,90 @@ FILE_INPUT_SCRIPT = """e => {
   const isFile = n => n instanceof HTMLInputElement && n.type === "file";
   return isFile(e) ? e : isFile(e.control) ? e.control : null;
 }"""
+# The agent's cursor drawn in the page, where it points and clicks.
+_AGENT_CURSOR_SCRIPT = r"""
+armed => {
+  const key = "__openprogramAgentCursor";
+  let state = globalThis[key];
+  if (!state || state.version !== 2) {
+    state = {version: 2, armed: false, show: null};
+    try {
+      Object.defineProperty(globalThis, key, {
+        value: state, configurable: true,
+      });
+    } catch (_) {
+      return false;
+    }
+    state.show = (clientX, clientY) => {
+      document.querySelectorAll("[data-openprogram-agent-cursor]")
+        .forEach(node => node.remove());
+
+      const host = document.createElement("div");
+      host.setAttribute("data-openprogram-agent-cursor", "");
+      host.setAttribute("aria-hidden", "true");
+      Object.assign(host.style, {
+        position: "fixed",
+        left: `${clientX}px`,
+        top: `${clientY}px`,
+        width: "0",
+        height: "0",
+        zIndex: "2147483647",
+        pointerEvents: "none",
+      });
+
+      const ring = document.createElement("span");
+      Object.assign(ring.style, {
+        position: "absolute",
+        left: "-15px",
+        top: "-15px",
+        width: "30px",
+        height: "30px",
+        border: "2px solid rgba(112, 92, 255, .9)",
+        borderRadius: "50%",
+        boxSizing: "border-box",
+      });
+
+      const cursor = document.createElement("span");
+      Object.assign(cursor.style, {
+        position: "absolute",
+        left: "-2px",
+        top: "-2px",
+        width: "24px",
+        height: "30px",
+        filter: "drop-shadow(0 2px 3px rgba(0, 0, 0, .35))",
+      });
+      cursor.innerHTML = '<svg viewBox="0 0 24 30" width="24" height="30" '
+        + 'xmlns="http://www.w3.org/2000/svg"><path d="M2 2v21l5.6-5.2 '
+        + '3.8 9.1 4.2-1.8-3.8-9.1H20L2 2Z" fill="#705cff" '
+        + 'stroke="white" stroke-width="2" stroke-linejoin="round"/></svg>';
+      host.append(ring, cursor);
+      (document.documentElement || document.body)?.append(host);
+
+      const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+      if (!reduced) {
+        ring.animate([
+          {transform: "scale(.35)", opacity: 1},
+          {transform: "scale(1.35)", opacity: 0},
+        ], {duration: 650, easing: "cubic-bezier(.2,.8,.2,1)"});
+        cursor.animate([
+          {transform: "translate(-2px,-2px)", opacity: 1},
+          {transform: "translate(0,0)", opacity: 1, offset: .65},
+          {transform: "translate(0,0)", opacity: 0},
+        ], {duration: 900, easing: "ease-out"});
+      }
+      setTimeout(() => host.remove(), reduced ? 240 : 900);
+    };
+    addEventListener("pointerdown", event => {
+      if (!state.armed || !event.isTrusted) return;
+      state.armed = false;
+      state.show(event.clientX, event.clientY);
+    }, true);
+  }
+  state.armed = Boolean(armed);
+  return true;
+}
+"""
+
 # The page's file fields, for upload(field=n) when a button's click opens no chooser (the page
 # lost track of its own input, or opens it only after an await that spent the click). They are
 # listed with what tells them apart and never picked for the model: a wrong guess would put the
@@ -198,6 +302,7 @@ class _Watch:
     network: list[dict[str, Any]] = field(default_factory=list)
     pending: set = field(default_factory=set)
     documents: int = 0
+    focus: Any = None
 
 
 @dataclass
@@ -315,12 +420,21 @@ def _same_around(old: bytes, new: bytes, point: tuple[float, float], radius: int
 
 
 def _pixels_around(png: bytes, point: tuple[float, float], radius: int) -> bytes:
-    """RGBA bytes of the square of ``radius`` around ``point`` of a PNG; empty where they cannot be read."""
+    """RGBA bytes of the square of ``radius`` around ``point`` of a PNG; empty where they cannot be read.
+
+    Core Graphics decodes it on macOS; everywhere else the decoder below does.
+    """
+    pixels = _quartz_pixels_around(png, point, radius)
+    return _png_pixels_around(png, point, radius) if pixels is None else pixels
+
+
+def _quartz_pixels_around(png: bytes, point: tuple[float, float], radius: int) -> bytes | None:
+    """The square read through Core Graphics; ``None`` where PyObjC is absent (Windows, Linux)."""
     try:
         import Foundation
         import Quartz
     except ImportError:
-        return b""
+        return None
     try:
         data = Foundation.NSData.dataWithBytes_length_(png, len(png))
         source = Quartz.CGImageSourceCreateWithData(data, None)
@@ -342,6 +456,111 @@ def _pixels_around(png: bytes, point: tuple[float, float], radius: int) -> bytes
     except Exception:
         _log.debug("screenshot pixels unavailable", exc_info=True)
         return b""
+
+
+def _png_pixels_around(png: bytes, point: tuple[float, float], radius: int) -> bytes:
+    """The same square decoded here: an 8-bit RGB or RGBA PNG without interlacing, which is what
+    Chromium and the App write. Empty for any other PNG.
+
+    A filter reads only the pixels to the left and above, so each row is undone up to the square's
+    right edge and the rows below the square are left alone.
+    """
+    import zlib
+    if png[:8] != b"\x89PNG\r\n\x1a\n":
+        return b""
+    try:
+        position, header, packed = 8, None, []
+        while position + 8 <= len(png):
+            length, kind = struct.unpack(">I4s", png[position:position + 8])
+            body = png[position + 8:position + 8 + length]
+            if kind == b"IHDR":
+                header = struct.unpack(">IIBBBBB", body)
+            elif kind == b"IDAT":
+                packed.append(body)
+            elif kind == b"IEND":
+                break
+            position += 12 + length
+        if header is None:
+            return b""
+        width, height, depth, colour, _, _, interlace = header
+        size = {2: 3, 6: 4}.get(colour)
+        if depth != 8 or size is None or interlace:
+            return b""
+        left, top = max(0, int(point[0]) - radius), max(0, int(point[1]) - radius)
+        right, bottom = min(width, int(point[0]) + radius), min(height, int(point[1]) + radius)
+        if right <= left or bottom <= top:
+            return b""
+        stride = width * size
+        data = zlib.decompressobj().decompress(b"".join(packed), bottom * (stride + 1))
+        if len(data) < bottom * (stride + 1):
+            return b""
+        needed = right * size
+        out, above = bytearray(), bytes(needed)
+        for row in range(bottom):
+            start = row * (stride + 1)
+            line = _unfilter(data[start], data[start + 1:start + 1 + needed], above, size)
+            if row >= top:
+                part = line[left * size:]
+                if size == 4:
+                    out += part
+                else:
+                    rgba = bytearray(b"\xff") * ((right - left) * 4)
+                    rgba[0::4], rgba[1::4], rgba[2::4] = part[0::3], part[1::3], part[2::3]
+                    out += rgba
+            above = line
+        return bytes(out)
+    except Exception:
+        _log.debug("screenshot pixels unavailable", exc_info=True)
+        return b""
+
+
+def _unfilter(kind: int, line: bytes, above: bytes, size: int) -> bytes:
+    """One PNG scanline with its filter undone; ``above`` is the previous line, ``size`` bytes per pixel.
+
+    This runs over every byte above a click's point with no native decoder, so Up, the filter Chromium
+    writes most, is one integer addition, and the others walk one colour channel at a time.
+    """
+    if kind == 0:
+        return line
+    if kind == 2:
+        # Bytewise addition modulo 256 of two whole rows: add the low seven bits of every byte, then
+        # put each byte's top bit back without letting a carry cross into its neighbour.
+        count = len(line)
+        low, high = int.from_bytes(b"\x7f" * count, "big"), int.from_bytes(b"\x80" * count, "big")
+        first, second = int.from_bytes(line, "big"), int.from_bytes(above, "big")
+        return (((first & low) + (second & low)) ^ ((first ^ second) & high)).to_bytes(count, "big")
+    if kind not in (1, 3, 4):
+        raise ValueError(f"unknown PNG filter {kind}")
+    out = bytearray(len(line))
+    for channel in range(size):
+        values = line[channel::size]
+        if kind == 1:
+            out[channel::size] = bytes(itertools.accumulate(values, _add_byte))
+            continue
+        done, before = [], 0
+        if kind == 3:
+            for value, up in zip(values, above[channel::size]):
+                before = (value + ((before + up) >> 1)) & 255
+                done.append(before)
+        else:
+            corner = 0
+            for value, up in zip(values, above[channel::size]):
+                # Paeth: whichever of left, up and upper-left is nearest to left + up - corner.
+                near_before, near_up = abs(up - corner), abs(before - corner)
+                if near_before <= near_up and near_before <= abs(before + up - corner - corner):
+                    before = (value + before) & 255
+                elif near_up <= abs(before + up - corner - corner):
+                    before = (value + up) & 255
+                else:
+                    before = (value + corner) & 255
+                done.append(before)
+                corner = up
+        out[channel::size] = bytes(done)
+    return bytes(out)
+
+
+def _add_byte(total: int, value: int) -> int:
+    return (total + value) & 255
 
 
 def _script_failure(exc: Exception) -> str:
@@ -367,6 +586,7 @@ class Driver:
         self._lock = threading.Lock()
         self._tabs: dict[tuple[str, str], Tab] = {}
         self._last: dict[str, str] = {}
+        self._used_at: dict[tuple[str, str], float] = {}
         self._playwright = None
         self._browser = None
         self._pages: dict[str, Any] = {}
@@ -374,6 +594,12 @@ class Driver:
         self._watches: dict[str, _Watch] = {}
         # Page targets the App created since connecting, to notice tabs an action opened.
         self._created = 0
+        # The driver's own browser: its pages by tab id, and when one was last used.
+        self._own = None
+        self._own_context = None
+        self._own_pages: dict[str, Any] = {}
+        self._own_used = 0.0
+        self._own_timer: threading.Timer | None = None
 
     # -- the conversation's side: listing, choosing, opening, closing ------
 
@@ -408,6 +634,8 @@ class Driver:
 
     def _run(self, action: str, args: dict[str, Any], session: str) -> dict[str, Any]:
         try:
+            if action in video.ACTIONS:
+                return video.run(action, args, session)
             if action == "tabs":
                 return self._list(session, bool(args.get("all")))
             if action == "open":
@@ -539,8 +767,9 @@ class Driver:
             listed = self._refresh()
         except BrowserError:
             return []
+        # Only what this tab opened: a tab with no opener may be one of the user's the driver had not listed yet.
         new = [item for item in listed if (item.window_id, item.tab_id) not in before
-               and (not item.opener_tab_id or item.opener_tab_id == tab.tab_id)]
+               and item.opener_tab_id == tab.tab_id]
         for item in new:
             _note_opened(item)
         return [item.row() for item in new]
@@ -581,14 +810,33 @@ class Driver:
             _, busy = self._on_owner(self._activity, tab, acted.pending)
 
     def _refresh(self, *, every_window: bool = False) -> list[Tab]:
+        """The tabs there are now: the App's, and the driver's own. No App is no tabs of its, not a failure."""
+        from openprogram.host.resources import background_browser
         from openprogram.runtime.conversation import surface_context
+        own = self._on_owner(self._own_surfaces) if self._own_pages else []
         try:
-            captured = (surface_context.capture_pages_for_listing() if every_window
-                        else surface_context.capture_pages_for_listing(surface_context.current()))
+            wait = self._app_may_come_back()
+            captured = (surface_context.capture_pages_for_listing(wait=wait) if every_window
+                        else surface_context.capture_pages_for_listing(surface_context.current(), wait=wait))
         except surface_context.DesktopUnavailableError as exc:
-            raise BrowserError("app_unavailable", str(exc) or "the OpenProgram App is not connected") from None
-        return [self._remember(surface) for surface in captured.get("surfaces") or []
+            # An App that is running and does not answer is a failure to report; one that is
+            # not running has no tabs, and the driver's own browser is where the next opens.
+            if not own and (wait or not background_browser.available()):
+                raise BrowserError("app_unavailable", str(exc) or "the OpenProgram App is not connected") from None
+            captured = {}
+        alive = {str(surface["tab_id"]) for surface in own}
+        with self._lock:
+            for key in [key for key in self._tabs if key[0] == OWN_WINDOW and key[1] not in alive]:
+                self._tabs.pop(key, None)
+        return [self._remember(surface) for surface in [*(captured.get("surfaces") or []), *own]
                 if isinstance(surface, dict) and surface.get("window_id") and surface.get("tab_id")]
+
+    def _app_may_come_back(self) -> bool:
+        """Whether a listing waits for the App: it is running, so a missing window is a restart or a reconnect."""
+        if os.environ.get("OPENPROGRAM_IN_AGENTIC_SUBPROCESS") == "1":
+            return True
+        from openprogram.programs.applications.browser.app_endpoint import desktop_app_ws_url
+        return bool(desktop_app_ws_url())
 
     def _remember(self, surface: dict[str, Any]) -> Tab:
         key = (str(surface["window_id"]), str(surface["tab_id"]))
@@ -636,9 +884,14 @@ class Driver:
         return self._last.get(_VIEWER.get(), "") or self._last.get(session, "")
 
     def _use(self, tab: Tab, session: str) -> None:
+        self._used_at[(tab.window_id, tab.tab_id)] = time.time()
         self._last[session] = tab.id
         if _VIEWER.get():
             self._last[_VIEWER.get()] = tab.id
+
+    def tab(self, name: Any, session: str) -> Tab:
+        """The tab a conversation names, by the rules its actions follow; ``BrowserError`` when there is none."""
+        return self._tab(name, session)
 
     def _tab(self, name: Any, session: str) -> Tab:
         """The named tab, else the one this agent used last, else its conversation's, else the focused one.
@@ -679,25 +932,82 @@ class Driver:
                 "tabs": [{**tab.row(urls.get(tab.id, "")), **({"current": True} if tab.id == current else {})}
                          for tab in listed]}
 
+    def _keep_within_limit(self, new: Tab, session: str) -> int:
+        """After one more tab opened, close the conversation's least recently used ones over its limit.
+
+        Whatever opens pages over and over (a monitor that never closes one, a
+        Goal that runs for days) ends up holding the limit and no more. Only
+        tabs this turn can list are counted and closed; the new tab and a tab
+        in front of the user stay. Failing to tidy never fails the open."""
+        from .pages import BrowserResourceStore
+        conversation = _conversation(session) or str(_VIEWER.get() or "").split("/", 1)[0]
+        if not conversation:
+            return 0
+        try:
+            opened = BrowserResourceStore().opened_tab_times(conversation)
+            if len(opened) <= TABS_PER_CONVERSATION:
+                return 0
+            live = {(tab.window_id, tab.tab_id): tab for tab in self._refresh()}
+        except Exception:  # noqa: BLE001 - the page is open; tidying waits for the next one
+            _log.warning("could not count the tabs of conversation %s", conversation, exc_info=True)
+            return 0
+        held = [key for key in opened if key in live]
+        spare = sorted((key for key in held if key != (new.window_id, new.tab_id)
+                        and not live[key].focused and not live[key].visible),
+                       key=lambda key: self._used_at.get(key, opened[key]))
+        closed = 0
+        for key in spare[:max(0, len(held) - TABS_PER_CONVERSATION)]:
+            try:
+                self._close(live[key])
+                closed += 1
+            except BrowserError:
+                _log.warning("could not close tab %s to keep within the limit", live[key].id)
+        return closed
+
     def _open(self, args: dict[str, Any], session: str) -> dict[str, Any]:
         from openprogram.runtime.conversation import surface_context
         url = _http_url(args.get("url"))
         opened = surface_context.open_page(url, background=not args.get("visible"))
         surfaces = opened.get("surfaces") or []
-        if opened.get("ok") is False or not surfaces:
+        own = opened.get("reason_code") == "desktop_unavailable"
+        if own:
+            # No App window to open it in: the driver's own browser, which never fails for want of a window.
+            surfaces = [self._on_owner(self._own_open, url)]
+        elif opened.get("ok") is False or not surfaces:
             raise BrowserError(str(opened.get("reason_code") or "open_failed"),
                                str(opened.get("error") or f"the App did not open {url}"))
         tab = self._remember(surfaces[0])
-        if opened.get("agent_owned") is True:
-            _note_opened(tab, session)
+        made_room = 0
         self._use(tab, session)
+        if own or surfaces[0].get("agent_owned") is True:
+            _note_opened(tab, session)
+            made_room = self._keep_within_limit(tab, session)
         result = self._on_owner(self._operate, tab, "read", {"wait_for_load": True})
+        if own and result.get("ok") is not False:
+            result["note"] = _OWN_NOTE
+        if made_room and result.get("ok") is not False:
+            result["note"] = " ".join(filter(None, [result.get("note"), _ROOM_NOTE.format(count=made_room)]))
         self._publish(tab, result)
         # The tab just opened is the one the conversation's preview follows now.
         self._report_look(tab, "open", result)
         return result
 
     def _close(self, tab: Tab) -> dict[str, Any]:
+        if tab.window_id == OWN_WINDOW:
+            self._on_owner(self._own_close, tab.tab_id)
+        else:
+            self._close_in_app(tab)
+        from .pages import BrowserResourceStore
+        BrowserResourceStore().forget_opened_tab(tab.window_id, tab.tab_id)
+        with self._lock:
+            self._tabs.pop((tab.window_id, tab.tab_id), None)
+        self._used_at.pop((tab.window_id, tab.tab_id), None)
+        for agent, name in list(self._last.items()):
+            if name == tab.id:
+                self._last.pop(agent, None)
+        return {"ok": True, "tab": tab.id, "done": "closed the tab"}
+
+    def _close_in_app(self, tab: Tab) -> None:
         from openprogram.host.resources.desktop_link import request_close_tab
         from openprogram.host.resources.desktop_link import RESPONSE_TIMEOUT_REASON_CODE
         closed = request_close_tab(tab.binding_id) if tab.binding_id else {"reason_code": "page_context_stale"}
@@ -708,14 +1018,6 @@ class Driver:
             raise BrowserError("tab_gone", "the tab's binding expired")
         if not closed.get("ok"):
             raise BrowserError("close_failed", str(closed.get("error") or "the App did not close the tab"))
-        from .pages import BrowserResourceStore
-        BrowserResourceStore().forget_opened_tab(tab.window_id, tab.tab_id)
-        with self._lock:
-            self._tabs.pop((tab.window_id, tab.tab_id), None)
-        for agent, name in list(self._last.items()):
-            if name == tab.id:
-                self._last.pop(agent, None)
-        return {"ok": True, "tab": tab.id, "done": "closed the tab"}
 
     def _screenshot(self, tab: Tab) -> dict[str, Any]:
         """The tab as the user would see it, captured by the App without bringing it forward."""
@@ -728,6 +1030,10 @@ class Driver:
     def _capture(self, tab: Tab) -> tuple[bytes, str, list[int]]:
         """The tab's image, by the App or else by Playwright, with its url and viewport; on the owner thread."""
         from openprogram.host.resources.desktop_link import request_bound_screenshot
+        if tab.window_id == OWN_WINDOW:
+            image = self._page(tab).screenshot(scale="css", timeout=5000)
+            url, viewport = self._viewport(tab)
+            return image, url, viewport
         captured = request_bound_screenshot(tab.binding_id) if tab.binding_id else {}
         data = str(captured.get("image_data_url") or "")
         if captured.get("ok") and data.startswith("data:image/png;base64,"):
@@ -821,14 +1127,12 @@ class Driver:
         if self._browser is not None and self._browser.is_connected():
             return
         self._disconnect()
-        from playwright.sync_api import sync_playwright
-        from openprogram.programs.applications.browser.chrome import desktop_app_ws_url
+        from openprogram.programs.applications.browser.app_endpoint import attach_to_app, desktop_app_ws_url
         endpoint = desktop_app_ws_url()
         if not endpoint:
             raise BrowserError("app_unavailable", "the OpenProgram App's browser is not reachable")
-        self._playwright = sync_playwright().start()
         try:
-            self._browser = self._playwright.chromium.connect_over_cdp(endpoint)
+            self._browser = attach_to_app(self._started_playwright(), endpoint)
         except Exception as exc:
             self._disconnect()
             raise BrowserError("app_unavailable", f"cannot reach the App's browser ({type(exc).__name__})") from None
@@ -844,20 +1148,169 @@ class Driver:
             # Target discovery only feeds the new-tab counter; tabs work without it.
             _log.debug("browser target discovery unavailable", exc_info=True)
 
+    def _started_playwright(self):
+        """One Playwright for the thread: it serves the App's connection and the driver's own browser."""
+        if self._playwright is None:
+            from playwright.sync_api import sync_playwright
+            self._playwright = sync_playwright().start()
+        return self._playwright
+
     def _disconnect(self) -> None:
-        for close in (getattr(self._browser, "close", None), getattr(self._playwright, "stop", None)):
+        """Let go of the App. Playwright stays while the driver's own browser runs on it."""
+        steps = [getattr(self._browser, "close", None)]
+        self._browser = None
+        if self._own is None:
+            steps.append(getattr(self._playwright, "stop", None))
+            self._playwright = None
+        for close in steps:
             try:
                 if close:
                     close()
             except Exception:
                 # Teardown: the browser or Playwright driver may already be gone.
                 _log.debug("browser disconnect step failed", exc_info=True)
-        self._browser = self._playwright = None
         self._pages.clear()
         self._known.clear()
-        self._watches.clear()
+        for target in [target for target in self._watches if not target.startswith("own:")]:
+            self._watches.pop(target, None)
+
+    # -- the owner thread: the driver's own browser -------------------------
+
+    def _own_start(self) -> None:
+        if self._own is not None and self._own.is_connected():
+            return
+        from openprogram.host.resources import background_browser
+        self._own_forget()
+        try:
+            self._own = background_browser.launch(self._started_playwright())
+            self._own_context = self._own.new_context()
+        except Exception as exc:
+            self._own_forget()
+            raise BrowserError(
+                "browser_unavailable",
+                "no OpenProgram App window is available and no browser could be started in the background "
+                f"({type(exc).__name__}); open the App, or install Chrome") from None
+        self._own_context.on("page", self._own_adopt)
+
+    def _own_adopt(self, page) -> str:
+        """Give a page of the driver's own browser its tab id; a page an action opened counts as new."""
+        for tab_id, known in self._own_pages.items():
+            if known is page:
+                return tab_id
+        tab_id = os.urandom(6).hex()
+        self._own_pages[tab_id] = page
+        self._created += 1
+        return tab_id
+
+    def _own_open(self, url: str) -> dict[str, Any]:
+        self._own_start()
+        page = self._own_context.new_page()
+        tab_id = self._own_adopt(page)
+        try:
+            page.goto(url, wait_until="commit", timeout=3 * ACTION_TIMEOUT_MS)
+        except Exception as exc:
+            self._own_close(tab_id)
+            raise BrowserError("open_failed", f"could not open {url}: {_script_failure(exc)}") from None
+        self._own_touch()
+        return self._own_surface(tab_id, page)
+
+    def _own_surface(self, tab_id: str, page) -> dict[str, Any]:
+        opener = ""
+        try:
+            parent = page.opener()
+            opener = next((key for key, known in self._own_pages.items() if known is parent), "")
+            title = page.title()
+        except Exception:
+            title = ""
+        parsed = urlparse(page.url)
+        return {"window_id": OWN_WINDOW, "tab_id": tab_id, "target_id": f"own:{tab_id}", "title": title,
+                "origin": f"{parsed.scheme}://{parsed.netloc}" if parsed.netloc else page.url,
+                "opener_tab_id": opener, "visible": False, "focused": False}
+
+    def _own_surfaces(self) -> list[dict[str, Any]]:
+        for tab_id in [tab_id for tab_id, page in self._own_pages.items() if page.is_closed()]:
+            self._own_pages.pop(tab_id, None)
+            self._watches.pop(f"own:{tab_id}", None)
+        return [self._own_surface(tab_id, page) for tab_id, page in list(self._own_pages.items())]
+
+    def _own_close(self, tab_id: str) -> None:
+        page = self._own_pages.pop(tab_id, None)
+        self._watches.pop(f"own:{tab_id}", None)
+        try:
+            if page is not None and not page.is_closed():
+                page.close()
+        except Exception:
+            _log.debug("own browser tab did not close tab=%s", tab_id, exc_info=True)
+        if not self._own_pages:
+            self._own_stop()
+
+    def _own_forget(self) -> None:
+        self._own = self._own_context = None
+        self._own_pages.clear()
+        for target in [target for target in self._watches if target.startswith("own:")]:
+            self._watches.pop(target, None)
+
+    def _own_stop(self) -> None:
+        """Close the driver's own browser; its tabs are gone with it, and their records."""
+        browser = self._own
+        gone = list(self._own_pages)
+        self._own_forget()
+        if self._own_timer is not None:
+            self._own_timer.cancel()
+            self._own_timer = None
+        try:
+            if browser is not None:
+                browser.close()
+        except Exception:
+            _log.debug("own browser did not close", exc_info=True)
+        if self._browser is None and self._playwright is not None:
+            try:
+                self._playwright.stop()
+            except Exception:
+                _log.debug("playwright did not stop", exc_info=True)
+            self._playwright = None
+        if gone:
+            try:
+                from .pages import BrowserResourceStore
+                store = BrowserResourceStore()
+                for tab_id in gone:
+                    store.forget_opened_tab(OWN_WINDOW, tab_id)
+            except Exception:
+                _log.debug("own browser tab records not forgotten", exc_info=True)
+
+    def _own_touch(self) -> None:
+        """A tab of the driver's own browser was used: it stays for ``OWN_IDLE_SECONDS`` more."""
+        self._own_used = time.monotonic()
+        if self._own_timer is None:
+            self._own_wake(OWN_IDLE_SECONDS)
+
+    def _own_wake(self, seconds: float) -> None:
+        self._own_timer = threading.Timer(seconds, lambda: self._owner.submit(self._own_sweep))
+        self._own_timer.daemon = True
+        self._own_timer.start()
+
+    def _own_sweep(self) -> None:
+        self._own_timer = None
+        if self._own is None:
+            return
+        left = OWN_IDLE_SECONDS - (time.monotonic() - self._own_used)
+        if left > 0:
+            self._own_wake(left)
+        else:
+            self._own_stop()
+
+    def _own_page(self, tab: Tab):
+        page = self._own_pages.get(tab.tab_id)
+        if page is None or page.is_closed():
+            raise BrowserError("tab_gone", "the tab is closed")
+        if tab.target_id not in self._watches:
+            self._watch(page, tab.target_id)
+        self._own_touch()
+        return page
 
     def _page(self, tab: Tab):
+        if tab.window_id == OWN_WINDOW:
+            return self._own_page(tab)
         self._connect()
         page = self._pages.get(tab.target_id)
         if page is None or page.is_closed():
@@ -887,6 +1340,13 @@ class Driver:
     def _watch(self, page, target: str) -> None:
         watch = self._watches[target] = _Watch()
         page.set_default_timeout(ACTION_TIMEOUT_MS)
+        try:
+            # A background tab fires no focus events, so inputs that open on focus stay shut.
+            # The emulation lasts as long as this session and covers this tab only.
+            watch.focus = page.context.new_cdp_session(page)
+            watch.focus.send("Emulation.setFocusEmulationEnabled", {"enabled": True})
+        except Exception:
+            _log.debug("focus emulation unavailable for a tab", exc_info=True)
 
         def keep(items: list, item) -> None:
             items.append(item)
@@ -1040,8 +1500,10 @@ class Driver:
         if action == "evaluate":
             from openprogram.programs.applications.browser.privacy import password_values, redact_password_values
             source = pa.evaluate_source(args)
+            # Naming an element hands it to a function script as its argument.
+            on = self._locate(page, tab, args)[0] if args.get("ref") or args.get("role") else page
             try:
-                value = page.evaluate(source)
+                value = on.evaluate(source)
             except Exception as exc:
                 # The script may have changed the page before it failed.
                 tab.writes.append((next(_writes), _VIEWER.get()))
@@ -1138,7 +1600,7 @@ class Driver:
         if action in ("type", "paste"):
             return self._type_into(page, locator, label, action, args)
         if action == "upload":
-            from .web_use.file_inputs import file_payload
+            from .file_inputs import file_payload
             payload, problem = file_payload(args.get("path"))
             if problem:
                 raise BrowserError(problem["reason_code"], problem["message"])
@@ -1193,7 +1655,7 @@ class Driver:
                 + "\n".join(rows))
 
     def _upload_to_field(self, tab: Tab, args: dict[str, Any]) -> str:
-        from .web_use.file_inputs import file_payload
+        from .file_inputs import file_payload
         try:
             number = int(args.get("field"))
         except (TypeError, ValueError):
@@ -1209,7 +1671,7 @@ class Driver:
         return f"chose {payload['name']} in file field {number}"
 
     def _answer_chooser(self, tab: Tab, args: dict[str, Any]) -> str:
-        from .web_use.file_inputs import file_payload
+        from .file_inputs import file_payload
         chooser, tab.chooser = tab.chooser, None
         if chooser is None:
             raise BrowserError("no_file_chooser", "no file chooser is open: click the page's upload button first, "
@@ -1301,7 +1763,6 @@ class Driver:
 
     def _show_cursor(self, page, locator) -> None:
         """The App's agent cursor, drawn where the click lands."""
-        from .web_use import _AGENT_CURSOR_SCRIPT
         try:
             page.evaluate(_AGENT_CURSOR_SCRIPT, True)
             locator.evaluate(_CURSOR_AT_SCRIPT)
@@ -1331,7 +1792,12 @@ def _note_opened(tab: Tab, session: str = "") -> None:
     from .pages import BrowserResourceStore
     conversation = _conversation(session) or str(_VIEWER.get() or "").split("/", 1)[0]
     if conversation:
-        BrowserResourceStore().note_tab_opened(tab.window_id, tab.tab_id, conversation)
+        from openprogram.runtime.agent.turn_request import get_turn_request
+        from openprogram.runtime.execution.run_control import get_current_execution_id
+        from openprogram.runtime.permissions.identity import ends_with_its_run
+        # Only a run that starts clean and ends with its answer is named: its pages close with it.
+        run = (get_current_execution_id() or "") if ends_with_its_run(get_turn_request()) else ""
+        BrowserResourceStore().note_tab_opened(tab.window_id, tab.tab_id, conversation, run)
 
 
 def _move_opened(old: tuple[str, str], new: tuple[str, str]) -> None:
@@ -1364,9 +1830,50 @@ def close_conversation_tabs(conversation: str) -> int:
     windows = {window for window, _ in live}
     store = BrowserResourceStore()
     for key in opened - set(live):
-        if key[0] in windows:
+        # A tab of a browser the driver started is gone with the process that started it.
+        if key[0] in windows or key[0] == OWN_WINDOW:
             store.forget_opened_tab(*key)
     return closed
+
+
+def close_run_tabs(execution: str) -> int:
+    """Close the tabs one run opened, once the run is over. Returns how many closed.
+
+    A scheduled run and a check-in start clean and end with their answer, so
+    nothing they opened is of use to the next one. Only those runs are named
+    on a tab's record (``_note_opened``), so calling this for any execution
+    that ended is safe. A tab of a browser the driver started in the run's own
+    process went with that process; its record goes here."""
+    from .pages import BrowserResourceStore
+    store = BrowserResourceStore()
+    opened = store.tabs_opened_in(execution)
+    if not opened:
+        return 0
+    worker = driver()
+    live = {(tab.window_id, tab.tab_id): tab for tab in worker._refresh(every_window=True)}
+    closed = 0
+    for key in opened & set(live):
+        try:
+            worker._close(live[key])
+            closed += 1
+        except BrowserError:
+            _log.warning("could not close tab %s of run %s", live[key].id, execution)
+    windows = {window for window, _ in live}
+    for key in opened - set(live):
+        if key[0] in windows or key[0] == OWN_WINDOW:
+            store.forget_opened_tab(*key)
+    return closed
+
+
+def close_run_tabs_soon(execution: str) -> None:
+    """Ending a run never waits for the App to close its tabs."""
+    def run() -> None:
+        try:
+            close_run_tabs(execution)
+        except Exception:
+            _log.warning("closing the tabs of run %s failed", execution, exc_info=True)
+    if execution:
+        threading.Thread(target=run, name="close-run-tabs", daemon=True).start()
 
 
 def close_conversation_tabs_soon(conversation: str) -> None:
@@ -1394,6 +1901,16 @@ if hasattr(os, "register_at_fork"):
     os.register_at_fork(after_in_child=_forget_in_child)
 
 
+def acting_on(page_key: str) -> bool:
+    """Whether an agent's action is running on the Page now (its tab is held), without starting a driver."""
+    current = _driver
+    if current is None or not page_key:
+        return False
+    with current._lock:
+        held = [tab for tab in current._tabs.values() if tab.page_key == page_key]
+    return any(tab.lock.locked() for tab in held)
+
+
 def driver() -> Driver:
     global _driver
     with _driver_lock:
@@ -1404,7 +1921,7 @@ def driver() -> Driver:
 
 ACTIONS = ("tabs", "open", "read", "click", "type", "paste", "select", "press", "hover", "scroll", "drag",
            "upload", "navigate", "back", "forward", "reload", "wait", "screenshot", "console", "network",
-           "evaluate", "close")
+           "evaluate", "close", *video.ACTIONS)
 
-__all__ = ["ACTIONS", "BrowserError", "Driver", "Tab", "batch", "close_conversation_tabs",
-           "close_conversation_tabs_soon", "driver"]
+__all__ = ["ACTIONS", "BrowserError", "Driver", "Tab", "acting_on", "batch", "close_conversation_tabs",
+           "close_conversation_tabs_soon", "close_run_tabs", "close_run_tabs_soon", "driver"]

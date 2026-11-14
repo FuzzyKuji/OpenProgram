@@ -1,6 +1,7 @@
 <title>文件变更、Review 与恢复</title>
 <meta name="description" content="App、Web、TUI 与 runtime 共用的文件归属、版本历史、Undo、Revert、Rewind、Review 范围、冲突和恢复存储。">
 <h1>文件变更、Review 与恢复</h1>
+<p>历史回退标记只显示在已加载窗口内对应的消息旁。锚点不在当前窗口时，不把旧标记挪到最新消息后面。待处理的回退操作仍在当前末尾显示。</p>
 
 <h2 id="model">Undo、Revert、Rewind</h2>
 <table class="stack">
@@ -8,13 +9,30 @@
 <tbody>
 <tr><th scope="row">范围</th><td>当前分支的最新轮次</td><td>某一历史轮次</td><td>源分支上所选检查点之后的后缀</td></tr>
 <tr><th scope="row">文件</th><td>所有文件通过预检后恢复</td><td>后续没有同路径依赖且摘要一致时才恢复</td><td>从日志投影目标状态，在持久意图下应用</td></tr>
-<tr><th scope="row">对话</th><td>HEAD 和全部消息不变</td><td>不变</td><td>创建并激活稳定的目标分支</td></tr>
-<tr><th scope="row">分支</th><td>不创建也不移动</td><td>HEAD 不动</td><td>源 ref 和 HEAD 不变；后续消息接在目标分支上</td></tr>
+<tr><th scope="row">对话</th><td>HEAD 和所有消息保留</td><td>不变</td><td>当前分支回退；撤回的后缀只作恢复历史，不成为另一分支</td></tr>
+<tr><th scope="row">分支</th><td>不创建或移动</td><td>HEAD 保留</td><td>分支身份和名称不变；新消息延续回退后的当前分支</td></tr>
 <tr><th scope="row">冲突</th><td>任一路径不一致，整个操作被阻止</td><td>不做自动反向合并</td><td>任一不可恢复项都会阻止</td></tr>
-<tr><th scope="row">之后</th><td>追加撤销事务；卡片显示 Reverted；预检通过时可 Redo</td><td>当前分支 Review 折叠该撤销；预检通过时可 Reapply</td><td>预填原提示；显示对齐状态</td></tr>
+<tr><th scope="row">之后</th><td>追加撤销事务；卡片显示 Reverted；预检通过时可 Redo</td><td>当前分支 Review 折叠该撤销；预检通过时可 Reapply</td><td>预填原提示；没有文件对齐选择</td></tr>
 </tbody>
 </table>
 <p class="note">轮次卡片显示适用的 Undo 或 Revert；用户检查点打开 Restore 面板。Redo 和 Reapply 是新事务，没有线性 redo 栈。对话记录不提供分支操作；Copy conversation 在对话的 ⋯ 菜单里。</p>
+
+<h2 id="shared-workspace-contract">共享工作区与当前分支回退</h2>
+<p>对话分支记录消息路径，并不拥有独立文件系统。显式分支和重试保留各自的对话版本；切换它们不恢复文件、不暂停工具，也不要求选择文件版本。模型收到当前工作区说明，编辑前必须重新读文件。</p>
+<p>Rewind 是另一种操作：在当前分支撤回选中提示及后续内容；选择代码恢复时，同时恢复对应的已记录文件修改。</p>
+<p>已有兄弟分支及其共享消息保持完整。撤回内容保留在持久恢复存储中，供 Undo 和崩溃恢复使用，但不在分支列表、版本导航、对话图和普通上下文中出现。</p>
+<p>新消息延续同一命名分支。Undo 和 Redo 在同一分支切换撤回视图；明确说明其现有语义只改变消息，不恢复文件。</p>
+<p>恢复不能覆盖其他分支、其他会话或用户的后续写入。代码恢复遇到不安全、缺失或冲突文件时，在任何文件或对话变化之前整体阻止；仅回退对话仍是显式选项。</p>
+<p>预览绑定 HEAD、目标、文件状态和模式。重复请求重放记录结果；失败回滚，中断操作恢复后才展示。旧意图保持原有恢复语义。旧文件对齐标记不能阻止消息或工具。</p>
+<table class="stack"><thead><tr><th scope="col">验收路径</th><th scope="col">要求的结果</th></tr></thead><tbody>
+<tr><th scope="row">编辑后切换、失败重试、旧不一致标记</th><td>文件不变；消息和通常允许的工具可用；切换时清除旧读取基线。</td></tr>
+<tr><th scope="row">Rewind 后发送，包括首条提示</th><td>分支身份和名称不变；不提供已撤回版本；当前文件符合已确认的恢复。</td></tr>
+<tr><th scope="row">兄弟分支共享部分撤回历史</th><td>兄弟分支及必要祖先保留；只撤回选中分支。</td></tr>
+<tr><th scope="row">冲突、过期预览、运行中的写入、归档</th><td>对话和文件不会部分改变；拒绝原因明确说明恢复条件。</td></tr>
+<tr><th scope="row">Undo、Redo、重复请求、应用期间重启</th><td>分支可见性、身份和文件一致；记录的事务决定结果。</td></tr>
+</tbody></table>
+
+<p>分支身份独立于末尾消息。两次回退落在同一检查点或 ROOT 时，各 ref 保留自己的名称，并可按分支 id 分别选择。Undo 标记属于该身份。旧客户端按 head 选择的方式在没有歧义时保持兼容。</p>
 
 <h2 id="architecture">事实来源</h2>
 <svg class="fig-wide" viewBox="0 0 680 244" role="img" aria-label="可信文件修改工具（write、edit、apply_patch、经验证的适配器）把修改回执写入修改日志，日志提供本轮和当前分支 Review。Git 提供工作区 Review。普通 Bash 和外部进程没有回执。历史规划器读取日志、对话 DAG 和 Git，然后写持久意图、应用工作区事务，仅在对话模式下移动 HEAD。">
@@ -290,10 +308,11 @@
 <tbody>
 <tr><th scope="row">解析谱系</th><td>从 HEAD 沿 predecessor 到目标非根用户轮次；子树只通过显式归属纳入</td><td>不在活动分支上：拒绝</td></tr>
 <tr><th scope="row">目标状态</th><td>每个发起一轮的 prompt 有一个 checkpoint：<code translate="no">.file-recovery/&lt;session&gt;/checkpoints/&lt;user_msg_id&gt;.json</code> 记录每个被跟踪路径的状态，内容在共享的 <code translate="no">blobs/&lt;sha256&gt;</code>。没列出的路径取其后第一次编辑前记录的状态。没有 checkpoint 的 prompt（旧会话、运行中插入的消息）在读取时折叠 journal，不改写数据。</td><td>捕获失败不阻塞工具，该路径记为 <code translate="no">unavailable</code>。没有可用备份的 prompt（<code translate="no">evicted</code>、<code translate="no">journal_gap</code>、<code translate="no">no_checkpoint</code>）对代码模式返回 <code translate="no">unavailable</code>，仅对话仍可用。</td></tr>
-<tr><th scope="row">计划行</th><td>每个目标和磁盘上的文件比较：<code translate="no">restore</code>、<code translate="no">delete</code> 或带原因的 <code translate="no">skip</code>，附 +A &minus;D（单文件 1 MiB，总预算 3 秒）。Bash、手动、hunk Revert 和 Undo 的变化被覆盖恢复。规划不写任何东西，session 有 run 时也不跑崩溃恢复。</td><td>按文件跳过，其余继续：<code translate="no">other_session</code>（目标状态读取之后，另一会话开始或完成过可信写入；读自 <code translate="no">mutation-locks/last-writers/</code> 下各会话最新写入的按路径索引）、<code translate="no">changed_since_edit</code>（没有 checkpoint，文件已和 journal 不一致）、<code translate="no">unsafe_path</code>、<code translate="no">parent_missing</code>、<code translate="no">no_backup</code>、<code translate="no">changed_while_reading</code>。自有 job 运行中时以 <code translate="no">job_running</code> 阻止。</td></tr>
+<tr><th scope="row">计划行</th><td>每个目标和磁盘上的文件比较：<code translate="no">restore</code>、<code translate="no">delete</code> 或带原因的 <code translate="no">skip</code>，附 +A &minus;D（单文件 1 MiB，总预算 3 秒）。只恢复撤回轮次实际写入的路径。范围外的后续修改受保护，包括 Bash、手动、hunk Revert 和 Undo 的修改。规划不写任何东西，session 有 run 时也不跑崩溃恢复。</td><td>任一跳过行都会在修改前阻止整个代码恢复：<code translate="no">other_session</code>（目标状态读取之后，另一会话开始或完成过可信写入；读自 <code translate="no">mutation-locks/last-writers/</code> 下各会话最新写入的按路径索引）、<code translate="no">changed_since_edit</code>（文件已和记录的写入不一致，或这些写入之间夹有其他修改）、<code translate="no">unsafe_path</code>、<code translate="no">parent_missing</code>、<code translate="no">no_backup</code>、<code translate="no">changed_while_reading</code>。自有 job 运行中时以 <code translate="no">job_running</code> 阻止。</td></tr>
+<tr><th scope="row">其他分支</th><td>checkpoint 记下属于它的轮次（<code translate="no">turn_ids</code>）；文件在某一轮第一次改它之前的状态，记在这一轮的 checkpoint 里。目标取范围内最早读到的那条记录。另一条 prompt 的轮次也写过的路径，取在那次写入之后、范围内自己第一次写入（轮次日志记录里的 <code translate="no">first_sequence</code>）之前最早读到的记录。已提交的回退撤回过的写入（其 intent 上的 <code translate="no">restores_through</code>）不计入。</td><td>那次写入晚于范围内自己的第一次写入，或两者之间没有读到过记录：<code translate="no">changed_since_edit</code>。见<a href="../execution/control.zh.html#branch-rewind">两个分支</a>。</td></tr>
 <tr><th scope="row">准备意图</th><td>占住 run 槽位，把每个计划路径的当前内容存成 blob，journal 没见过的变化也能回滚；持久化计划 id、预期 HEAD、前后镜像、模式、跳过行；幂等</td><td>在工作区锁内重建计划，hash 不同返回 <code translate="no">stale_plan</code>，零写入</td></tr>
 <tr><th scope="row">应用</th><td>工作区锁；持久化每个动作的状态；原子替换；摘要一致才删除</td><td>只有摘要仍等于本事务写入的值才回滚；否则 <code translate="no">recovery_required</code>，保留外部内容</td></tr>
-<tr><th scope="row">分支</th><td>先建稳定的目标 ref，再用预期 head 的 compare-and-set 激活。首轮之前的目标使用持久 ROOT。</td><td>按意图恢复文件；源分支和活动分支不变</td></tr>
+<tr><th scope="row">分支</th><td>用预期 HEAD 的 compare-and-set 移动当前分支。分支身份、撤回可见性和恢复元数据一起提交。首轮之前的目标使用持久 ROOT。</td><td>按意图恢复文件；源分支和活动分支不变</td></tr>
 <tr><th scope="row">收尾</th><td>追加事务和导航事件；不标记旧节点；推进 writer epoch，旧任务无法写回</td><td>启动时完成或回滚未结束的意图，绝不猜测</td></tr>
 </tbody>
 </table>
@@ -302,8 +321,8 @@
 <table class="stack" id="recovery-modes">
 <thead><tr><th scope="col">模式</th><th scope="col">文件</th><th scope="col">对话</th><th scope="col">下一轮</th></tr></thead>
 <tbody>
-<tr><th scope="row">代码和对话</th><td>恢复</td><td>提交后激活目标分支；预填提示；保留来源 ref 和 HEAD</td><td>正常</td></tr>
-<tr><th scope="row">仅对话（<code translate="no">conversation</code>）</th><td>保留</td><td>HEAD compare-and-set 到目标之前的消息，后面的消息留作分支</td><td>告知模型文件未回退；发送不被阻止</td></tr>
+<tr><th scope="row">代码和对话</th><td>恢复</td><td>提交后回退当前分支；预填提示；撤回消息只保留为恢复历史</td><td>正常</td></tr>
+<tr><th scope="row">仅对话（<code translate="no">conversation</code>）</th><td>保留</td><td>当前分支 HEAD compare-and-set 到目标之前的消息；后续消息被撤回，不展示为分支</td><td>告知模型文件未回退；发送不被阻止</td></tr>
 <tr><th scope="row">仅代码（<code translate="no">code</code>）</th><td>恢复</td><td>保留；事务把 HEAD compare-and-set 为自身</td><td>告知模型文件回退了而对话没有</td></tr>
 </tbody>
 </table>
@@ -314,9 +333,9 @@
 <tbody>
 <tr><th scope="row">Rewind 边</th><td>session meta 的 <code translate="no">rewind_edges</code>，随 HEAD 移动一起写入。标记按当前链计算：下次发送前 <code translate="no">pending</code>，之后 <code translate="no">back</code>，Undo 后 <code translate="no">forward</code>。</td></tr>
 <tr><th scope="row">Undo、Redo</th><td>占住 run 槽位，沿边 compare-and-set HEAD。只动消息。</td></tr>
-<tr><th scope="row">给模型的说明</th><td>session meta 的 <code translate="no">pending_rewind_note</code>，下一轮构建系统提示时读取一次：<code translate="no">conversation_only</code>、<code translate="no">restored</code>、<code translate="no">partial</code>、<code translate="no">code_only</code>、<code translate="no">undo_kept_files</code>。</td></tr>
+<tr><th scope="row">给模型的说明</th><td>session meta 的 <code translate="no">pending_rewind_note</code>，下一轮构建系统提示时读取一次：<code translate="no">conversation_only</code>、<code translate="no">restored</code>、<code translate="no">branch_kept_files</code>、<code translate="no">partial</code>（先前仅对话回退留下的文件说明仍有效）、<code translate="no">code_only</code>、<code translate="no">undo_kept_files</code>。</td></tr>
 <tr><th scope="row">读取记录</th><td>Rewind、Undo、Redo 丢弃该会话的读取基线，下次编辑前先读文件。</td></tr>
-<tr><th scope="row">复制会话</th><td><code translate="no">branch_session</code> 带上被复制消息的 checkpoint 和 blob，并在 <code translate="no">origin.json</code> 记录来源和 mutation 序号，来源早先的写入不算另一会话。</td></tr>
+<tr><th scope="row">复制会话</th><td><code translate="no">branch_session</code> 带上被复制消息的 checkpoint、blob 和写入归属，并在 <code translate="no">origin.json</code> 记录来源和 mutation 序号，来源早先的写入不算另一会话。</td></tr>
 <tr><th scope="row">保留</th><td>每会话 100 个 turn 目录、100 个 checkpoint，分开计数。<code translate="no">intents</code>、<code translate="no">intent-locks</code>、<code translate="no">checkpoints</code>、<code translate="no">blobs</code> 不算 turn 目录。被移除的 turn id 记入 <code translate="no">evicted-turns.json</code>；没有保留的 checkpoint 或未结束意图引用的 blob 才删除。</td></tr>
 </tbody>
 </table>
@@ -326,7 +345,7 @@
 <table class="stack fixed">
 <thead class="sr"><tr><th scope="col">对象</th><th scope="col">用途</th></tr></thead>
 <tbody>
-<tr><th scope="row">分支</th><td>稳定 id、HEAD、<code translate="no">head_version</code>、writer epoch；会话保存 <code translate="no">active_branch_id</code>。源 HEAD 绝不后退；浏览只移动游标。</td></tr>
+<tr><th scope="row">分支</th><td>稳定 id、HEAD、<code translate="no">head_version</code>、writer epoch；会话保存 <code translate="no">active_branch_id</code>。显式 Rewind 使当前分支 HEAD 后退；普通分支导航不恢复文件。</td></tr>
 <tr><th scope="row">检查点</th><td>恢复目标，不复制文件列表</td></tr>
 <tr><th scope="row">变更集</th><td>producer 和 origin 轮次、执行者。卡片按 origin 分组并保留 producer。</td></tr>
 <tr><th scope="row">计划</th><td>只读预览；计划哈希防止预览到确认之间的竞争</td></tr>
@@ -340,13 +359,13 @@
 <thead><tr><th scope="col">场景</th><th scope="col">含义</th><th scope="col">文件</th></tr></thead>
 <tbody>
 <tr><th scope="row">从结果分支</th><td>创建并激活目标分支；源 HEAD 不变</td><td>不变，“Files stay as they are”</td></tr>
-<tr><th scope="row">Fork 为新任务</th><td>保留源任务和 HEAD；复制对话或检查点文件</td><td>Git 优先用隔离 worktree。非 Git 绝不静默复制目录。</td></tr>
-<tr><th scope="row">切换兄弟分支</th><td>切换对话谱系；一次 HEAD compare-and-set 记录不一致</td><td>下一次修改前：Keep current files 或 Restore branch code，都绑定源和目标</td></tr>
+<tr><th scope="row">Fork 为新任务</th><td>保留源任务和 HEAD；复制对话历史</td><td>文件保持共享，除非用户明确要求文件系统隔离。</td></tr>
+<tr><th scope="row">切换兄弟分支</th><td>选择另一条对话谱系，不改变文件、不要求对齐</td><td>普通分支共享当前工作区。清除读取基线并告知模型文件没有恢复。读写遵守正常权限和当前文件检查。</td></tr>
 <tr><th scope="row">所属子任务</th><td>按 relation、<code translate="no">creates_agent</code>、origin 轮次判断；有自己的 producer 和变更集</td><td>运行中阻止父级恢复。结束后纳入闭包。</td></tr>
 <tr><th scope="row">独立执行者</th><td>后台终端、任务执行器、频道、调度器</td><td>运行中阻止同工作区恢复；writer epoch 阻止旧写回</td></tr>
 <tr><th scope="row">已有同伴、跨会话</th><td>关联，不归属</td><td>不修改；在影响中列出；重叠时阻止代码恢复</td></tr>
 <tr><th scope="row">Worktree 子任务</th><td>独立状态</td><td>父级 Undo 或 Rewind 绝不碰它；合并是单独事务</td></tr>
-<tr><th scope="row">兄弟分支</th><td>不在 Rewind 范围内</td><td>日志不变；切回时重新计算对齐</td></tr>
+<tr><th scope="row">兄弟分支</th><td>不在 Rewind 范围内</td><td>日志不变；切回时共享当前文件</td></tr>
 </tbody>
 </table>
 <details>
@@ -367,7 +386,7 @@
 <thead><tr><th scope="col">情况</th><th scope="col">结果</th></tr></thead>
 <tbody>
 <tr><th scope="row">后续修改了同一文件：Revert</th><td class="deny">不反向合并</td></tr>
-<tr><th scope="row">后续修改了同一文件：Rewind</th><td class="review">整文件覆盖 Bash、手动和自身的变化；另一会话后来改过则跳过并报告</td></tr>
+<tr><th scope="row">后续修改了同一文件：Rewind</th><td class="review">撤回范围之外的后续修改阻止整个代码恢复；仅对话仍可用</td></tr>
 <tr><th scope="row">确认后计划已变</th><td class="deny"><code translate="no">stale_plan</code>，零写入</td></tr>
 <tr><th scope="row">运行中的轮次或后台任务</th><td class="deny">没有可确认的计划</td></tr>
 <tr><th scope="row">符号链接、硬链接、特殊文件</th><td class="deny">不跟随不覆盖；显示路径和原因</td></tr>
@@ -391,7 +410,7 @@
 <tr><th scope="row">对话 ⋯ 菜单</th><td>Copy conversation</td><td>只复制历史；文件不变</td><td>隐式恢复</td></tr>
 <tr><th scope="row">Changes 标签页</th><td>三种范围；文件列表和单文件差异；来源标签；计数覆盖完整筛选结果</td><td>Unified 或 side-by-side、行评论、Open file、Reveal。范围或筛选变化清空游标、选择和差异。</td><td>工作区轮次 Undo；只在客户端筛选</td></tr>
 <tr><th scope="row">影响面板</th><td>提示、轮次和文件数、分支结果、模式、冲突</td><td>确认；取消无影响</td><td>阻止时强制执行</td></tr>
-<tr><th scope="row">对齐横幅</th><td>分支与工作区不一致</td><td>Keep current files、Restore branch code</td><td>警告后照常修改</td></tr>
+<tr><th scope="row">分支切换</th><td>对话变化，文件保持</td><td>继续对话并处理当前文件</td><td>由分支历史引发的文件对齐提示或工具限制</td></tr>
 </tbody>
 </table>
 
@@ -532,7 +551,7 @@
 <tr><th scope="row">Undo、Revert</th><td><code translate="no">conversation/revert.py</code>、工作区锁、意图</td><td>后续同文件修改：零写入。摘要不一致不删除。中途 I/O 绝不部分成功。</td><td>多轮 HEAD 移动</td></tr>
 <tr><th scope="row">Rewind</th><td><code translate="no">conversation/rewind.py</code>、head API、意图恢复</td><td>一个文件跨三轮；文件失败保留 HEAD；兄弟分支不受影响；过期计划不写入</td><td>压缩、DAG schema</td></tr>
 <tr><th scope="row">Review</th><td><code translate="no">turn_files/</code>、元数据、中心标签、卡片</td><td>历史不逐消息查询；工作区排除被忽略文件；只挂载一个有界差异；来源一致。普通回复不挂卡片；空结果隐藏；失败可重试。</td><td>第三栏、新窗口</td></tr>
-<tr><th scope="row">对齐、归属</th><td>切换、活动谱系折叠、归属</td><td>不一致后绝不静默开始修改。运行中的所属子任务阻止父级恢复；结束的纳入。同伴和 worktree 不动。</td><td>工作区克隆</td></tr>
+<tr><th scope="row">共享工作区、归属</th><td>切换、活动谱系折叠、归属</td><td>切换后可正常处理当前文件，编辑前重新读取。运行中的所属子任务阻止父级恢复；结束的纳入。同伴和 worktree 不动。</td><td>工作区克隆</td></tr>
 <tr><th scope="row">查询快照</th><td><code translate="no">files/</code> 查询、<code translate="no">FileTree</code></td><td>搜索能找到未展开的文件。第一页后的目录变化不进入旧游标；拒绝跨项目游标。并发创建或重命名后按稳定顺序重来。</td><td>全文搜索、布局</td></tr>
 <tr><th scope="row">请求身份</th><td>文件分发、<code translate="no">ws-request.ts</code>、幂等</td><td>乱序响应到达正确调用方。缺少 <code translate="no">request_id</code> 被拒绝。重试重放；不同指纹冲突。</td><td>非文件协议</td></tr>
 <tr><th scope="row">缓存、草稿</th><td><code translate="no">files-shared.ts</code>、IndexedDB、标签生命周期</td><td>只淘汰干净的 LRU 项。未保存草稿在重新加载、标签和项目切换后仍在。配额失败时原子保留旧草稿并提示。</td><td>协作、远程同步</td></tr>
@@ -549,10 +568,12 @@
 <table class="stack fixed">
 <thead class="sr"><tr><th scope="col">项目</th><th scope="col">状态</th></tr></thead>
 <tbody>
-<tr><th scope="row">已实现</th><td>日志、Undo、Revert、代码和对话 Rewind、三种 Review 范围、切换对齐、查询快照、请求身份、持久修改、有界缓存、草稿、统一文件窗口、History、格式适配器、可选 Office 安装、文档发布</td></tr>
+<tr><th scope="row">已实现</th><td>日志、Undo、Revert、代码和对话 Rewind、三种 Review 范围、查询快照、请求身份、持久修改、有界缓存、草稿、统一文件窗口、History、格式适配器、可选 Office 安装、文档发布</td></tr>
 <tr><th scope="row" id="pdf-reading-status">PDF</th><td>阅读器、批注和运行兼容性已实现</td></tr>
 <tr><th scope="row" id="markdown-reading-status">Markdown</th><td>渲染和标题导航已实现；安装版验收待完成</td></tr>
 <tr><th scope="row">未实现</th><td>项目解绑及其草稿清理；Office 语义差异；远程条件存储</td></tr>
 </tbody>
 </table>
 <p class="next"><a href="../../ui/chat/chat-turn-visual-spec.zh.html">聊天轮次视觉规范</a></p>
+
+<p class="note" id="shared-workspace-status">共享工作区与当前分支回退已实现。独立规格审查、质量审查和受影响范围的验证均通过。</p>

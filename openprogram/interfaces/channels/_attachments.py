@@ -48,6 +48,7 @@ from openprogram.interfaces.channels import accounts as _accounts
 from openprogram.interfaces.channels._message import Attachment
 from openprogram.host.security.safe_http import safe_client
 from openprogram.host.security.url_policy import URLPolicyError, normalize_origin
+from openprogram.host._platform.filesystem import replace_file
 
 _log = logging.getLogger(__name__)
 
@@ -191,7 +192,7 @@ def _download_one(
                 if not mime:
                     mime = _wechat_media.sniff_image_mime(head) or "application/octet-stream"
                 dest = folder / _dest_name(att.name, mime)
-                os.replace(temporary, dest)
+                replace_file(temporary, dest)
             finally:
                 temporary.unlink(missing_ok=True)
     return {

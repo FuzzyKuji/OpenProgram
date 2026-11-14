@@ -69,7 +69,7 @@ def install_fixture(tmp_path: Path):
         # runs. Extraction, verifier ordering, publication and locking are real.
         payload.writestr("runtime/bin/python.cmd", "\r\n".join([
             "@echo off",
-            'if /i "%~nx2"=="verify-product-runtime.py" (',
+            'if /i "%~nx4"=="verify-product-runtime.py" (',
             '  echo verify>>"%OP_TEST_EVENTS%"',
             '  if exist "%OP_TEST_RELEASE%" if not "%OP_TEST_REUSE%"=="1" exit /b 40',
             '  if "%OP_TEST_FAILURE%"=="verify" exit /b 41',

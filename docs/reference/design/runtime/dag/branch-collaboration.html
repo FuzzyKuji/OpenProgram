@@ -48,6 +48,39 @@
 </table>
 </details>
 
+<h2 id="three-operations">Switch, start again, rewind</h2>
+
+<table class="stack">
+<thead><tr><th scope="col">Operation</th><th scope="col">What it creates</th><th scope="col">While a branch runs</th></tr></thead>
+<tbody>
+<tr><th scope="row">Switch to an existing branch</th><td>Nothing; the view and the head move to that branch's tip</td><td>Always allowed</td></tr>
+<tr><th scope="row">Start again from an old point: edit and resend, retry, send from a message selected in the graph</th><td>A new branch beside the original, with its own record (<code translate="no">branch_identity</code> of the new message). Both stay and both can run. A retry of a prompt that never got a reply reruns that prompt instead</td><td>Allowed from any point while other branches run; waits while the selected branch's own turn runs</td></tr>
+<tr><th scope="row">Rewind</th><td>Nothing. The tail of the current branch is retracted in place: same branch id, name, settings and usage; the tip moves back before the chosen prompt, which returns to the composer</td><td>Refused while that branch runs; one that changes files, while any branch runs</td></tr>
+</tbody>
+</table>
+
+<p>The DAG is append-only, so a rewind deletes nothing. It lists the retracted nodes in the session meta (<code translate="no">rewind_hidden_nodes</code>; the old tip in <code translate="no">rewind_hidden_heads</code>), written in the head's compare-and-set by <code translate="no">rewind_view.view_update</code>. Every reader skips them:</p>
+<ul>
+<li>transcript, message reads and search;</li>
+<li>branch list and version counts, so a message sent after a rewind continues the branch instead of adding a version;</li>
+<li>the request's context, which walks back from the tip;</li>
+<li>compaction: a summary of retracted turns is retracted too, and the summary before it applies again (<code translate="no">active_summary_for_chain</code> skips the graph's <code translate="no">retracted</code> set);</li>
+<li>the context-commit timeline.</li>
+</ul>
+<p>Undo and Redo of a rewind take the nodes off and back on the list. A switch to a retracted tip is refused and points to Undo. Conversations whose earlier rewinds left an extra branch keep it; nothing is migrated. File restoration: <a href="../operations/file-management.html#shared-workspace-contract">File management</a>.</p>
+
+<p class="note">Peers agree that a rewind removes recent turns from the current line rather than starting a new one. Claude Code's <code translate="no">/rewind</code> slices the conversation in place and gives the prompt back; forking copies the session. Codex writes <code translate="no">ThreadRolledBack</code> with a turn count; the turns stay in the rollout file, leave the history and cannot anchor a fork.</p>
+<p class="note">The retracted list plays the part of Codex's rollback marker and keeps an Undo, which neither peer has in-session. Starting again stays a separate operation, so a person never loses the original by rewinding, and never gets a stray version by retracting.</p>
+
+<h2 id="branch-owned-work">Work that belongs to a branch</h2>
+
+<p>Work started on a branch keeps acting on it after the person selects another:</p>
+<ul>
+<li>A Goal records the branch it was started on (<code translate="no">branch_id</code>). Its check-ins and verification continue and read that branch; a turn on another branch gets neither its instructions nor its accounting. A Goal saved before this follows the selected branch.</li>
+<li><code translate="no">/merge</code> and <code translate="no">merge_branches</code> write the reply to the branch they started on (<code translate="no">target_branch_id</code>) and move the head only while that branch is still selected.</li>
+<li>A <code translate="no">send_message</code> queued for a busy conversation continues the branch it addressed, from that branch's tip.</li>
+</ul>
+
 <h2 id="implementation-status">Implementation status</h2>
 <table class="stack fixed">
 <thead class="sr"><tr><th scope="col">State</th><th scope="col">Items</th></tr></thead>

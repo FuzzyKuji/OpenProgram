@@ -38,7 +38,7 @@ beforeEach(() => {
     fetches.push(String(url));
     return { json: async () => ({ total_used: 1, window: 10 }) };
   };
-  useSessionStore.setState({ rowsByView: {}, messageOrder: {}, compactionUi: {}, tokens: {}, contextWindow: {}, heads: {} });
+  useSessionStore.setState({ rowsByView: {}, messageOrder: {}, runningTasks: {}, tokens: {}, contextWindow: {}, heads: {} });
 });
 afterEach(async () => { await view?.unmount(); view = undefined; setSocket(null); });
 
@@ -92,7 +92,8 @@ describe("ContextBreakdownPanel", () => {
   test("while compacting the row says so and sends nothing", async () => {
     const sent = [];
     setSocket({ readyState: 1, send: (frame) => sent.push(frame) });
-    useSessionStore.setState({ compactionUi: { "panel-d": { running: true } } });
+    // /compact is the branch's running operation, so a reload shows it too.
+    useSessionStore.setState({ runningTasks: { "panel-d": { msg_id: "compact_1", op_kind: "compact", op_id: "op_1" } } });
     view = await render(h(ContextBreakdownPanel, { sessionId: "panel-d" }));
     const button = compactButton();
     assert.equal(button.textContent, "Compacting…");
@@ -101,20 +102,19 @@ describe("ContextBreakdownPanel", () => {
     assert.deepEqual(sent, []);
   });
 
-  test("right after a compaction event, and until a new message, Compact is disabled", async () => {
+  test("a finished compaction leaves Compact available; the server answers a repeat as a no-op", async () => {
     seedEvents("panel-e", [
       { id: "u1", role: "user", content: "hi" },
       { id: "c1", role: "system", kind: "compaction", slot: "event", content: "" },
     ]);
     view = await render(h(ContextBreakdownPanel, { sessionId: "panel-e" }));
-    assert.equal(compactButton().getAttribute("aria-disabled"), "true");
-    await view.unmount();
-    seedEvents("panel-e", [
-      { id: "c1", role: "system", kind: "compaction", slot: "event", content: "" },
-      { id: "u2", role: "user", content: "again" },
-    ]);
-    view = await render(h(ContextBreakdownPanel, { sessionId: "panel-e" }));
     assert.equal(compactButton().getAttribute("aria-disabled"), "false");
+  });
+
+  test("a turn compacting its own context shows Compacting…", async () => {
+    useSessionStore.setState({ runningTasks: { "panel-f": { msg_id: "m1", execution_id: "e1", phase: "compact" } } });
+    view = await render(h(ContextBreakdownPanel, { sessionId: "panel-f" }));
+    assert.equal(compactButton().textContent, "Compacting…");
   });
 });
 

@@ -61,12 +61,15 @@ from ..atomic_file import atomic_write_text, read_text_with_retry  # noqa: F401
 from ..session_log import RUN_ROWS_RECORD, SessionLog, report_foreign_change  # noqa: F401
 from ..session_state_file import SessionStateFile  # noqa: F401
 from ..memory_index import SessionMemoryIndex  # noqa: F401
+from ..branch_config import BRANCH_RECORD_KEYS, take_durable_branch_records  # noqa: F401
 from ..placement import (  # noqa: F401
     INDEX_FILE,
     LOCATIONS_FILE,
     is_deleted,
     iter_session_dirs,
     default_session_dir,
+    move_session_folder,
+    SessionFolderBusy,
     nested_session_dir,
     quarantine_dir,
     record_delete_intent,
@@ -74,7 +77,7 @@ from ..placement import (  # noqa: F401
     session_looks_present,
     target_dir_for_project,
 )
-from ..session_lock import registry_file_lock, session_interprocess_lock  # noqa: F401
+from ..session_lock import conversation_lock, registry_file_lock, session_interprocess_lock  # noqa: F401
 
 if TYPE_CHECKING:
     from .service import SessionStore

@@ -152,7 +152,7 @@ def install_packages() -> None:
                 "--target", str(staging), "--constraint", str(constraints),
                 *PACKAGES,
             ],
-            capture_output=True, text=True, timeout=INSTALL_TIMEOUT_S,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=INSTALL_TIMEOUT_S,
         )
         if result.returncode != 0:
             tail = (result.stderr or result.stdout).strip().splitlines()[-5:]

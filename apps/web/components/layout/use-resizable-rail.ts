@@ -13,8 +13,20 @@ const RAIL_TRANSITION = `width ${RAIL_MOVE_MS}ms ${RAIL_EASING}, min-width ${RAI
 // A move whose width does not report its end settles after this.
 const SETTLE_FALLBACK_MS = RAIL_MOVE_MS + 120;
 const KEYBOARD_STEP = 24;
-// A drag that ends this close to the default width lands on it.
-const DEFAULT_SNAP = 8;
+// A drag this close to a snap width rests on it.
+const SNAP_REACH = 8;
+
+/** Where a drag at `width` rests: on the nearest snap width within `reach`,
+ *  and where it is everywhere else. */
+export function snapWidth(width: number, snaps: readonly number[], reach = SNAP_REACH): number {
+  let best = width;
+  let distance = reach + 1;
+  for (const snap of snaps) {
+    const off = Math.abs(width - snap);
+    if (off <= reach && off < distance) { best = snap; distance = off; }
+  }
+  return best;
+}
 // The way back to the default width. It is walked a frame at a time like a
 // drag: a transition would move the rail's edge alone, while everything
 // inside, laid out at --rail-open-w, jumped to the new width at once.
@@ -50,6 +62,9 @@ interface ResizableRailOptions {
   /** The most of the window the rail may show. It limits what is drawn, not
    *  what is stored, so widening the window brings a stored width back. */
   maxWindowShare?: number;
+  /** Widths a drag rests on as it passes them, with a storage key. The
+   *  default width alone when not given. */
+  snapWidths?: readonly number[];
 }
 
 function readStoredWidth(storageKey: string): number | null {
@@ -90,7 +105,11 @@ export function useResizableRail({
   direction,
   storageKey,
   maxWindowShare,
+  snapWidths,
 }: ResizableRailOptions) {
+  const snaps = snapWidths ?? [defaultWidth];
+  const snapsRef = useRef(snaps);
+  snapsRef.current = snaps;
   const [width, setWidth] = useState(defaultWidth);
   const widthRef = useRef(width);
   widthRef.current = width;
@@ -262,10 +281,10 @@ export function useResizableRail({
         return;
       }
       const moved = drag.startWidth + (event.clientX - drag.startX) * direction;
-      const next = storageKey && Math.abs(moved - defaultWidth) <= DEFAULT_SNAP ? defaultWidth : moved;
+      const next = storageKey ? snapWidth(moved, snapsRef.current) : moved;
       setWidth(Math.max(minWidth, Math.min(limitRef.current, next)));
     },
-    [defaultWidth, direction, minWidth, finishResize, storageKey],
+    [direction, minWidth, finishResize, storageKey],
   );
 
   const style = {
@@ -310,7 +329,7 @@ export function useResizableRail({
       "data-off": open ? undefined : "",
       "aria-hidden": open ? undefined : true,
       "data-resizing": resizing,
-      "data-snapped": resizing && storageKey && shownWidth === defaultWidth ? "" : undefined,
+      "data-snapped": resizing && storageKey && snaps.includes(shownWidth) ? "" : undefined,
       onPointerDown,
       onPointerMove,
       onPointerUp: finishResize,

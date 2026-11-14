@@ -29,8 +29,7 @@ def _row(p) -> dict:
 
 
 @function(name="plugin", description=_DESC, toolset=["core"],
-          unsafe_in=["plan"], requires_approval=True,
-          max_result_chars=48_000)
+          unsafe_in=["plan"], requires_approval=True)
 def plugin(action: str = "guide", name: str = "", path: str = "") -> dict:
     """Manage OpenProgram plugins.
 

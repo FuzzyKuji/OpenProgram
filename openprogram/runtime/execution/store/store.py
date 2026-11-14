@@ -85,12 +85,23 @@ class ExecutionStore(StateBlobsOperations, ProjectionsOperations, CommandsOperat
 
     @contextmanager
     def _admission_transaction(self, session_id: str) -> Iterator[TableHandle]:
-        """Serialize new execution admission with session migration holds."""
+        """Serialize new execution admission with session migration holds.
+
+        A rewind that changes the conversation's files holds them for the
+        whole conversation (``operations.workspace_hold``); a new execution
+        (a scheduled run, a queued Job) waits for it to end instead of
+        starting on files that are being restored."""
         self.tables.ensure_session(session_id)
         from openprogram.state.paths import get_state_dir
         from openprogram.state.store.session.migration import session_hold_active
+        from openprogram.state.store.session.operations import wait_for_workspace
         from openprogram.state.store.session.session_lock import session_interprocess_lock
 
+        if not wait_for_workspace(session_id):
+            raise ExecutionConflict(
+                "workspace_rewind",
+                "execution admission waits while a rewind restores this conversation's files",
+            )
         with session_interprocess_lock(session_id, timeout=5.0):
             if session_hold_active(Path(get_state_dir()) / "projects", session_id):
                 raise ExecutionConflict(
@@ -254,8 +265,14 @@ class ExecutionStore(StateBlobsOperations, ProjectionsOperations, CommandsOperat
         track_process_owner: bool = False,
         admission_key: str | None = None,
         recovery_from: tuple[str, int] | None = None,
+        client_request_id: str | None = None,
     ) -> ExecutionRecord:
-        """Admit one execution and its immutable input in one transaction."""
+        """Admit one execution and its immutable input in one transaction.
+
+        ``client_request_id`` is the id the client gave the send; one send
+        admits one execution per session. A stop that named the send before
+        this admission (:meth:`stop_by_request`) is taken here, in the same
+        transaction, and the turn ends as stopped when it activates."""
         if not input_ref or not input_hash or not entrypoint or not config_snapshot_ref:
             raise ExecutionConflict(
                 "invalid_input", "input_ref, input_hash, entrypoint and config_snapshot_ref are required"
@@ -361,6 +378,10 @@ class ExecutionStore(StateBlobsOperations, ProjectionsOperations, CommandsOperat
                 raise ExecutionConflict(
                     "execution_input_exists", f"input already exists: {record.execution_id}"
                 ) from exc
+            if client_request_id:
+                self._bind_client_request(
+                    connection, session_id, client_request_id, record.execution_id, now=record.created_at,
+                )
             self._append_event(
                 connection,
                 execution_id=record.execution_id,
@@ -370,6 +391,111 @@ class ExecutionStore(StateBlobsOperations, ProjectionsOperations, CommandsOperat
                 created_at=record.created_at,
             )
         return record
+
+
+    #: How long a stop that named a send waits for that send's admission. A
+    #: send is admitted within moments of the stop on the same connection;
+    #: the window covers a reconnect that delivers the stop first.
+    STOP_MARK_SECONDS = 600.0
+
+
+    def _bind_client_request(
+        self, connection: TableHandle, session_id: str, client_request_id: str,
+        execution_id: str, *, now: float,
+    ) -> None:
+        """Record the send's id on its admission and take a stop that named it."""
+        try:
+            connection.update(
+                "execution_inputs", {"client_request_id": client_request_id},
+                execution_id=execution_id,
+            )
+        except RowConflict as exc:
+            raise ExecutionConflict(
+                "request_admitted",
+                f"this send was already admitted in session {session_id}",
+            ) from exc
+        mark = connection.get("execution_stop_marks", session_id, client_request_id)
+        if mark is None or mark["execution_id"] is not None:
+            return
+        if mark["expires_at"] <= now:
+            connection.delete("execution_stop_marks", session_id=session_id,
+                              client_request_id=client_request_id)
+            return
+        connection.update(
+            "execution_stop_marks", {"execution_id": execution_id},
+            session_id=session_id, client_request_id=client_request_id,
+        )
+
+
+    def execution_for_request(self, session_id: str, client_request_id: str) -> str | None:
+        """The execution a send admitted, or None before its admission."""
+        self.tables.ensure_session(session_id)
+        with closing(self._connect()) as connection:
+            row = connection.first(
+                "execution_inputs", session_id=session_id, client_request_id=client_request_id,
+            )
+            return row["execution_id"] if row is not None else None
+
+
+    def stop_by_request(
+        self,
+        *,
+        session_id: str,
+        client_request_id: str,
+        command_id: str,
+        actor: Mapping[str, Any],
+        reason_code: str,
+        now: float | None = None,
+    ) -> tuple[str | None, dict[str, Any] | None]:
+        """Stop the turn a send starts, whether or not it was admitted yet.
+
+        One transaction decides: when the send admitted an execution, its id
+        comes back (``(execution_id, None)``) and the caller stops it like
+        any other. Before that, a stop mark is written for the send, or the
+        one already there is kept (``(None, mark)``); the send's admission
+        takes it. A mark is written to the session's log, so it outlives a
+        Worker restart, and lapses after :data:`STOP_MARK_SECONDS`.
+        """
+        if not session_id or not client_request_id or not command_id:
+            raise ExecutionConflict("invalid_target", "a stop by request names its session and send")
+        now = time.time() if now is None else now
+        self.tables.ensure_session(session_id)
+        with self._transaction() as connection:
+            row = connection.first(
+                "execution_inputs", session_id=session_id, client_request_id=client_request_id,
+            )
+            if row is not None:
+                return row["execution_id"], None
+            mark = connection.get("execution_stop_marks", session_id, client_request_id)
+            if mark is not None and mark["expires_at"] > now:
+                return None, mark
+            connection.delete(
+                "execution_stop_marks", session_id=session_id,
+                where=lambda found: found["execution_id"] is None and found["expires_at"] <= now,
+            )
+            mark = connection.insert("execution_stop_marks", {
+                "session_id": session_id,
+                "client_request_id": client_request_id,
+                "command_id": command_id,
+                "actor_json": _json(_snapshot_json(actor)),
+                "reason_code": reason_code,
+                "created_at": now,
+                "expires_at": now + self.STOP_MARK_SECONDS,
+            }, on_conflict="replace")
+            return None, mark
+
+
+    def stop_mark_for(self, execution_id: str) -> dict[str, Any] | None:
+        """The stop mark the admission of ``execution_id`` took, if any."""
+        self.tables.ensure_execution(execution_id)
+        with closing(self._connect()) as connection:
+            return connection.first("execution_stop_marks", execution_id=execution_id)
+
+
+    def drop_stop_mark(self, execution_id: str) -> None:
+        """Forget a taken stop mark once its stop is written."""
+        with self._transaction() as connection:
+            connection.delete("execution_stop_marks", execution_id=execution_id)
 
 
     def get_execution_input(self, execution_id: str) -> ExecutionInputRecord | None:

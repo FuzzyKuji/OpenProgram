@@ -19,15 +19,14 @@ from openprogram.host.sandbox import SandboxPathDenied
 from openprogram.runtime.permissions import refusal
 
 
-# Bash output can be huge (find /, full log dump). 30K matches Claude
-# Code's BashTool default. persist_full=True saves the complete output
-# to disk so the LLM can re-read with the read tool when the truncated
-# view doesn't suffice.
+# Bash output can be huge (find /, full log dump). 7,500 weight is about
+# Claude Code's 30,000-character BashTool cap in English. The agent loop
+# saves the complete output to a file the result names, so the model can
+# read the part it needs.
 @function(
     name="bash",
     description=DESCRIPTION,
-    max_result_chars=30_000,
-    persist_full=True,
+    max_result_weight=7_500,
     toolset=["core"],
     unsafe_in=["plan"],  # hidden in plan mode
     # workdir is resolved and checked in prepare_command against the ORIGINAL

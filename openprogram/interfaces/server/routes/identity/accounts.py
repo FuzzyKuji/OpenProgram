@@ -522,6 +522,9 @@ def register(app):
                 store.put_pool(pool)
         if not existing and not get_active_pin(pid):
             set_active_account(pid, name)   # first account becomes active
+        # A new key's quota (balance, key limit) is read right away, once.
+        from openprogram.models.usage.quota_fetchers import after_key_added
+        after_key_added(pid)
         return JSONResponse(content={"ok": True, "name": name, "validation": validation, "status": initial_status})
 
     @app.post("/api/providers/{provider}/accounts/{name}/update")

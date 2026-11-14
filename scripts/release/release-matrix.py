@@ -12,6 +12,8 @@
         internal ones and anything that did not pass, refuse when the wheel or
         every macOS and Linux command-line runtime is missing, make the
         version-free App copies, and write the release notes for what exists.
+        --incomplete-output FILE lists what the plan built for and the release
+        does not carry, one per line; the workflow fails on it after publishing.
 
 No certificates never means no release: each desktop leg signs when its
 credentials exist and otherwise builds the unsigned form. One platform failing
@@ -60,6 +62,10 @@ _WINDOWS_RUNTIME = ("windows-2025", "windows", "x86_64")
 _WINDOWS_ARM_RUNTIME = ("windows-11-vs2026-arm", "windows", "arm64")
 _LINUX_BASELINE = {"x86_64": "ubuntu-22.04", "arm64": "ubuntu-22.04-arm"}
 _PLATFORM_KEY = {"mac": "macos", "win": "windows", "linux": "linux"}
+# The file a user installs with, per desktop leg. A leg whose artifact has
+# none of these did not produce an App, whatever else it uploaded.
+_INSTALLER = {"mac": "*.dmg", "win": "*.exe", "linux": "*.deb"}
+_RUNTIME_ARCHIVE = {"macos": "*.tar.gz", "linux": "*.tar.gz", "windows": "*.zip"}
 _LABELS = {
     ("macos", "arm64"): "macOS Apple Silicon",
     ("macos", "x86_64"): "macOS Intel",
@@ -189,6 +195,8 @@ def release_matrices(switches: Switches = Switches()) -> dict[str, list]:
     return {
         "runtime": runtime, "seed": list(seeds.values()), "desktop": desktop,
         "omitted": omitted, "warnings": warnings,
+        # With a trusted key every runtime leg also builds its update files.
+        "update_files": switches.update_key,
     }
 
 
@@ -227,15 +235,23 @@ def keep_publishable(root: Path, plan: Mapping[str, list]) -> list[str]:
     verified = {path.name.removeprefix("cli-verified-")
                 for path in root.glob("cli-verified-*") if path.is_dir()}
     update_platforms = _manifest_platforms(root)
+    # Platforms whose missing update files are already said by another line.
+    told: set[str] = set()
+    # Internal artifacts: the App's seed, the install checks' receipts and the
+    # logs a failed leg keeps for diagnosis.
     for path in sorted(root.iterdir()):
-        if path.name.startswith(("seed-", "cli-verified-")):
+        if path.name.startswith(("seed-", "cli-verified-", "diagnostics-")):
             _remove(path)
     for row in plan.get("runtime", []):
         key = f"{row['platform']}-{row['arch']}"
         label = _label(row["platform"], row["arch"])
         directory = root / f"product-runtime-{key}"
         if not directory.is_dir():
+            told.add(key)
             missing.append(f"{label} command-line runtime: its build failed.")
+        elif not any(directory.glob(_RUNTIME_ARCHIVE[row["platform"]])):
+            _remove(directory)
+            missing.append(f"{label} command-line runtime: its build left no archive.")
         elif key not in verified:
             _remove(directory)
             missing.append(f"{label} command-line runtime: it did not pass the install check.")
@@ -245,11 +261,25 @@ def keep_publishable(root: Path, plan: Mapping[str, list]) -> list[str]:
         directory = root / f"desktop-{row['layout']}-{row['platform']}-{row['arch']}"
         if not directory.is_dir():
             missing.append(f"{label} App: its build failed.")
+        elif not any(directory.glob(_INSTALLER[row["platform"]])):
+            _remove(directory)
+            missing.append(f"{label} App: its build left no installer.")
         elif row["layout"] == "thin" and key not in update_platforms:
             _remove(directory)
+            told.add(key)
             missing.append(f"{label} App: its update files could not be built, so it could never update.")
-        elif row["platform"] == "linux" and not any(directory.glob("*.AppImage")):
-            missing.append(f"{label} AppImage: its build failed; the deb package is available.")
+        else:
+            if row["platform"] == "linux" and not any(directory.glob("*.AppImage")):
+                missing.append(f"{label} AppImage: its build failed; the deb package is available.")
+            if not (directory / f"SHA256SUMS-{row['platform']}-{row['arch']}").is_file():
+                missing.append(f"{label} App: its checksum file is missing; the installer is available.")
+    if plan.get("update_files"):
+        # A full-layout App and the command-line install do not read these yet,
+        # so nothing is removed; the release still says they are not there.
+        for row in plan.get("runtime", []):
+            key = f"{row['platform']}-{row['arch']}"
+            if key not in update_platforms and key not in told:
+                missing.append(f"{_label(row['platform'], row['arch'])} update files: could not be built.")
     for directory in sorted(root.glob("cli-seed-*")):
         if directory.name.removeprefix("cli-seed-") not in update_platforms:
             _remove(directory)
@@ -360,6 +390,12 @@ def _assemble(options: argparse.Namespace) -> int:
     print(f"version-free copies: {', '.join(copies) or 'none'}")
     for item in missing:
         print(f"::warning::{item}", file=sys.stderr)
+    if options.incomplete_output is not None:
+        # What a switch or a missing credential left out was decided before the
+        # build; everything else in the list was planned and is not here.
+        decided = set(plan.get("omitted", []))
+        incomplete = [item for item in missing if item not in decided]
+        options.incomplete_output.write_text("".join(f"{item}\n" for item in incomplete), encoding="utf-8")
     return 0
 
 
@@ -374,6 +410,7 @@ def main() -> int:
     assemble.add_argument("--notes", type=Path, required=True)
     assemble.add_argument("--notes-output", type=Path, required=True)
     assemble.add_argument("--links-output", type=Path, required=True)
+    assemble.add_argument("--incomplete-output", type=Path)
     assemble.set_defaults(run=_assemble)
     options = parser.parse_args()
     return options.run(options)

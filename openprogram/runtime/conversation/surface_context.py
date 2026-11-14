@@ -275,7 +275,7 @@ def tool_enabled(context: dict | None) -> bool:
     ))
 
 
-def web_use_available(context: dict | None) -> bool:
+def browser_pages_available(context: dict | None) -> bool:
     """Whether this turn may use the registered OpenProgram Page inventory."""
     if context and any(
         isinstance(surface, dict)
@@ -288,9 +288,11 @@ def web_use_available(context: dict | None) -> bool:
     if os.environ.get("OPENPROGRAM_IN_AGENTIC_SUBPROCESS") == "1" and (context or {}).get("origin_window_id"):
         return True  # The window's Pages are reached through the parent's bridge.
     try:
-        from openprogram.host.resources import desktop_link
+        from openprogram.host.resources import background_browser, desktop_link
 
-        return bool(desktop_link.registered_desktop_windows())
+        # With no App window there is still somewhere to open a page: the
+        # browser the tab driver starts itself.
+        return bool(desktop_link.registered_desktop_windows()) or background_browser.available()
     except Exception:
         return False
 
@@ -307,18 +309,6 @@ def reset(token) -> None:
 
 def current() -> dict | None:
     return _current.get()
-
-
-def web_use_owner_id(context: dict | None = None) -> str:
-    """Return the exact owner released with the current dispatcher turn."""
-    from openprogram.runtime.execution.run_control import get_current_session_id
-    from openprogram.state.store import _current_turn_id
-
-    session_id = get_current_session_id() or ""
-    turn_id = _current_turn_id.get() or ""
-    if session_id and turn_id:
-        return f"turn:{session_id}:{turn_id}"
-    return "turn:" + str((context or {}).get("context_id") or "unknown")
 
 
 def resolve_binding(surface: str = "") -> str:
@@ -343,68 +333,6 @@ def resolve_page_key(surface: str = "") -> str:
         if item.get("surface_key") == key and item.get("binding_id"):
             return str(item.get("page_key") or item["binding_id"])
     raise RuntimeError(f"surface {surface!r} is not available in this turn")
-
-
-def capture_active() -> dict:
-    """Capture one active desktop Page for a direct MCP web_use call."""
-    from openprogram.host.resources import desktop_link
-
-    connections = desktop_link.connections()
-    if len(connections) != 1:
-        raise RuntimeError(
-            "no single active Page: " + ("no OpenProgram window is connected" if not connections else
-                                         f"{len(connections)} OpenProgram windows are connected")
-            + "; name the Page with observe(page=…) or a page_context_token from list_pages")
-    owner_ws = connections[0]
-    connection_revision = desktop_link.ensure_connection_revision(owner_ws)
-    result = desktop_link.request_on_ws(owner_ws, {"op": "active"})
-    window_id = _text(result.get("window_id"), 160) if isinstance(result, dict) else ""
-    tab_id = _text(result.get("tab_id"), 512) if isinstance(result, dict) else ""
-    target_id = _text(result.get("target_id"), 512) if isinstance(result, dict) else ""
-    if not result.get("ok") or not window_id or not tab_id or not target_id:
-        raise RuntimeError(
-            "no active OpenProgram Page is available — no pages are open; "
-            "use navigate to open a URL first"
-        )
-    binding_id = desktop_link.register_binding(
-        owner_ws,
-        window_id,
-        tab_id,
-        target_id,
-        geometry_revision=_revision(result.get("geometry_revision")),
-        expected_connection_revision=connection_revision,
-    )
-    revisions = desktop_link.binding_revisions(binding_id)
-    surface = {
-        "surface_key": "p1",
-        "aliases": ["focused", "web:1"],
-        "kind": "web_tab",
-        "region": "center",
-        "title": _text(result.get("title"), 240),
-        "origin": _origin(str(result.get("url") or "")),
-        "capabilities": ["observe", "interact", "navigate"],
-        "preview_status": "ready",
-        "binding_id": binding_id,
-        "page_key": desktop_link.binding_page_key(binding_id),
-        "connection_generation": _binding_generation(binding_id),
-        **revisions,
-    }
-    try:
-        _record_page_display(
-            surface["page_key"],
-            title=str(surface.get("title") or ""),
-            target=str(result.get("url") or ""),
-            connection_generation=surface["connection_generation"],
-        )
-    except Exception:
-        # Display cache only; the surface context is returned regardless.
-        _log.debug("page display not recorded for %s", surface.get("page_key"), exc_info=True)
-    return {
-        "context_id": "page_ctx_" + uuid.uuid4().hex,
-        "primary_surface_key": "p1",
-        "alias_map": {"p1": "p1", "focused": "p1", "web:1": "p1"},
-        "surfaces": [surface],
-    }
 
 
 DESKTOP_UNAVAILABLE_ERROR = (
@@ -449,7 +377,7 @@ def open_page(
 ) -> dict:
     """Open a desktop web tab and capture it as a Page context.
 
-    Success matches ``capture_active()``. Failure is a dict with
+    Success carries the opened Page as ``surfaces``. Failure is a dict with
     ``ok=False`` and ``reason_code`` (never a silent empty context).
     """
     from openprogram.host.security.url_policy import URLPolicyError, normalize_url
@@ -474,6 +402,8 @@ def open_page(
 
     session_id = get_current_session_id()
     requested_window_id = _text(window_id, 160)
+    turn = current() or {}
+    origin_window_id = _text(turn.get("origin_window_id") or turn.get("window_id"), 160)
     if (
         background and not requested_window_id
         and os.environ.get("OPENPROGRAM_IN_AGENTIC_SUBPROCESS") == "1"
@@ -481,10 +411,7 @@ def open_page(
         # The parent opens a background Page only in the run's own window. A
         # scheduled run has that window and no Page in it yet, so the window
         # is named here; unnamed, the parent refuses every such open.
-        turn = current() or {}
-        requested_window_id = _text(
-            turn.get("origin_window_id") or turn.get("window_id"), 160,
-        )
+        requested_window_id = origin_window_id
     command = {
         "op": "open",
         "url": normalized,
@@ -505,7 +432,11 @@ def open_page(
                 if entry[1] == requested_window_id
             ), None)
         else:
-            selected = registered[0] if len(registered) == 1 else None
+            # The turn's own window while it is there; with none, the only window.
+            selected = next((
+                entry for entry in registered
+                if origin_window_id and entry[1] == origin_window_id
+            ), None) or (registered[0] if len(registered) == 1 else None)
         if selected is not None:
             owner_ws, selected_window_id, connection_revision = selected
             requested_window_id = selected_window_id
@@ -1086,7 +1017,7 @@ def capture_pages(context: dict | None = None) -> dict:
 _ALL_WINDOWS = object()
 
 
-def capture_pages_for_listing(context: Any = _ALL_WINDOWS) -> dict:
+def capture_pages_for_listing(context: Any = _ALL_WINDOWS, *, wait: bool = True) -> dict:
     """Capture Pages for ``list_pages`` without depending on one window.
 
     A disconnected originating window or binding is not an inventory failure.
@@ -1096,11 +1027,13 @@ def capture_pages_for_listing(context: Any = _ALL_WINDOWS) -> dict:
     ``DesktopUnavailableError``. A workflow subprocess stays confined to its
     originating window and only waits for that window. An online window whose
     inventory fails still raises at once and never promotes another window.
+    ``wait=False`` is for a caller that knows the App is not running: there
+    is no restart to wait out.
     """
     from openprogram.runtime.conversation.run_control import check_cancelled
 
     confined = os.environ.get("OPENPROGRAM_IN_AGENTIC_SUBPROCESS") == "1"
-    deadline = time.monotonic() + max(0.0, DESKTOP_RECONNECT_WAIT_SECONDS)
+    deadline = time.monotonic() + (max(0.0, DESKTOP_RECONNECT_WAIT_SECONDS) if wait else 0.0)
     while True:
         try:
             if context is _ALL_WINDOWS:

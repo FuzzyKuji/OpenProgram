@@ -40,7 +40,9 @@
 <ul>
 <li>Sits on <code translate="no">dispatcher.process_user_turn</code>, the non-HTTP entry of the webui thread, sub-agents and the task runner, so tool gating, authority and persistence are shared.</li>
 <li>Turns carry <code translate="no">local_owner_authority()</code>: an editor on this machine is the owner speaking interactively, which makes <code translate="no">approval.request</code> available.</li>
-<li>Approvals subscribe to <code translate="no">question.asked</code> and answer with the canonical execution wait command, leaving the gate, its rules and "always allow" persistence untouched.</li>
+<li>An approval suspends the execution on a wait. The server takes it from the prompt's <code translate="no">question.asked</code> frame, from the event bus for a resumed round, and from the execution's open waits, then answers with the canonical execution wait command; the gate, its rules and "always allow" persistence are untouched.</li>
+<li><code translate="no">session/prompt</code> stays open until the execution ends, so the rounds after an answer belong to the same prompt. A wait the editor cannot answer is declined; a state the editor cannot move on ends the prompt with an error.</li>
+<li>The first prompt creates the conversation and binds the session's <code translate="no">cwd</code> as its project, the same binding <code translate="no">--print</code> uses, so tools run in the editor's folder.</li>
 </ul>
 
 <h2 id="non-goals">Not built</h2>

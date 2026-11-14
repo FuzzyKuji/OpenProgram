@@ -16,7 +16,7 @@ import {
 } from "@/components/ui/dialog";
 import { SimpleSelect } from "@/components/ui/select";
 import { useTranslation } from "@/lib/i18n";
-import { cancelRewind, confirmRewind, setRewindMode } from "@/lib/chat/rewind/rewind-actions";
+import { cancelRewind, confirmRewind, setRewindMode, stopBlockingThenRewind } from "@/lib/chat/rewind/rewind-actions";
 import {
   noCodeLine,
   promptPreview,
@@ -37,7 +37,7 @@ export function RewindDialog() {
     if (isSlow) cancelButton.current?.focus();
   }, [isSlow]);
   if (!flow || !flow.visible) return null;
-  const { preview, phase, mode, error } = flow;
+  const { preview, phase, mode, error, blocking } = flow;
   const running = phase === "running";
   const slow = phase === "slow";
   const checking = preview === "pending";
@@ -56,7 +56,7 @@ export function RewindDialog() {
       : noCode
         ? noCodeLine(preview.reason, text)
         : "";
-  const skipped = !checking && preview.kind === "files" ? skippedLine(preview.skipped, text) : "";
+  const skipped = !checking && preview.kind === "files" ? skippedLine(preview.skipped, text) : noCode ? skippedLine(flow.plan?.skipped ?? [], text) : "";
   // The block keeps its height when hidden, so changing the option does not
   // resize the dialog under the pointer.
   const statsHidden = mode === "conversation" && !noCode;
@@ -79,8 +79,8 @@ export function RewindDialog() {
           <DialogTitle>{text("Rewind to this message?", "回退到这条消息？")}</DialogTitle>
           <DialogDescription className="sr-only">
             {text(
-              "This message and everything after it leave the conversation. They stay as an earlier version.",
-              "这条消息及之后的内容会离开对话，并保留为早先的版本。",
+              "This message and everything after it are withdrawn from the current branch. No new branch is created. Undo brings the messages back without changing files.",
+              "撤回当前分支中这条消息及之后的内容，不会新建分支。撤销回退可找回消息，但不会改变文件。",
             )}
           </DialogDescription>
         </DialogHeader>
@@ -127,9 +127,15 @@ export function RewindDialog() {
           <Button ref={cancelButton} variant="ghost" disabled={running} onClick={() => cancelRewind()}>
             {slow ? text("Close", "关闭") : text("Cancel", "取消")}
           </Button>
-          <Button disabled={checking || running || slow} onClick={() => void confirmRewind()}>
-            {running ? text("Rewinding…", "正在回退…") : text("Rewind", "回退")}
-          </Button>
+          {blocking ? (
+            <Button disabled={running || slow} onClick={() => void stopBlockingThenRewind()}>
+              {text("Stop it, then rewind", "停止它再回退")}
+            </Button>
+          ) : (
+            <Button disabled={checking || running || slow} onClick={() => void confirmRewind()}>
+              {running ? text("Rewinding…", "正在回退…") : text("Rewind", "回退")}
+            </Button>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>

@@ -10,15 +10,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import json
+import logging
 import os
 from pathlib import Path
-import shutil
 import subprocess
 import time
 
 from . import pointer as pointers
 from . import store
 from .layout import Layout, valid_id
+from .removal import remove_tree
+
+_log = logging.getLogger(__name__)
 
 KEEP_COMMITTED = 5
 FAILED_CANDIDATE_SECONDS = 7 * 86400
@@ -34,6 +37,8 @@ class Plan:
     bases: list[str] = field(default_factory=list)
     frontends: list[str] = field(default_factory=list)
     work: list[str] = field(default_factory=list)
+    # What was decided and is still on disk after the pass, as paths under ``<root>``.
+    remaining: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -168,18 +173,39 @@ def plan(layout: Layout, state_dir: Path, *, now: float | None = None) -> Plan:
     return result
 
 
-def _discard(layout: Layout, path: Path) -> None:
-    """Rename into ``trash`` first, so a half-deleted tree is never read as a version."""
+def _discard(layout: Layout, path: Path) -> bool:
+    """Rename into ``trash``, so a half-deleted tree is never read as a version; the sweep deletes it."""
     layout.trash.mkdir(parents=True, exist_ok=True)
     target = layout.trash / f"{path.name}.{os.getpid()}.{time.time_ns()}"
     try:
         os.replace(path, target)
+    except FileNotFoundError:
+        return True
     except OSError:
-        return  # On Windows a running process blocks this; the next pass retries.
-    shutil.rmtree(target, ignore_errors=True)
+        return False  # On Windows a running process blocks this; the next pass retries.
+    return True
 
 
-def _remove_work(layout: Layout, path: Path) -> None:
+def _sweep_trash(layout: Layout) -> list[str]:
+    """Delete what is in ``trash``, this pass's and any earlier one's; return what would not go."""
+    left: list[str] = []
+    if layout.trash.is_dir():
+        for entry in sorted(layout.trash.iterdir()):
+            left += remove_tree(entry)
+    return left
+
+
+def _under_root(layout: Layout, paths: list[str]) -> list[str]:
+    named = []
+    for path in paths:
+        try:
+            named.append(Path(path).relative_to(layout.root).as_posix())
+        except ValueError:
+            named.append(Path(path).as_posix())
+    return named
+
+
+def _remove_work(layout: Layout, path: Path) -> bool:
     try:
         result = subprocess.run(
             ["git", "-C", str(layout.repo), "worktree", "remove", "--force", str(path)],
@@ -189,26 +215,40 @@ def _remove_work(layout: Layout, path: Path) -> None:
     except (OSError, subprocess.SubprocessError):
         removed = False
     if not removed:
-        _discard(layout, path)
+        removed = _discard(layout, path)
         subprocess.run(["git", "-C", str(layout.repo), "worktree", "prune"], capture_output=True, timeout=60)
+    return removed
 
 
 def run(layout: Layout, state_dir: Path, *, now: float | None = None) -> Plan:
-    """Remove what :func:`plan` decides, and finish any interrupted deletion."""
+    """Remove what :func:`plan` decides, and finish any interrupted deletion.
+
+    ``remaining`` on the result names what is still on disk: a tree a running
+    process holds, or a file that stayed read-only or locked. The next pass
+    tries those again.
+    """
     decided = plan(layout, state_dir, now=now)
     if decided.held:
         return decided
+    blocked: list[str] = []
     for name in decided.versions:
-        _discard(layout, layout.version(name))
+        if not _discard(layout, layout.version(name)):
+            blocked.append(str(layout.version(name)))
     for name in decided.bases:
-        _discard(layout, layout.base(name))
+        if not _discard(layout, layout.base(name)):
+            blocked.append(str(layout.base(name)))
     for name in decided.frontends:
-        (layout.frontends / name).unlink(missing_ok=True)
+        try:
+            (layout.frontends / name).unlink(missing_ok=True)
+        except OSError:
+            blocked.append(str(layout.frontends / name))
     for name in decided.work:
-        _remove_work(layout, layout.work / name)
-    if layout.trash.is_dir():
-        for entry in layout.trash.iterdir():
-            shutil.rmtree(entry, ignore_errors=True)
+        if not _remove_work(layout, layout.work / name):
+            blocked.append(str(layout.work / name))
+    decided.remaining = _under_root(layout, [*blocked, *_sweep_trash(layout)])
+    if decided.remaining:
+        _log.warning("retention left %d entries for the next pass: %s", len(decided.remaining),
+                     ", ".join(decided.remaining[:5]))
     from ..trial.instance import prune_trials
 
     prune_trials(layout, now=now)

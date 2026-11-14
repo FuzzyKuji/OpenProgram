@@ -30,7 +30,13 @@ def probe_guides():
 
 
 def _text(result) -> str:
-    return "".join(part.text for part in result.content if hasattr(part, "text"))
+    """What the model reads for this call: the guides recorded beside the
+    result (sent after the group of results), then the tool's own text."""
+    from openprogram.models.providers.shared.tool_attachments import record
+
+    entry = record(getattr(result, "details", None))
+    own = "".join(part.text for part in result.content if hasattr(part, "text"))
+    return (entry["text"] if entry else "") + own
 
 
 def _result(text="ok", error=False) -> AgentToolResult:
@@ -125,16 +131,49 @@ def test_help_reads_a_guide_by_name_or_tool():
         guides.end_loop(token)
 
 
-def test_a_delivered_guide_loads_the_tools_it_teaches(monkeypatch):
-    loaded = []
-    monkeypatch.setattr("openprogram.programs._host.runtime.mark_deferred_loaded", loaded.extend)
-    guides.register(TOOL, [guides.Guide(TOOL, "Uses worktree_create.", mode="open", activates=("worktree_create",))])
+def _activated_tool(name: str):
+    from openprogram.programs._host.runtime import function
+
+    @function(name=name, description="Made by the guide.", defer=True)
+    def activated() -> str:
+        return "ok"
+    return activated
+
+
+def test_a_delivered_guide_names_its_tools_and_loads_nothing():
+    """Deferred-tools A4: the guide ends with the line that names its tools
+    and the select call that loads them; the result carries no load record,
+    so the tools array changes only after the model's own search."""
+    from openprogram.programs import loaded_tools
+    from openprogram.models.providers.shared.tool_attachments import record
+    from openprogram.models.providers.types import ToolResultMessage
+
+    _activated_tool("guide_activated_probe")
+    guides.register(TOOL, [guides.Guide(TOOL, "Uses it.", mode="open", activates=("guide_activated_probe",))])
     token = guides.begin_loop()
     try:
-        guides.attach(TOOL, {}, _result())
+        first = guides.attach(TOOL, {}, _result())
     finally:
         guides.end_loop(token)
-    assert loaded == ["worktree_create"]
+    message = ToolResultMessage(tool_call_id="c1", tool_name=TOOL, content=first.content,
+                                details=first.details, timestamp=0)
+    assert loaded_tools([message]) == []
+    assert not (first.details or {}).get("loads")
+    assert ("Tools for this: `guide_activated_probe`. Load them with "
+            "`tool_search select:guide_activated_probe`.") in record(first.details)["text"]
+
+
+def test_help_names_the_tools_its_guide_teaches():
+    _activated_tool("help_activated_probe")
+    guides.register(TOOL, [guides.Guide(TOOL, "Uses it.", mode="open", activates=("help_activated_probe",))])
+    token = guides.begin_loop()
+    try:
+        text = guides.help_text(TOOL)
+        result = guides.attach("help", {"name": TOOL}, _result())
+    finally:
+        guides.end_loop(token)
+    assert "`tool_search select:help_activated_probe`" in text
+    assert not (result.details or {}).get("loads")
 
 
 def test_outside_an_agent_loop_guides_stay_out_of_the_way():

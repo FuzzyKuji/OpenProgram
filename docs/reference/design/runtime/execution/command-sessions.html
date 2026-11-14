@@ -94,7 +94,7 @@
 <thead class="sr"><tr><th scope="col">Part</th><th scope="col">Behaviour</th></tr></thead>
 <tbody>
 <tr><th scope="row"><code translate="no">group_guard</code>, pipe</th><td>Runs the command with stdin <code translate="no">/dev/null</code></td></tr>
-<tr><th scope="row"><code translate="no">group_guard</code>, tty</th><td>Opens a pty as the controlling terminal of its own session, foregrounds its group, sets 30×120 and pumps master and supervisor pipes</td></tr>
+<tr><th scope="row"><code translate="no">group_guard</code>, tty</th><td>Opens a pty as the controlling terminal of its own session, foregrounds its group, sets 30×120 and pumps master and supervisor pipes. Stops reading once its group and every other group of its session (a <code translate="no">set -m</code> job, a setpgid child) are empty, at most two seconds after the group: on macOS no end of output arrives while it holds the terminal, and a fully closed pty drops unread output</td></tr>
 <tr><th scope="row"><code translate="no">group_guard</code>, signals</th><td>Ignores SIGINT and SIGTERM, so an interrupt reaches the command</td></tr>
 <tr><th scope="row">Supervisor</th><td><code translate="no">write</code> adds no newline; <code translate="no">interrupt</code> sends SIGINT to the group (Windows: terminates the tree)</td></tr>
 <tr><th scope="row"><code translate="no">ProcessStore</code></th><td>Records <code translate="no">tty</code>, <code translate="no">sandboxed</code>, <code translate="no">background</code>, <code translate="no">reported</code>, <code translate="no">last_used</code>. <code translate="no">take()</code> returns unread output and bytes dropped before reading.</td></tr>

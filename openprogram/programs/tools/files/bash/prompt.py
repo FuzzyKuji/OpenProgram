@@ -12,8 +12,10 @@ DEFAULT_MAX_TIMEOUT_MS = 10 * 60 * 1000   # 10 min
 
 DESCRIPTION = (
     "Execute a host shell command and return its starting directory, output "
-    "(stdout and stderr together) and exit code. macOS/Linux use their shell; "
-    "Windows uses Git Bash when available and otherwise Windows PowerShell.\n"
+    "(stdout and stderr together) and exit code. macOS/Linux use bash (sh on a "
+    "host without it); Windows uses Git Bash when available and otherwise "
+    "PowerShell. The environment section names the one in use. In bash, echo "
+    "prints backslash escapes such as \\n as written; use printf for them.\n"
     "\n"
     "The call waits up to yield_time_ms (default 30000, at most 30000). A "
     "command that is still running then keeps running in the background and "
@@ -22,7 +24,8 @@ DESCRIPTION = (
     "code, or with \"\\u0003\" to interrupt it. Use this for servers, watchers "
     "and long builds. When a background command ends and you have not seen "
     "its exit, you are told in a later message. Set tty=true for programs "
-    "you will type into (REPLs, prompts); without it stdin is closed. At most "
+    "you will type into (REPLs, prompts; macOS and Linux only); without it "
+    "stdin is closed. At most "
     "64 commands run at once per conversation; starting another stops the "
     "least recently used one.\n"
     "\n"

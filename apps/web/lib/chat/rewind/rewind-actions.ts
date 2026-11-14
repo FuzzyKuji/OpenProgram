@@ -1,14 +1,15 @@
 /**
  * What the rewind controls do: the dry run and its 400 ms rule, applying the
  * confirmed plan, refilling the composer, the picker, Undo and Redo, Fork,
- * and Rewind and retry. The server plans, applies and keeps later messages
- * as a branch; a rewind is never partly applied.
+ * and Rewind and retry. The server plans, applies and withdraws later messages
+ * on the current branch; a rewind is never partly applied.
  */
 import { useSessionStore } from "@/lib/session-store";
 import { translateText } from "@/lib/i18n";
 import { dismissToast, showToast } from "@/lib/format-utils/toast";
 import { absRawFileUrl } from "@/lib/files/files-shared";
 import { sendRuntimeCommand } from "@/lib/runtime-bridge/session/session-load";
+import { sendExecutionCancel } from "@/lib/execution/cancel-execution";
 import { copyConversation } from "@/lib/chat/copy-conversation";
 import { parseAttachments } from "@/components/chat/messages/attachments/user-attachments";
 
@@ -17,6 +18,7 @@ import {
   SLOW_RESTORE_MS,
   applyErrorText,
   applyOutcomeUnknown,
+  blockingText,
   disabledCause,
   disabledReason,
   forkTipId,
@@ -171,7 +173,7 @@ function applyPlan(sessionId: string, msgId: string, mode: RewindMode, plan: Rew
 }
 
 export function setRewindMode(mode: RewindMode): void {
-  patchFlow({ mode, error: null });
+  patchFlow({ mode, error: null, blocking: null });
 }
 
 export function cancelRewind(): void {
@@ -214,7 +216,14 @@ export async function confirmRewind(): Promise<void> {
     return;
   }
   const status = reply?.status ?? 0;
-  patchFlow({ phase: "ready", error: applyErrorText(status, reply?.data.error, translateText, reply?.data.status) });
+  const blocking = reply?.data.code === "branch_running" ? reply.data.blocking ?? null : null;
+  patchFlow({
+    phase: "ready",
+    error: blocking
+      ? blockingText(blocking, translateText)
+      : applyErrorText(status, reply?.data.error, translateText, reply?.data.status),
+    blocking,
+  });
   if (applyOutcomeUnknown(status, reply?.data.status)) {
     reloadConversation(sessionId);
     void refreshRewindMarks(sessionId);
@@ -236,6 +245,46 @@ export async function confirmRewind(): Promise<void> {
       mode: outcome.preview.kind === "files" ? chosen ?? "code_and_conversation" : "conversation",
     });
   }
+}
+
+/** How long "Stop it, then rewind" waits between tries for the stopped
+ *  branch to let go of the conversation's files. */
+const STOP_THEN_REWIND_WAITS_MS = [400, 800, 1500, 3000, 5000];
+
+/** The refusal's "Stop it, then rewind": stop the branch in the way, then
+ *  apply the same rewind once that branch has ended. */
+export async function stopBlockingThenRewind(): Promise<void> {
+  const flow = useRewindStore.getState().flow;
+  const blocking = flow?.blocking;
+  if (!flow || !blocking || flow.phase !== "ready") return;
+  const sent = blocking.execution_id
+    ? sendExecutionCancel(sendRuntimeCommand, blocking.execution_id, blocking.status_version ?? 0)
+    : blocking.op_id
+      ? sendRuntimeCommand({ action: "operation.cancel", session_id: flow.sessionId, op_id: blocking.op_id })
+      : false;
+  if (!sent) {
+    patchFlow({ error: translateText("Could not send the stop request. Reconnect and try again.", "停止请求没有发出，请重新连接后再试。") });
+    return;
+  }
+  const same = (other?: { execution_id?: string; op_id?: string } | null) =>
+    Boolean(other) && other?.execution_id === blocking.execution_id && other?.op_id === blocking.op_id;
+  patchFlow({ phase: "running", error: null, blocking: null });
+  for (const wait of STOP_THEN_REWIND_WAITS_MS) {
+    await new Promise((resolve) => setTimeout(resolve, wait));
+    const current = useRewindStore.getState().flow;
+    if (!current || current.sessionId !== flow.sessionId) return;
+    patchFlow({ phase: "ready" });
+    await confirmRewind();
+    const after = useRewindStore.getState().flow;
+    // Done, or refused for another reason the dialog now shows.
+    if (!after || !same(after.blocking)) return;
+    patchFlow({ phase: "running", error: null, blocking: null });
+  }
+  patchFlow({
+    phase: "ready",
+    blocking,
+    error: translateText("That branch is still stopping. Try again in a moment.", "那个分支还在停止中，请稍后再试。"),
+  });
 }
 
 function finishRewind(sessionId: string, mode: RewindMode, result: RewindResult, localText: string): void {
@@ -416,7 +465,7 @@ export async function rewindAndRetry(sessionId: string, msgId: string, text: str
   }
   try {
     const plan = await fetchPlan(sessionId, msgId);
-    if (!plan.plan_hashes?.conversation || plan.status === "error" || plan.status === "blocked") {
+    if (!plan.plan_hashes?.conversation || plan.status === "error" || (plan.status === "blocked" && plan.error_code !== "file_conflict")) {
       throw new Error(plan.error || "no plan");
     }
     const reply = await applyPlan(sessionId, msgId, "conversation", plan);

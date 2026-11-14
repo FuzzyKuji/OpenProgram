@@ -25,6 +25,10 @@ MAX_TIMEOUT = 120
 class GuiRunnerError(RuntimeError):
     """The runner cannot safely continue; no implicit restart or replay."""
 
+    def __init__(self, message: str, *, stdout: str = ""):
+        super().__init__(message)
+        self.stdout = stdout
+
 
 @dataclass(frozen=True)
 class GuiPythonResult:
@@ -153,7 +157,7 @@ class GuiPythonRunner:
                     raise GuiRunnerError("execution cancelled")
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    raise GuiRunnerError("execution deadline exceeded")
+                    raise GuiRunnerError("execution deadline exceeded", stdout="".join(output["stdout"]))
                 if rpc is not None and rpc.done():
                     try:
                         reply = dict(rpc.result())

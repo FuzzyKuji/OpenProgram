@@ -44,9 +44,10 @@ def recovery_state(store, execution, *, allow_cancel: bool = False) -> dict:
         restricted = bool(EffectStore(store).list_unresolved(execution.execution_id))
         return dict(state, can_start_new_turn=True,
                     recovery_mode="restricted_new_turn" if restricted else "new_turn")
+    from openprogram.runtime.execution.slash_actions import slash_action_of
     payload = store.get_agent_turn_input(execution.execution_id)
     if (not payload or payload.get("kind") != "chat"
-            or payload.get("request", {}).get("interaction") in {"spawn", "merge"}):
+            or slash_action_of(payload.get("request", {})) is not None):
         return dict(state, recovery_reason="not_ordinary_chat")
     if (execution.status is ExecutionStatus.RECONCILIATION_REQUIRED
             and execution.reason_code == "effect_reconciliation"):

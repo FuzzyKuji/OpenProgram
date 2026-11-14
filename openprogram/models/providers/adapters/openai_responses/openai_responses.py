@@ -74,10 +74,19 @@ def stream_openai_responses(
 
             if opts.get("on_payload"):
                 opts["on_payload"](params)
+            from ...recording.capture import RESPONSES, capture_request
+            capture_request(model, params, wire=RESPONSES)
 
             ev_stream.push({"type": "start", "partial": output})
 
             openai_stream = await client.responses.create(**params)
+            # Per-minute headroom (``x-ratelimit-*``) the reply carries.
+            from openprogram.models.usage.quota import observe_headers
+            observe_headers(
+                model.provider, api_key,
+                getattr(getattr(openai_stream, "response", None), "headers", None),
+                account=_pooled[2] if _pooled else None,
+            )
 
             await process_responses_stream(
                 openai_stream,
@@ -118,7 +127,9 @@ def stream_openai_responses(
             # bug openai-codex had — see its provider for context).
             ev_stream.fail(exc)
 
-    asyncio.ensure_future(_run())
+    # Owned by the stream: closing it (a steer, a stop, the idle bound)
+    # cancels the request instead of leaving it to wait on the socket.
+    ev_stream.attach_producer(asyncio.ensure_future(_run()))
     return ev_stream
 
 
@@ -145,7 +156,13 @@ def stream_simple_openai_responses(
         base_dict["response_format"] = base.response_format
 
     reasoning = getattr(options, "reasoning", None) if options else None
-    if reasoning:
+    if reasoning in ("off", "none"):
+        # Thinking off is sent as the provider's own "off" value
+        # (``effort: "none"``); a model that rejects it sends nothing.
+        from openprogram.models.providers.settings.thinking_spec import off_wire_value
+        reasoning_effort = off_wire_value(
+            model.provider or "openai", model.id, getattr(model, "api", None))
+    elif reasoning:
         from openprogram.models.providers.settings.thinking_spec import translate_reasoning
         reasoning_effort = translate_reasoning(model.provider or "openai", model.id, reasoning)
     else:
@@ -305,13 +322,20 @@ def _build_params(
     reasoning_effort = opts.get("reasoning_effort")
     reasoning_summary = opts.get("reasoning_summary")
     if getattr(model, "reasoning", False):
-        if reasoning_effort or reasoning_summary:
+        if reasoning_effort == "none":
+            # Thinking off: only the effort, a summary of nothing is noise.
+            params["reasoning"] = {"effort": "none"}
+        elif reasoning_effort or reasoning_summary:
             params["reasoning"] = {
                 "effort": reasoning_effort or "medium",
                 "summary": reasoning_summary or "auto",
             }
-            if getattr(model, "provider", None) != "xai-subscription":
-                params["include"] = ["reasoning.encrypted_content"]
+        # With ``store: false`` the server keeps no reasoning, so a reasoning
+        # model always asks for it back encrypted, whatever the effort (as
+        # Codex does); otherwise the next tool round loses it. ``include``
+        # is a top-level field and never enters the input prefix.
+        if getattr(model, "provider", None) != "xai-subscription":
+            params["include"] = ["reasoning.encrypted_content"]
 
     return params
 

@@ -7,6 +7,7 @@ from openprogram.runtime.conversation.production_driver.shared import (
     CanonicalAgentAdapter,
     CanonicalAgentAdmission,
     CanonicalAgentEntry,
+    STOPPED_BEFORE_START,
     _ThreadResultFuture,
     normalize_agent_turn_payload,
 )
@@ -19,6 +20,7 @@ __all__ = [
     "CanonicalAgentAdapter",
     "CanonicalAgentAdmission",
     "CanonicalAgentEntry",
+    "STOPPED_BEFORE_START",
     "_ThreadResultFuture",
     "normalize_agent_turn_payload",
 ]

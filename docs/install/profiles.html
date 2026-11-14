@@ -12,7 +12,7 @@
 <tr><th scope="row">Login service</th><td><code translate="no">openprogram worker install</code></td><td><code translate="no">openprogram --profile dev worker install</code></td></tr>
 </tbody>
 </table>
-<p class="note">Instances share no data. On macOS and Linux each profile gets its own login service, so <code translate="no">worker start</code>, <code translate="no">stop</code>, <code translate="no">restart</code>, <code translate="no">status</code> and <code translate="no">uninstall</code> act only on the active profile, and stopping or upgrading <code translate="no">dev</code> leaves the default worker alone. Windows has one scheduled task, <code translate="no">OpenProgram Worker</code>, for all profiles.</p>
+<p class="note">Instances share no data. Each profile gets its own login service, so <code translate="no">worker start</code>, <code translate="no">stop</code>, <code translate="no">restart</code>, <code translate="no">status</code> and <code translate="no">uninstall</code> act only on the active profile, and stopping or upgrading <code translate="no">dev</code> leaves the default worker alone.</p>
 
 <details>
 <summary>Other ways to choose a profile or port</summary>

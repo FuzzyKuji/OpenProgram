@@ -110,7 +110,7 @@ def test_background_agent_reports_back_once_with_only_its_report(store, monkeypa
     assert req.session_id == "p1" and req.source == "job_followup"
     assert "automated notice, not a message from the user" in req.user_text
     assert f"Agent \"scout\" finished (job {job_id})." in req.user_text
-    assert "Its report is attached above." in req.user_text
+    assert "(its report is attached above)" in req.user_text
     assert seen["on_event"] is not None, "the notice turn must stream to the chat"
     assert [i["kind"] for i in req.notice] == ["report"]
 

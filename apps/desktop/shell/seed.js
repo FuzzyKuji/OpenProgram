@@ -11,6 +11,9 @@ const store = require("./store");
 
 const BLOCK = 512;
 const WORK = ".seed-work";
+// The links still to make, kept on disk so a run interrupted after the move
+// into place makes them the next time.
+const LINKS = ".seed-links";
 const EXTRACTION_SHARE = 92;
 // Antivirus scanners and backup tools hold new files briefly on Windows.
 const LOCKED_FILE_CODES = new Set(["EPERM", "EBUSY", "EACCES"]);
@@ -71,17 +74,41 @@ function memberPath(destination, name) {
   return path.join(destination, ...cleaned.split("/"));
 }
 
-function linkAllowed(destination, member, target, builtRoot) {
-  if (path.isAbsolute(target)) return Boolean(builtRoot) && target.startsWith(`${builtRoot}/`);
-  const resolved = path.resolve(path.dirname(member), target);
-  return resolved === destination || resolved.startsWith(destination + path.sep);
+function slashed(text) {
+  return text.replace(/\\/g, "/").replace(/\/+$/, "");
+}
+
+/**
+ * Where a link in the archive points once it is under `root`, or null when it
+ * leaves. An absolute target has to sit under the root the seed was built in
+ * and is moved to this one. The two are compared with one kind of slash,
+ * because Windows' tar writes `C:/…` for a root recorded as `C:\…`.
+ */
+function resolveLink({ root, member, target, builtRoot, paths = path }) {
+  if (path.posix.isAbsolute(target) || path.win32.isAbsolute(target)) {
+    if (!builtRoot) return null;
+    const [link, built] = [slashed(target), slashed(builtRoot)];
+    const drive = /^[A-Za-z]:/.test(built);
+    const inside = drive
+      ? link.toLowerCase().startsWith(`${built.toLowerCase()}/`)
+      : link.startsWith(`${built}/`);
+    if (!inside) return null;
+    const parts = link.slice(built.length + 1).split("/");
+    if (parts.some((part) => part === ".." || part === "")) return null;
+    return paths.join(root, ...parts);
+  }
+  const resolved = paths.resolve(paths.dirname(member), ...target.split(/[\\/]/));
+  return resolved === root || resolved.startsWith(root + paths.sep) ? resolved : null;
 }
 
 /** One tar member at a time from a stream of decompressed chunks. */
 class TarWriter {
-  constructor(destination, builtRoot) {
+  constructor(destination, builtRoot, platform = process.platform) {
     this.destination = destination;
     this.builtRoot = builtRoot;
+    this.platform = platform;
+    // Windows makes its links after the move into place: see placeLinks.
+    this.links = [];
     this.pending = [];
     this.pendingBytes = 0;
     this.descriptor = null;
@@ -183,8 +210,12 @@ class TarWriter {
     }
     fs.mkdirSync(path.dirname(target), { recursive: true });
     if (type === "2") {
-      if (!linkAllowed(this.destination, target, linkName, this.builtRoot)) {
+      if (!resolveLink({ root: this.destination, member: target, target: linkName, builtRoot: this.builtRoot })) {
         throw new SeedError(`a link in the built-in copy leaves it: ${name}`);
+      }
+      if (this.platform === "win32") {
+        this.links.push({ name, target: linkName });
+        return;
       }
       fs.rmSync(target, { force: true });
       fs.symlinkSync(linkName, target);
@@ -192,7 +223,7 @@ class TarWriter {
     }
     if (type === "1") {
       fs.rmSync(target, { force: true });
-      fs.linkSync(memberPath(this.destination, linkName), target);
+      linkOrCopy(memberPath(this.destination, linkName), target);
       return;
     }
     if (type !== "0" && type !== "7") throw new SeedError(`unsupported entry in the built-in copy: ${name}`);
@@ -211,8 +242,48 @@ class TarWriter {
   }
 }
 
-/** Unpack one `.tar.zst`, reporting compressed bytes as they are read. */
-async function extractArchive(archive, destination, { builtRoot, onBytes = () => {} } = {}) {
+/** A second name for a file; a copy where the disk has no hard links. */
+function linkOrCopy(existing, target) {
+  try {
+    fs.linkSync(existing, target);
+  } catch (error) {
+    if (error.code === "ENOENT") throw error;
+    fs.copyFileSync(existing, target);
+  }
+}
+
+/**
+ * Make the links an archive held, on Windows, where a symbolic link needs a
+ * privilege most accounts lack. A directory gets a junction and a file a
+ * second name, both of which any account may create. They hold absolute
+ * paths, so this runs once everything is in its final place under `root`.
+ */
+function placeLinks(root, links, builtRoot) {
+  const missing = (name) => !fs.lstatSync(memberPath(root, name), { throwIfNoEntry: false });
+  let waiting = links.filter(({ name }) => missing(name));
+  while (waiting.length) {
+    const later = [];
+    for (const link of waiting) {
+      const member = memberPath(root, link.name);
+      if (!missing(link.name)) continue;  // Named twice: a run that was interrupted listed it too.
+      const target = resolveLink({ root, member, target: link.target, builtRoot });
+      const found = target && fs.statSync(target, { throwIfNoEntry: false });
+      if (!found) later.push(link);  // It may point at a link made later in this pass.
+      else if (found.isDirectory()) fs.symlinkSync(target, member, "junction");
+      else linkOrCopy(target, member);
+    }
+    if (later.length === waiting.length) {
+      throw new SeedError(`a link in the built-in copy points at nothing: ${later[0].name}`);
+    }
+    waiting = later;
+  }
+}
+
+/**
+ * Unpack one `.tar.zst`, reporting compressed bytes as they are read. Returns
+ * the links left for placeLinks, which is none except on Windows.
+ */
+async function extractArchive(archive, destination, { builtRoot, onBytes = () => {}, platform } = {}) {
   if (typeof zlib.createZstdDecompress !== "function") {
     throw new SeedError("this build of the App cannot read its built-in copy");
   }
@@ -221,12 +292,13 @@ async function extractArchive(archive, destination, { builtRoot, onBytes = () =>
   source.on("data", (chunk) => onBytes(chunk.length));
   const decompressed = source.pipe(zlib.createZstdDecompress());
   source.on("error", (error) => decompressed.destroy(error));
-  const writer = new TarWriter(destination, builtRoot);
+  const writer = new TarWriter(destination, builtRoot, platform);
   try {
     for await (const chunk of decompressed) writer.write(chunk);
   } finally {
     writer.close();
   }
+  return writer.links;
 }
 
 /** Run a file operation, waiting out another program that holds the file. */
@@ -296,18 +368,20 @@ function assertSeedable(root) {
     if (error.code === "ENOENT") return;
     throw error;
   }
-  const unrelated = entries.filter((name) => name !== "cli" && name !== WORK);
+  const unrelated = entries.filter((name) => name !== "cli" && name !== WORK && name !== LINKS);
   if (unrelated.length) {
     throw new SeedError(`${root} already holds files that are not a version store`);
   }
 }
 
-function runInstaller({ python, seedDirectory, root, restoring, spawnProcess = spawn }) {
+function runInstaller({ python, seedDirectory, root, restoring, platform = process.platform, spawnProcess = spawn }) {
   const script = path.join(seedDirectory, "bootstrap", "install_seed.py");
   const options = restoring ? ["--point-at-seed"] : [];
+  // Windows starts every Python in UTF-8 mode, as the launcher does; -I drops PYTHONUTF8.
+  const mode = platform === "win32" ? ["-X", "utf8"] : [];
   return new Promise((resolve, reject) => {
     let output = "";
-    const child = spawnProcess(python, ["-I", "-B", script, "--seed", seedDirectory, "--root", root, ...options], {
+    const child = spawnProcess(python, ["-I", "-B", ...mode, script, "--seed", seedDirectory, "--root", root, ...options], {
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
     });
@@ -351,6 +425,14 @@ async function seed({
   const total = archives.reduce((sum, archive) => sum + fs.statSync(archive).size, 0) || 1;
   let done = 0;
   let reported = -1;
+  const linksFile = path.join(root, LINKS);
+  const links = [];
+  try {
+    const left = JSON.parse(fs.readFileSync(linksFile, "utf8"));
+    if (left.base === manifest.base && left.version === manifest.version) links.push(...left.links);
+  } catch {
+    // None left from an earlier run.
+  }
   const report = () => {
     const percent = Math.min(EXTRACTION_SHARE, Math.floor((done / total) * EXTRACTION_SHARE));
     if (percent !== reported) onProgress((reported = percent));
@@ -363,21 +445,27 @@ async function seed({
       report();
       continue;
     }
-    await extractArchive(archive, work, {
+    links.push(...await extractArchive(archive, work, {
       builtRoot: manifest.built_root,
+      platform,
       onBytes(bytes) {
         done += bytes;
         report();
       },
-    });
+    }));
+  }
+  if (links.length) {
+    fs.writeFileSync(linksFile, JSON.stringify({ base: manifest.base, version: manifest.version, links }));
   }
   await moveEach(path.join(work, "bases"), path.join(root, "bases"), retry);
   await moveEach(path.join(work, "pristine-frontend"), path.join(root, "pristine-frontend"), retry);
   await moveEach(path.join(work, "versions"), path.join(root, "versions"), retry);
   await whenUnlocked(() => fs.rmSync(work, { recursive: true, force: true }), retry);
+  placeLinks(root, links, manifest.built_root);
+  fs.rmSync(linksFile, { force: true });
 
   await runInstaller({
-    python: basePython(root, manifest.base, platform), seedDirectory, root, restoring, spawnProcess,
+    python: basePython(root, manifest.base, platform), seedDirectory, root, restoring, platform, spawnProcess,
   });
   onProgress(100);
   return manifest;
@@ -400,5 +488,6 @@ async function restoreBuiltIn({ root, seedDirectory, onProgress, platform, spawn
 }
 
 module.exports = {
-  SeedError, assertDiskSpace, basePython, extractArchive, freeBytes, readSeedManifest, restoreBuiltIn, seed, whenUnlocked,
+  SeedError, assertDiskSpace, basePython, extractArchive, freeBytes, placeLinks, readSeedManifest, resolveLink,
+  restoreBuiltIn, seed, whenUnlocked,
 };

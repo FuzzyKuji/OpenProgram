@@ -8,9 +8,19 @@
 <thead class="sr"><tr><th scope="col">命令</th><th scope="col">作用</th></tr></thead>
 <tbody>
 <tr><th scope="row"><code translate="no">openprogram</code></th><td>打开对话。直接运行时先询问终端界面或网页界面，没有 worker 时自动启动。</td></tr>
-<tr><th scope="row"><code translate="no">--print PROMPT</code></th><td>一次性提示：打印回复后退出</td></tr>
+<tr><th scope="row"><code translate="no">--print PROMPT</code></th><td>一次性提示：打印回复后退出。在当前目录工作，一直运行到模型给出回答；失败时错误写到 stderr，以非零码退出。在自己的进程里运行时，除这一轮外不发任何模型请求，记忆留给下一个 worker：会话标题就用从提示截出的那一个</td></tr>
+<tr><th scope="row"><code translate="no">--print</code>，被停止</th><td>Ctrl-C 或 SIGTERM 会停止本次运行，最多等 30 秒让它停下（再来一次信号就只等 2 秒），写好用量和记录文件后以 128 加第一个信号的编号退出（Ctrl-C 为 130，SIGTERM 为 143，SIGHUP 为 129），之后再来信号也不变；到时仍未停下的回合，它的命令会被停掉</td></tr>
+<tr><th scope="row"><code translate="no">-p</code>、<code translate="no">--print -</code></th><td><code translate="no">-p</code> 即 <code translate="no">--print</code>。不给提示或给 <code translate="no">-</code> 时从 stdin 读提示；给了提示又有管道输入时，输入作为 <code translate="no">&lt;stdin&gt;</code> 块附上。提示为空时以 2 退出</td></tr>
+<tr><th scope="row"><code translate="no">--output-format FORMAT</code></th><td><code translate="no">--print</code> 写到 stdout 的内容：<code translate="no">text</code>（回复）、<code translate="no">json</code>（一条运行结束记录）或 <code translate="no">stream-json</code>（每行一个事件，init 在前、result 在后）；<code translate="no">--include-partial-messages</code> 在流里加上文字和推理的增量</td></tr>
+<tr><th scope="row"><code translate="no">--permission-mode MODE</code></th><td>只用于这一次 <code translate="no">--print</code> 的权限模式：<code translate="no">ask</code>、<code translate="no">acceptEdits</code>、<code translate="no">plan</code>、<code translate="no">auto</code>、<code translate="no">bypass</code>。需要询问的调用直接被拒绝，因为没人能回答；拒绝写到 stderr，运行仍以 0 退出</td></tr>
+<tr><th scope="row"><code translate="no">--continue</code>、<code translate="no">--session-id ID</code>、<code translate="no">--at REF</code></th><td><code translate="no">--continue</code>（<code translate="no">-c</code>）在这个文件夹最近的会话上运行；<code translate="no">--session-id</code> 用这个 id 开新会话，已存在则失败；<code translate="no">--at</code> 配合 <code translate="no">--resume</code> 或 <code translate="no">--continue</code>，选定分支或在某条消息之后运行</td></tr>
+<tr><th scope="row"><code translate="no">--standalone</code>、<code translate="no">--no-project-binding</code>、<code translate="no">--no-web</code></th><td>在本进程运行而不是交给 App 的 Worker；新会话保存在 profile 里，不往文件夹写任何东西；这一轮不用网页工具，也不用 Provider 自带的搜索</td></tr>
 <tr><th scope="row"><code translate="no">--json-schema PATH</code></th><td>要求 <code translate="no">--print</code> 按 JSON Schema 输出；<code translate="no">-</code> 从 stdin 读</td></tr>
-<tr><th scope="row"><code translate="no">--resume SESSION_ID</code></th><td>恢复会话；id 见 <code translate="no">openprogram sessions list</code> 或 Web UI 侧栏</td></tr>
+<tr><th scope="row"><code translate="no">--model PROVIDER/MODEL</code></th><td><code translate="no">--print</code> 在新会话里用的模型；提供商需要先用 <code translate="no">providers login &lt;provider&gt; --api-key-stdin</code> 存好密钥</td></tr>
+<tr><th scope="row"><code translate="no">--effort LEVEL</code></th><td>只用于这一次 <code translate="no">--print</code> 的推理强度：<code translate="no">off</code>（或 <code translate="no">none</code>）、<code translate="no">minimal</code>、<code translate="no">low</code>、<code translate="no">medium</code>、<code translate="no">high</code>、<code translate="no">xhigh</code>、<code translate="no">max</code>。不保存；不给时用 Agent 自己的强度</td></tr>
+<tr><th scope="row"><code translate="no">--usage-file PATH</code></th><td><code translate="no">--print</code> 结束后，把 token、费用、模型、轮数和结束方式以 JSON 写到 <code translate="no">PATH</code></td></tr>
+<tr><th scope="row"><code translate="no">--transcript-file PATH</code></th><td><code translate="no">--print</code> 结束后，把这一轮按 JSON lines 写到 <code translate="no">PATH</code>：每次模型请求及其 token、回复文字、每个工具调用的参数和结果，按先后顺序，带时间</td></tr>
+<tr><th scope="row"><code translate="no">--resume SESSION_ID</code></th><td>恢复会话；id 见 <code translate="no">openprogram sessions list</code> 或 Web UI 侧栏。配合 <code translate="no">--print</code> 时，id 不存在就以 1 退出</td></tr>
 <tr><th scope="row"><code translate="no">--profile PROFILE</code></th><td>状态目录 <code translate="no">~/.openprogram-&lt;name&gt;/</code>，等同 <code translate="no">OPENPROGRAM_PROFILE</code></td></tr>
 <tr><th scope="row"><code translate="no">--no-alt-screen</code></th><td>内联 TUI，保留终端回滚</td></tr>
 <tr><th scope="row"><code translate="no">--screen-reader</code></th><td>内联辅助技术模式，无鼠标跟踪</td></tr>
@@ -21,7 +31,7 @@
 <table class="stack fixed">
 <thead class="sr"><tr><th scope="col">命令</th><th scope="col">作用</th></tr></thead>
 <tbody>
-<tr><th scope="row"><code translate="no">tui</code> (alias <code translate="no">chat</code>)</th><td>在 Windows、macOS 或 Linux 上直接启动 Ink 终端界面；不支持 raw input 的终端回退到 Rich。接受 <code translate="no">--print</code>、<code translate="no">--json-schema</code>、<code translate="no">--resume</code>、<code translate="no">--no-alt-screen</code>、<code translate="no">--screen-reader</code>。</td></tr>
+<tr><th scope="row"><code translate="no">tui</code> (alias <code translate="no">chat</code>)</th><td>在 Windows、macOS 或 Linux 上直接启动 Ink 终端界面；不支持 raw input 的终端回退到 Rich。接受 <code translate="no">--print</code>、<code translate="no">--json-schema</code>、<code translate="no">--model</code>、<code translate="no">--effort</code>、<code translate="no">--usage-file</code>、<code translate="no">--transcript-file</code>、<code translate="no">--resume</code>、<code translate="no">--no-alt-screen</code>、<code translate="no">--screen-reader</code>。</td></tr>
 <tr><th scope="row"><code translate="no">web</code></th><td>启动服务并打开 <code translate="no">http://localhost:18100</code>。<code translate="no">--web-port</code>（仅本次；默认已存偏好，然后 18100）、<code translate="no">--no-browser</code>。<code translate="no">web auth-url</code> 打印已认证链接。</td></tr>
 <tr><th scope="row"><code translate="no">acp</code></th><td>Agent Client Protocol 服务。<code translate="no">--agent</code>、<code translate="no">--permission</code>。</td></tr>
 </tbody>
@@ -98,17 +108,6 @@
 export OPENPROGRAM_MCP_TOKEN="&lt;paste the token printed above&gt;"
 openprogram mcp serve</code></pre>
 <p class="note"><code translate="no">token create</code> 打印一次原始 token，不会设置变量。已有 token 时复用已保存的。</p>
-<h3 id="browser">browser</h3>
-<table class="stack fixed">
-<thead class="sr"><tr><th scope="col">子命令</th><th scope="col">作用</th></tr></thead>
-<tbody>
-<tr><th scope="row"><code translate="no">install</code></th><td>源码 checkout：Playwright 与 Chromium、patchright、camoufox。打包版本拒绝此命令，并已包含默认后端。</td></tr>
-<tr><th scope="row"><code translate="no">status</code></th><td>安装状态、sidecar Chrome、已存登录数</td></tr>
-<tr><th scope="row"><code translate="no">refresh</code></th><td>在主 Chrome 登录新站点后重新复制配置</td></tr>
-<tr><th scope="row"><code translate="no">reset</code></th><td>结束 sidecar，清除配置、登录和端口文件</td></tr>
-<tr><th scope="row"><code translate="no">list</code>, <code translate="no">rm</code></th><td><code translate="no">browser-states/</code> 下的已存登录</td></tr>
-</tbody>
-</table>
 <h2 id="content-management">内容管理</h2>
 <h3 id="agents">agents</h3>
 <table class="stack fixed">
@@ -212,6 +211,7 @@ openprogram mcp serve</code></pre>
 <tbody>
 <tr><th scope="row"><code translate="no">execution</code></th><td><code translate="no">pause</code>、<code translate="no">continue</code>、<code translate="no">step</code>、<code translate="no">steer</code>、<code translate="no">cancel</code>、<code translate="no">fork</code>、<code translate="no">retry</code>、<code translate="no">wait-answer</code>、<code translate="no">wait-decline</code></td></tr>
 <tr><th scope="row"><code translate="no">jobs</code></th><td><code translate="no">list</code>、<code translate="no">get</code>：Job 资源视图</td></tr>
+<tr><th scope="row"><code translate="no">transcript</code></th><td>从保存的状态重建一次 <code translate="no">--print</code> 运行的记录，格式同 <code translate="no">--transcript-file</code>，用于来不及写记录就被杀掉的运行。<code translate="no">--state DIR</code>、<code translate="no">--session ID</code>、<code translate="no">--output PATH</code></td></tr>
 <tr><th scope="row"><code translate="no">scheduler-worker</code> (<code translate="no">cron-worker</code>)</th><td>前台循环，触发一次性、周期和监控任务。守护进程 tick 失败时把警告和 traceback 写到 stderr，然后在下一分钟继续，不重放失败的 <code translate="no">@reboot</code> 初始 tick。<code translate="no">--once</code> 运行一次并传播失败；<code translate="no">--list</code> 显示匹配状态。</td></tr>
 </tbody>
 </table>

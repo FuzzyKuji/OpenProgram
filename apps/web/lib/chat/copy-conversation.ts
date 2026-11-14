@@ -25,7 +25,7 @@ export async function copyConversation(sessionId: string, text: Text, msgId?: st
     const response = await fetch("/api/chat/branch_session", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(msgId ? { session_id: sessionId, msg_id: msgId } : { session_id: sessionId }),
+      body: JSON.stringify({ session_id: sessionId, ...(msgId ? { msg_id: msgId } : { branch_id: useSessionStore.getState().composerSettingsBySession?.[sessionId]?.active_branch_id ?? undefined }) }),
     });
     const data = await response.json().catch(() => ({})) as {
       ok?: boolean; new_session_id?: string; title?: string; error?: string;

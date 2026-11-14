@@ -173,6 +173,8 @@ class WorktreeManager:
         parent_job: Optional[str] = None,
         pr: Optional[str] = None,
         destination: Optional[str] = None,
+        parent_branch: Optional[str] = None,
+        ephemeral: bool = False,
     ) -> Worktree:
         """Create a new worktree on ``source_repo``.
 
@@ -311,6 +313,8 @@ class WorktreeManager:
         # worktree_create tool, job/plan-mode fan-out) routes through
         # here, so this is the one place that needs the hook.
         include_result = sync_include_files(source_repo, str(path))
+        rc_base, base_out, _ = _run_git("rev-parse", "HEAD", cwd=str(path))
+        base_sha = base_out.strip() if rc_base == 0 and base_out.strip() else None
 
         wt = Worktree(
             id=wt_id,
@@ -321,6 +325,9 @@ class WorktreeManager:
             status=WorktreeStatus.ACTIVE,
             parent_session=parent_session,
             parent_job=parent_job,
+            parent_branch=parent_branch,
+            base_sha=base_sha,
+            ephemeral=ephemeral,
             pr_number=pr_number,
             include_synced=include_result.copied,
             include_failed=[f"{p}: {reason}" for p, reason in include_result.failed],
@@ -349,8 +356,53 @@ class WorktreeManager:
             parent_job=parent_job,
         )
 
-    def find_active_for_session(self, session_id: str) -> Optional[Worktree]:
-        return find_active_for_session(session_id)
+    def find_active_for_session(
+        self, session_id: str, branch_id: Optional[str] = None,
+    ) -> Optional[Worktree]:
+        """The worktree the session's branch runs in (the current turn's
+        branch, else the selected one, when ``branch_id`` is omitted)."""
+        return find_active_for_session(session_id, branch_id)
+
+    def summarize(self, wt: Worktree) -> dict:
+        """What the worktree holds against the commit it started from:
+        commits made in it, the files that differ (committed or not,
+        untracked included) and whether anything is uncommitted. Empty
+        for a worktree whose directory is gone."""
+        empty = {"commits": 0, "files": [], "dirty": False, "exists": False}
+        path = wt.worktree_path
+        if not path or not os.path.isdir(path):
+            return empty
+        base = wt.base_sha or wt.base_ref or "HEAD"
+        rc_c, out_c, _ = _run_git("rev-list", "--count", f"{base}..HEAD", cwd=path)
+        commits = int(out_c.strip()) if rc_c == 0 and out_c.strip().isdigit() else 0
+        files: list[str] = []
+        rc_d, out_d, _ = _run_git("diff", "--name-only", base, cwd=path)
+        if rc_d == 0:
+            files.extend(ln.strip() for ln in out_d.splitlines() if ln.strip())
+        rc_u, out_u, _ = _run_git("ls-files", "--others", "--exclude-standard", cwd=path)
+        if rc_u == 0:
+            files.extend(ln.strip() for ln in out_u.splitlines() if ln.strip())
+        rc_s, out_s, _ = _run_git("status", "--porcelain", cwd=path)
+        dirty = rc_s == 0 and bool(out_s.strip())
+        return {
+            "commits": commits,
+            "files": sorted(set(files)),
+            "dirty": dirty,
+            "exists": True,
+        }
+
+    def discard_if_unchanged(self, worktree_id: str) -> Optional[Worktree]:
+        """Remove an ephemeral worktree that ended with nothing in it
+        (Claude Code's rule for an isolated sub-agent). A worktree with
+        any commit or file change stays for the user to merge or
+        discard. Returns the discarded row, else ``None``."""
+        wt = load_worktree(worktree_id)
+        if wt is None or not wt.ephemeral or wt.status != WorktreeStatus.ACTIVE:
+            return None
+        summary = self.summarize(wt)
+        if summary["commits"] or summary["files"] or summary["dirty"]:
+            return None
+        return self.discard_worktree(worktree_id, force=False, delete_branch=True)
 
     def merge_worktree(
         self,
@@ -358,8 +410,19 @@ class WorktreeManager:
         *,
         strategy: str = "ff-only",
         delete_branch: bool = False,
+        commit_pending: bool = False,
+        message: Optional[str] = None,
     ) -> Worktree:
         """Merge the worktree's branch back into ``source_repo`` HEAD.
+
+        ``commit_pending``: the person asked to merge what the worktree
+        holds, so uncommitted and untracked changes are committed first
+        (``message``, else a generic one). Without it a dirty worktree is
+        refused, as before; the agent commits through bash itself.
+
+        ``strategy="auto"``: fast-forward when possible, else a merge
+        commit — what the Merge button does, so a source repository that
+        moved on since the worktree started still merges.
 
         Strategies:
 
@@ -385,6 +448,18 @@ class WorktreeManager:
         # has to commit explicitly first (D7). ``git status --porcelain``
         # is empty when clean.
         rc, out, _ = _run_git("status", "--porcelain", cwd=wt.worktree_path)
+        if rc == 0 and out.strip() and commit_pending:
+            _run_git("add", "-A", cwd=wt.worktree_path)
+            rc_c, out_c, err_c = _run_git(
+                "commit", "-m", (message or "").strip()
+                or f"Work from worktree {wt.id} ({wt.branch_name})",
+                cwd=wt.worktree_path,
+            )
+            if rc_c != 0:
+                raise WorktreeError(
+                    f"commit_failed: {err_c.strip() or out_c.strip()}"
+                )
+            rc, out, _ = _run_git("status", "--porcelain", cwd=wt.worktree_path)
         if rc == 0 and out.strip():
             raise WorktreeError(
                 "worktree_dirty: uncommitted or untracked changes in "
@@ -397,6 +472,12 @@ class WorktreeManager:
 
         try:
             args: tuple[str, ...]
+            if strategy == "auto":
+                rc_ff, _, _ = _run_git(
+                    "merge-base", "--is-ancestor", "HEAD", wt.branch_name,
+                    cwd=wt.source_repo,
+                )
+                strategy = "ff-only" if rc_ff == 0 else "no-ff"
             if strategy == "ff-only":
                 args = ("merge", "--ff-only", wt.branch_name)
             elif strategy == "squash":
@@ -427,6 +508,13 @@ class WorktreeManager:
                     "not_fast_forward" if "not possible" in msg.lower()
                     or "non-fast-forward" in msg.lower() else "merge_failed"
                 )
+                if code == "merge_conflict":
+                    # Leave the source repository as it was: the
+                    # conflict is resolved in the worktree, never by
+                    # stranding the user's checkout mid-merge.
+                    _run_git("merge", "--abort", cwd=wt.source_repo)
+                    if strategy == "squash":
+                        _run_git("reset", "--merge", cwd=wt.source_repo)
                 # Move back to active so the caller can retry / discard.
                 wt.error = f"{code}: {msg}"
                 self._transition(wt, WorktreeStatus.ACTIVE)
@@ -439,7 +527,7 @@ class WorktreeManager:
             merge_sha = head_out.strip() if rc_head == 0 else None
             # Files changed: count unique paths between base_ref and HEAD.
             rc_diff, diff_out, _ = _run_git(
-                "diff", "--name-only", f"{wt.base_ref}..HEAD",
+                "diff", "--name-only", f"{wt.base_sha or wt.base_ref}..HEAD",
                 cwd=wt.source_repo,
             )
             files_changed = (

@@ -1,9 +1,13 @@
 """Tell an agent when work it handed off in the background ends.
 
 As in Claude Code, a background agent (``agent(run_in_background=true)``,
-``agent(to=…)``, ``send_message``) that finishes starts a turn in the
-conversation that sent it, saying so. Nothing is said when the sender
-already read the result with ``job_output``. A conversation that is
+``send_message``) that finishes starts a turn in the conversation that
+sent it, saying so. Nothing is said when the sender already read the
+result with ``read_conversation``. Each agent's part of the notice is the
+result block of ``agent_result.render``: final reply, files changed and
+usage, the same shape the ``agent`` tool returns when the caller waits.
+A helper the person stopped, one a default limit stopped, and one that has
+stalled (``delegation_watch``) are told the same way. A conversation that is
 mid-turn gets the notice once its foreground turn ends, and every agent
 that finished meanwhile arrives in that one notice. The notice is an
 automated event, never a message from the user.
@@ -67,7 +71,7 @@ def _load(path) -> tuple[list[dict[str, Any]], list[str]]:
 
 
 def _write(path, entries: list[dict[str, Any]], done: list[str]) -> None:
-    path.write_text(json.dumps({"version": 1, "entries": entries, "done": done[-_DONE_KEPT:]}))
+    path.write_text(json.dumps({"version": 1, "entries": entries, "done": done[-_DONE_KEPT:]}), encoding="utf-8")
 
 
 def _settle(path, ids: set[str]) -> None:
@@ -79,10 +83,19 @@ def _settle(path, ids: set[str]) -> None:
 
 
 def queue(job: Job) -> bool:
-    """Record that ``job``'s sender should hear it ended. Only background
-    jobs that completed or failed qualify: a waited-on job returned its
-    result to the caller, and a cancelled one was stopped on purpose."""
-    if job.wait or job.status not in (JobStatus.COMPLETED, JobStatus.ERRORED):
+    """Record that ``job``'s sender should hear it ended. Background jobs
+    that completed or failed qualify, and one the person stopped on its own
+    (``cancel.user``): its sender would otherwise wait for a result that
+    never comes (Claude Code tells the model "was stopped by the user"). A
+    waited-on job returned its result to the caller, and a job stopped with
+    the turn that started it (``cancel.parent``) has nobody left waiting.
+    A waited-on job whose waiter died with its process (a Worker crash)
+    returned nothing, so it is told like a background one."""
+    from openprogram.runtime.jobs.handoff import waiter_gone
+    if job.wait and not waiter_gone(job):
+        return False
+    if (job.status not in (JobStatus.COMPLETED, JobStatus.ERRORED)
+            and not stopped_by_user(job) and not stopped_by_limit(job)):
         return False
     session_id = deliver_session_of(job)
     path = _path(session_id) if session_id else None
@@ -93,6 +106,39 @@ def queue(job: Job) -> bool:
         if job.id in done or any(e.get("job_id") == job.id for e in entries):
             return False
         entries.append({"job_id": job.id, "job_session_id": job.parent_session_id,
+                        "queued_at": time.time(),
+                        **({"stopped_by_user": True} if stopped_by_user(job) else {})})
+        _write(path, entries, done)
+        _due.add(session_id)
+    return True
+
+
+def stopped_by_user(job: Job) -> bool:
+    """Whether the person stopped this job itself, not with its caller."""
+    return job.status == JobStatus.CANCELLED and job.reason_code == "cancel.user"
+
+
+def stopped_by_limit(job: Job) -> bool:
+    """Whether a limit stopped this job (spend, runtime): its caller is
+    still waiting for a result that is not coming."""
+    from openprogram.runtime.jobs.agent_result import LIMIT_STOPS
+    return job.status == JobStatus.CANCELLED and job.reason_code in LIMIT_STOPS
+
+
+def queue_stalled(job: Job, *, minutes: int) -> bool:
+    """Tell the sender once that ``job`` has had no activity for ``minutes``.
+    The job keeps running; its final notice still comes when it ends."""
+    session_id = deliver_session_of(job)
+    path = _path(session_id) if session_id else None
+    if path is None:
+        return False
+    entry_id = f"stalled:{job.id}"
+    with _lock:
+        entries, done = _load(path) if path.exists() else ([], [])
+        if entry_id in done or any(e.get("id") == entry_id for e in entries):
+            return False
+        entries.append({"kind": "stalled", "id": entry_id, "stalled_job_id": job.id,
+                        "job_session_id": job.parent_session_id, "minutes": int(minutes),
                         "queued_at": time.time()})
         _write(path, entries, done)
         _due.add(session_id)
@@ -193,8 +239,17 @@ def _pending_jobs(session_id: str, entries: list[dict[str, Any]]) -> tuple[list[
     """The jobs these entries stand for, and the entry ids that are
     settled by delivering them. A watch whose target is still busy stays."""
     from openprogram.runtime.jobs.store import load_job
+    from openprogram.runtime.jobs.types import is_terminal
     jobs, settled = [], set()
     for e in entries:
+        if e.get("kind") == "stalled":
+            settled.add(str(e.get("id")))
+            job = load_job(str(e.get("job_session_id") or session_id), str(e.get("stalled_job_id") or ""))
+            # One that ended meanwhile is told by its own notice.
+            if job is not None and not is_terminal(job.status):
+                job.notice_stalled_minutes = int(e.get("minutes") or 0)  # type: ignore[attr-defined]
+                jobs.append(job)
+            continue
         if e.get("kind") == "watch":
             job = _idle_watch_job(session_id, e)
             if job is not None:
@@ -259,12 +314,20 @@ def _clip(text: str) -> str:
     return text[:_REPLY_CHARS] + "…" if len(text) > _REPLY_CHARS else text
 
 
+def _stalled(job: Job) -> bool:
+    return getattr(job, "notice_stalled_minutes", None) is not None
+
+
 def _kind(job: Job) -> str:
     if job.source == "idle_watch":
         return "idle"
+    if _stalled(job):
+        return "stalled"
     # A spawn's attach pointer puts its report in context; a delivery to
-    # an existing branch has no pointer, so its reply travels inline.
-    return "report" if job.attach_pointer_id else "reply"
+    # an existing branch has no pointer, so its reply travels inline. So does
+    # a waited-on spawn's: its card stays out of context, kept for the tool
+    # result its dead waiter never returned.
+    return "report" if job.attach_pointer_id and not job.wait else "reply"
 
 
 def _address(job: Job) -> str:
@@ -275,6 +338,18 @@ def _first_line(job: Job) -> str:
     label = job.label or job.subject or job.id[:8]
     if _kind(job) == "idle":
         return f"Branch {_address(job)} (\"{label}\") you asked to watch is idle now."
+    if _stalled(job):
+        return (f"Agent \"{label}\" has had no activity for "
+                f"{job.notice_stalled_minutes} minutes and is marked stalled; it is "  # type: ignore[attr-defined]
+                f"still running (job {job.id}).")
+    if stopped_by_user(job):
+        return f"Background agent \"{label}\" was stopped by the user (job {job.id})."
+    if stopped_by_limit(job):
+        from openprogram.runtime.jobs.agent_result import LIMIT_STOPS
+        why = {"timeout": "it ran past the time limit",
+               "spend cap": "its delegation reached the spend limit"}.get(
+            LIMIT_STOPS[job.reason_code or ""], "it reached a limit")
+        return f"Agent \"{label}\" was stopped because {why} (job {job.id})."
     outcome = "failed" if job.status == JobStatus.ERRORED else "finished"
     return f"Agent \"{label}\" {outcome} (job {job.id})."
 
@@ -284,18 +359,27 @@ def notice_items(jobs: list[Job]) -> list[dict[str, Any]]:
     ``kind`` (report / reply / idle), the agent or branch ``name`` (empty
     when it has none), whether it ``failed``, its ``address``, and the
     ``line`` that starts its part of the notice text."""
+    from openprogram.runtime.jobs.agent_result import status_of
     return [{
         "kind": _kind(job), "name": job.label or "",
         "failed": job.status == JobStatus.ERRORED,
+        "status": status_of(job, stalled=_stalled(job))[0],
         "address": _address(job), "line": _first_line(job),
     } for job in jobs]
 
 
 def notice_text(jobs: list[Job]) -> str:
     """The automated notice for one or more finished jobs."""
+    from openprogram.runtime.jobs.agent_result import render
     many = len(jobs) > 1
     if all(j.source == "idle_watch" for j in jobs):
         head = "Agents you are watching are idle." if many else "An agent you are watching is idle."
+    elif all(_stalled(j) for j in jobs):
+        head = ("Agents you started have stalled." if many
+                else "An agent you started has stalled.")
+    elif all(stopped_by_user(j) for j in jobs):
+        head = ("Background agents you started were stopped." if many
+                else "A background agent you started was stopped.")
     else:
         head = ("Background agents you started have finished." if many
                 else "A background agent you started has finished.")
@@ -312,18 +396,29 @@ def notice_text(jobs: list[Job]) -> str:
         task = (job.prompt or job.description or "").strip()
         if task:
             lines.append(f"Task: {task[:500]}")
+        if kind == "stalled":
+            lines.append(render(job, stalled=True, body=(
+                "(no reply yet) Wait for it, steer it with send_message, or stop it "
+                f"with close_agent(\"{job.id}\").")))
+            continue
+        if stopped_by_user(job) or stopped_by_limit(job):
+            # No result is coming; whatever it wrote stays on its branch.
+            lines.append(render(job, body=f"(no reply) Its work so far: read_conversation(\"{job.id}\")."))
+            continue
         if kind == "report":
-            lines.append("Its report is attached above.")
+            lines.append(render(job, body="(its report is attached above)"))
         else:
             lines.append(f"Reply from branch {address}:")
-            lines.append(_clip(job.result_text or job.error or "") or "(no output)")
+            lines.append(render(job))
             lines.append(f"To continue with it, use send_message(to=\"{address}\").")
     lines.append("")
     lines.append(
         "Carry on with the user's request from here: tell the user what "
         + ("they" if many else "it")
         + " found in your own words, or decide the next step. If you have "
-        "already used this result, reply briefly."
+        "already used this result, reply briefly. If an agent failed, retry "
+        "narrower with send_message to the same agent or tell the user; do "
+        "not silently redo its work."
     )
     return "\n".join(lines)
 

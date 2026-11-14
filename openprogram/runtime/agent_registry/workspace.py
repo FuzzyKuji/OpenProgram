@@ -19,6 +19,7 @@ import logging
 from pathlib import Path
 
 from openprogram.runtime.agent_registry import manager as _agents
+from openprogram.host._platform.filesystem import replace_file
 
 log = logging.getLogger(__name__)
 
@@ -118,7 +119,7 @@ def retire(agent_id: str) -> list[str]:
         retired = ws / ".retired"
         retired.mkdir(exist_ok=True)
         for name, _ in kept:
-            (ws / name).replace(retired / name)
+            replace_file(ws / name, retired / name)
         log.info("agent %s: moved %s into system_prompt", agent_id, ", ".join(n for n, _ in kept))
     try:
         ws.rmdir()

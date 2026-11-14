@@ -6,6 +6,20 @@ from openprogram.runtime.jobs.runner import shared
 _ENDED_BY_RESTART = "Stopped after a restart: the run that started this agent has ended."
 
 
+def _written_reply(execution_store, execution) -> str | None:
+    """The reply row admission named for the Job, once its turn wrote it;
+    a turn stopped before writing anything has no branch tip."""
+    head_id = shared._turn_head_id(execution_store, execution.execution_id, None)
+    if not head_id:
+        return None
+    try:
+        from openprogram.runtime.context.session_db import default_db
+        return head_id if default_db().message_exists(execution.session_id, head_id) else None
+    except Exception:
+        shared._log.debug("reply row of %s not checked", execution.execution_id, exc_info=True)
+        return None
+
+
 class ProjectionOperations:
     def _project_canonical_terminal(
         self, execution, *, terminal_fields: dict[str, shared.Any] | None = None,
@@ -50,8 +64,13 @@ class ProjectionOperations:
             # Reconstructing COMPLETED here would freeze an empty absorbing row.
             return
         if job is not None and not shared.is_terminal(job.status):
+            # Without a turn result (a stop, a restart) the Job's branch
+            # tip is still the reply row admission named for it: a stopped
+            # helper's partial work is on that row, and its caller is told
+            # where to read it.
             projection_fields = terminal_fields or shared._terminal_fields(
                 status, execution.reason_code or status.value,
+                head_id=_written_reply(self._execution_store, execution),
                 error=_ENDED_BY_RESTART if execution.reason_code == RESTART_NOT_CONTINUED else None,
             )
             try:
@@ -128,6 +147,14 @@ class ProjectionOperations:
                 WorktreeStatus.MERGED,
             }:
                 manager.discard_worktree(canonical_job.worktree_id, force=True)
+        elif canonical_job.worktree_id:
+            # A sub-agent's own worktree that ended with nothing in it
+            # goes away; one with changes waits for merge or discard.
+            try:
+                from openprogram.state.worktree.manager import get_manager
+                get_manager().discard_if_unchanged(canonical_job.worktree_id)
+            except Exception:
+                shared._log.debug("worktree cleanup skipped", exc_info=True)
         clear_resume = getattr(self._governor, "clear_resume_parent_msg_id", None)
         if clear_resume is not None:
             clear_resume(execution.execution_id)

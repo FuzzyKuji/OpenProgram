@@ -103,6 +103,12 @@ def translate_reasoning(
     if not wire or wire == "none":
         return None
 
+    # ``off`` is never a strength: it has a wire value only where the
+    # provider declares one (OpenAI Responses sends ``effort: "none"``);
+    # everywhere else it means "send no reasoning field".
+    if level in ("off", "none"):
+        return _off_value(spec, model_id)
+
     # Check model-level override first
     override = spec.get("model_overrides", {}).get(model_id)
     if override:
@@ -133,8 +139,50 @@ def translate_reasoning(
     return None
 
 
+def _off_value(spec: dict[str, Any], model_id: str) -> Any:
+    """The wire value for "thinking off", or None to send nothing.
+
+    A model override's own ``"off"`` key (``null`` for models that reject
+    ``none``) wins over its ``effort_map["off"]``, which wins over the
+    provider's ``effort_map["off"]``.
+    """
+    override = spec.get("model_overrides", {}).get(model_id) or {}
+    if "off" in override:
+        return override["off"]
+    emap = override.get("effort_map")
+    if isinstance(emap, dict) and "off" in emap:
+        return emap["off"]
+    return (spec.get("effort_map") or {}).get("off")
+
+
+def off_wire_value(provider_id: str, model_id: str, api: str | None = None) -> Any:
+    """What a model sends when its thinking is turned off, or None.
+
+    A provider without a thinking spec of its own (``openai`` falls back
+    to the generic map) reads the spec of the API it speaks, so
+    ``openai/gpt-5.x`` over ``openai-responses`` sends ``effort: "none"``.
+    """
+    spec = get_thinking_spec(provider_id)
+    if spec.get("_fallback") and api:
+        spec = get_thinking_spec(api)
+    wire = spec.get("wire_format")
+    if not wire or wire == "none":
+        return None
+    return _off_value(spec, model_id)
+
+
+#: Effort levels from least to most, for finding the nearest one a model has.
+_LEVEL_LADDER = ("minimal", "low", "medium", "high", "xhigh", "max")
+
+
 def normalize_reasoning_level(model: Any, level: str | None) -> str | None:
-    """Keep a saved effort inside the selected model's advertised contract."""
+    """Keep an effort inside the selected model's advertised contract.
+
+    A level the model lacks becomes the nearest one it has: the next
+    stronger, else the next weaker (Pi's ``clampThinkingLevel``), so
+    ``minimal`` on a model that starts at ``low`` sends ``low``, not the
+    model's default. A name outside the ladder takes the model's default.
+    """
     if not level:
         return None
     levels = list(getattr(model, "thinking_levels", None) or [])
@@ -142,6 +190,11 @@ def normalize_reasoning_level(model: Any, level: str | None) -> str | None:
         return None
     if level in levels:
         return level
+    if level in _LEVEL_LADDER:
+        at = _LEVEL_LADDER.index(level)
+        for candidate in (*_LEVEL_LADDER[at + 1:], *reversed(_LEVEL_LADDER[:at])):
+            if candidate in levels:
+                return candidate
     default = getattr(model, "default_thinking_level", None)
     return default if default in levels else levels[0]
 
@@ -176,11 +229,12 @@ def derive_thinking_levels(
     if override:
         emap = override.get("effort_map", override.get("budget_map"))
         if emap is not None:
-            return list(emap.keys())
+            return [k for k in emap if k != "off"]
 
-    # Provider-level map
+    # Provider-level map. ``off`` is how "no thinking" is sent, not a
+    # picker level (the picker adds its own Off row).
     emap = spec.get("effort_map") or spec.get("budget_map")
-    return list(emap.keys()) if emap else []
+    return [k for k in emap if k != "off"] if emap else []
 
 
 def get_default_effort(provider_id: str) -> Optional[str]:

@@ -172,7 +172,12 @@ def unavailable_reason() -> str | None:
     if sys.platform.startswith("linux"):
         return bubblewrap_unavailable_reason()
     if sys.platform == "win32":
-        return platform_environment.windows_wsl_sandbox_reason()
+        reason = platform_environment.windows_wsl_sandbox_reason()
+        if reason is None:
+            return None
+        # Shown on the Sandbox switch and by doctor: what is missing, and how to add it.
+        return (f"Sandbox unavailable: needs WSL2 ({reason}). Install it with `wsl --install`, "
+                "then install bubblewrap in the default distribution")
     return f"no sandbox backend for platform {sys.platform!r}"
 
 
@@ -513,9 +518,21 @@ def install_policy_snapshot(snapshot: dict) -> None:
         _process_policy_override = None
 
 
+def default_unavailable_policy() -> str:
+    """``refuse``, except on Windows, where the sandbox needs WSL2.
+
+    Most Windows machines have no WSL2 distribution with bubblewrap. Refusing
+    there would turn the Sandbox switch into "every command fails"; the
+    command runs in the host shell instead, and the switch's hint and
+    ``openprogram doctor`` say the sandbox needs WSL2.
+    """
+    return UNAVAILABLE_POLICY_WARN if sys.platform == "win32" else UNAVAILABLE_POLICY_REFUSE
+
+
 def unavailable_policy() -> str:
-    v = str(_config_section().get("unavailable_policy") or UNAVAILABLE_POLICY_REFUSE)
-    return v if v in UNAVAILABLE_POLICY else UNAVAILABLE_POLICY_REFUSE
+    default = default_unavailable_policy()
+    v = str(_config_section().get("unavailable_policy") or default)
+    return v if v in UNAVAILABLE_POLICY else default
 
 
 def set_mode(enabled: bool) -> None:

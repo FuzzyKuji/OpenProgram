@@ -104,8 +104,12 @@ class HistoryOperations:
         result=None,
         is_error: bool = False,
         outcome: str | None = None,
+        details: dict | None = None,
     ) -> None:
-        """Persist the terminal state of a streamed nested tool node."""
+        """Persist the terminal state of a streamed nested tool node.
+
+        ``details`` are the result's durable details (``shared.tool_loads``),
+        kept in the node's metadata for rendering history."""
         if not parent_node_id or not tool_call_id:
             return
         try:
@@ -142,6 +146,8 @@ class HistoryOperations:
                 "is_error": bool(is_error),
                 "ended_at": time.time(),
             }
+            if details:
+                metadata["details"] = details
             store.update(resolved_id, output=output, metadata=metadata)
         except Exception:
             return
@@ -189,7 +195,7 @@ class HistoryOperations:
         return self._skills_prompt_block
 
 
-    def _render_history_messages(self, content, context=None) -> Optional[list]:
+    def _render_history_messages(self, content, context=None, model=None) -> Optional[list]:
         """Build the provider message list for an in-progress exec()
         from the DAG.
 
@@ -206,6 +212,9 @@ class HistoryOperations:
              get seq + render_range.
           3. Compute reads → render pi-ai messages.
           4. Append a fresh UserMessage built from ``content``.
+
+        ``model`` is the model the request goes to: earlier replies it wrote
+        keep their reasoning (``render_dag_messages(reasoning_for=...)``).
         """
         from openprogram.state.store import _store
         from openprogram.runtime.context.model import Context
@@ -278,7 +287,7 @@ class HistoryOperations:
                 session_directory = str(store.store._session_dir(store.session_id))
             except Exception:
                 session_directory = None
-            history = render_dag_messages(graph, read_ids, session_directory)
+            history = render_dag_messages(graph, read_ids, session_directory, reasoning_for=model)
 
             # Synthesize the current turn from ``content`` blocks via
             # the same helper the no-store fallback uses, so image /
@@ -434,18 +443,6 @@ class HistoryOperations:
             _sysp = getattr(self, "_pending_system_prompt", None)
             if _sysp:
                 meta["system_prompt"] = _sysp
-            # What the render policy actually did for this call — replaying
-            # with it reproduces the exact prompt bytes even after the
-            # global aging constants move (dag/overview.md §8).
-            try:
-                from openprogram.runtime.context.aging import last_manifest
-
-                _mf = last_manifest()
-                if _mf:
-                    meta["render_manifest"] = _mf
-            except Exception:
-                # The manifest only aids exact replay; the node is saved without it.
-                _log.debug("render manifest unavailable for node %s", node_id, exc_info=True)
             if error is not None:
                 import traceback as _tb
 

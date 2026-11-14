@@ -34,47 +34,75 @@ async def handle_set_working_dirs(ws, cmd: dict):
         # 路径，归一化交给 check_path_safety 消费端）。
         dirs.append(str(expanded))
     from openprogram.runtime.conversation.session_config import save_session_run_config
-    from openprogram.interfaces.server.ws_actions.chat import _db_agent_id
-    save_session_run_config(
-        session_id,
-        agent_id=_db_agent_id(session_id),
-        additional_working_dirs=dirs,
-    )
+    save_session_run_config(session_id, additional_working_dirs=dirs)
     _s._broadcast(json.dumps({"type": "working_dirs", "data": {
         "session_id": session_id, "dirs": dirs,
     }}))
+
+
+def _inherited_sandbox(session_id: str) -> bool:
+    """The Sandbox a branch has when it does not set one: its project's,
+    else the configured default (``FALLBACK_ORDER``)."""
+    from openprogram.host.sandbox import ui_state
+    from openprogram.runtime.conversation.session_config import SessionRunConfig, sandbox_override_from_config
+    return bool(ui_state(sandbox_override_from_config(SessionRunConfig(), session_id)).get("sandbox"))
 
 
 async def handle_set_sandbox(ws, cmd: dict):
     """Read or set the session Sandbox override. Missing sandbox_enabled
     is a read. Response includes backend availability so the Plus menu
     can disable itself when sandbox-exec / bwrap is missing."""
-    from openprogram.runtime.conversation.session_config import (
-        load_session_run_config,
-        save_session_run_config,
-    )
+    from openprogram.runtime.conversation.session_config import _config_from_row
     from openprogram.host.sandbox import ui_state
     from openprogram.interfaces.server import server as _s
-    from openprogram.interfaces.server.ws_actions.chat import _db_agent_id
 
     session_id = (cmd.get("session_id") or "").strip()
+    from openprogram.interfaces.server.branch_settings import current_branch, write_branch_settings
+    from openprogram.state.store.session.branch_config import BranchConfigConflict, config_for_branch
+    from openprogram.runtime.context.session_db import default_db
+    row = {}
     override = None
     requested = cmd.get("sandbox_enabled") if "sandbox_enabled" in cmd else None
+    # ``null`` puts the branch back to the project's or global Sandbox mode.
+    writes = "sandbox_enabled" in cmd and (requested is None or isinstance(requested, bool))
+    branch_id = None
     if session_id:
-        if "sandbox_enabled" in cmd:
-            save_session_run_config(
-                session_id,
-                agent_id=_db_agent_id(session_id),
-                sandbox_enabled=requested,
-            )
-        override = load_session_run_config(session_id).sandbox_enabled
+        db = default_db()
+        try:
+            # A draft whose model was already picked has a row, though it is
+            # not created yet; its Sandbox is stored there too. A draft with
+            # no row gets no ghost row: its choice is echoed below.
+            if writes and db.get_session(session_id) is not None:
+                if isinstance(requested, bool) and requested == _inherited_sandbox(session_id):
+                    # Switched to what the project (or the product default)
+                    # gives anyway: nothing is stored, the branch keeps
+                    # following it.
+                    requested = None
+                row, _selected = write_branch_settings(session_id, cmd, {"sandbox_enabled": requested})
+            else:
+                row = db.get_session(session_id) or {}
+                named = cmd.get("branch_id") if isinstance(cmd.get("branch_id"), str) and cmd.get("branch_id") else None
+                row = {**row, **config_for_branch(row, named), "branch_id": named} if named and row else row
+        except BranchConfigConflict as exc:
+            await ws.send_text(json.dumps({"type": "sandbox_changed", "data": {
+                "session_id": session_id, "request_id": cmd.get("request_id"),
+                "action": "set_sandbox", "error": "branch_config_conflict", "code": exc.code,
+                "active_branch_id": current_branch(session_id),
+            }}))
+            return
+        branch_id = row.get("branch_id") or row.get("active_branch_id")
+        override = _config_from_row(row).sandbox_enabled
     # Draft chats have no session row yet, so save is a no-op. Echo the
     # requested override anyway — otherwise ui_state(None) reports the
     # configured default and the Plus-menu switch snaps back.
-    if override is None and isinstance(requested, bool):
+    if not row and override is None and isinstance(requested, bool):
         override = requested
     data = {"session_id": session_id or None, **ui_state(override),
-            "request_id": cmd.get("request_id"), "action": "set_sandbox"}
+            # ``branch``: this branch set it; ``inherited``: it follows the
+            # project or the configured default (the switch's hint says so).
+            "sandbox_source": "branch" if override is not None else "inherited",
+            "request_id": cmd.get("request_id"), "action": "set_sandbox",
+            "branch_id": branch_id, "active_branch_id": row.get("active_branch_id")}
     frame = json.dumps({"type": "sandbox_changed", "data": data})
     await ws.send_text(frame)
     if "sandbox_enabled" in cmd:

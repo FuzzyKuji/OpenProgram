@@ -97,7 +97,19 @@ _WINDOWS_GUIDE = (
 
 def guide(system: str | None = None) -> str:
     """The app guide for this host's platform."""
-    text = _GUIDE
+    text = _GUIDE + (
+        "\nAn actions batch accepts input actions and an optional final get_app_state. "
+        "Use a separate get_app_state or find call when you need another observation. "
+        "Re-find elements after opening a result or changing the view. For long lists, "
+        "read small groups and return only relevant text instead of printing entire trees. "
+        "After submitting a search, verify that its results finished updating before reading them."
+    )
+    if (system or platform.system()) == "Darwin":
+        text += (
+            "\nPrefer accessibility element clicks. Coordinate clicks can briefly change window stacking. "
+            "If a window is on another Space, use an accessible Search or Submit button; "
+            "inserting a newline into a field does not submit it."
+        )
     pairs = {"Linux": _LINUX_GUIDE, "Windows": _WINDOWS_GUIDE}.get(system or platform.system(), ())
     for mac, other in pairs:
         text = text.replace(mac, other)
@@ -298,6 +310,10 @@ def _run(steps: list[tuple[str, dict]], args: dict, session: str) -> ToolReturn:
                               audio=[] if clip.silent else [clip.data])
         app = str(args.get("app") or "")
         batch = len(steps) > 1
+        observation_args = {"include": "tree"} if args.get("_code_text_only") else {}
+        if batch and steps[-1][0] == "get_app_state":
+            observation_args.update(steps[-1][1])
+            steps = steps[:-1]
         prepared = []
         for number, (action, step) in enumerate(steps, 1):
             if action not in ACTING_ACTIONS:
@@ -313,23 +329,46 @@ def _run(steps: list[tuple[str, dict]], args: dict, session: str) -> ToolReturn:
             prepared.append((action, step))
         if not app.strip():
             raise ComputerUseError(f"{steps[0][0]} needs app")
+        observed_app = observation_args.get("app")
+        if observed_app and normalized_app(observed_app) != normalized_app(app):
+            raise ComputerUseError("the final observation must use the same app")
         with _held(computer, app, session) as turn:
-            return _act(computer, prepared, app, session, batch, turn)
+            return _act(computer, prepared, app, session, batch, turn, observation_args)
     except ComputerUseError as exc:
         return ToolReturn(text=f"Error: {exc}", is_error=True,
                           json_data={"action_dispatched": False} if isinstance(exc, NotDispatched) else None)
 
 
-def _act(computer, prepared: list[tuple[str, dict]], app: str, session: str, batch: bool, turn: _Turn) -> ToolReturn:
+def _act(computer, prepared: list[tuple[str, dict]], app: str, session: str, batch: bool,
+         turn: _Turn, observation_args: dict | None = None) -> ToolReturn:
     """The acting steps of one call, in order, then the state they left; the application is held throughout."""
     from openprogram.programs.tools.computer_use.computer_use_agent.desktop.base import (ComputerUseError, NotAnswering,
-                                                                                          NotDispatched, Report)
+                                                                                          NotDispatched, Report, StaleElement)
 
+    observation_args = observation_args or {}
+    state_options = {k: observation_args[k] for k in ("window", "window_id", "full", "include")
+                     if k in observation_args}
     done: list[str] = []
     changed, failure, untouched, silent = False, None, False, False
     for number, (action, step) in enumerate(prepared, 1):
         try:
             summary = computer.act(session, action, _step(action, step, app))
+        except StaleElement:
+            # Input was never dispatched. Observe instead of replaying a click
+            # against a different control or repeating earlier batch steps.
+            try:
+                fresh_options = {"include": "tree"} if state_options.get("include") == "tree" else {}
+                observation = computer.get_state(session, app, full=True, as_diff=False, **fresh_options)
+            except ComputerUseError as exc:
+                return ToolReturn(text=f"The control changed before step {number}; that step and later steps did not run. "
+                                       f"The page could not be refreshed: {exc}", is_error=True)
+            progress = "\n".join(done)
+            text = (f"{progress}\n" if progress else "") + (
+                f"Page updated before step {number} ({action}); that step and later steps did not run. "
+                "Use this fresh state to choose the next action.\n\n" + observation.text)
+            return ToolReturn(text=turn.state(text), images=_images(observation),
+                              json_data={"status": "observation_required", "action_dispatched": changed,
+                                         "next_step": number})
         except ComputerUseError as exc:
             failure = f"step {number} ({action}) failed: {exc}" if batch else str(exc)
             # Nothing reached the app: the failing step stopped before input and no step before it acted.
@@ -354,7 +393,7 @@ def _act(computer, prepared: list[tuple[str, dict]], app: str, session: str, bat
         return ToolReturn(text=head, is_error=True)
     try:
         computer.settle(session, app)
-        observation = computer.get_state(session, app, as_diff=True)
+        observation = computer.get_state(session, app, as_diff=not state_options.get("full"), **state_options)
     except NotAnswering as exc:
         # The steps went out and the app is still carrying them out, so there is no state to return yet.
         return ToolReturn(text=f"{head}\n\n{exc.app} has not answered since ({exc.seconds:.0f} s): it is still "

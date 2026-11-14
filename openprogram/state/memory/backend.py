@@ -72,6 +72,8 @@ class MemoryWriteFailureCode(StrEnum):
     INVALID_ARGUMENT = "INVALID_ARGUMENT"
     INVALID_TOPIC_FORMAT = "INVALID_TOPIC_FORMAT"
     MISSING_SOURCE = "MISSING_SOURCE"
+    OUTSIDE_FILE_READ_ONLY = "OUTSIDE_FILE_READ_ONLY"
+    SOURCE_NOT_ALLOWED = "SOURCE_NOT_ALLOWED"
     PATCH_CONFLICT = "PATCH_CONFLICT"
     PATH_OUTSIDE_WORKSPACE = "PATH_OUTSIDE_WORKSPACE"
     READ_ONLY_PATH = "READ_ONLY_PATH"
@@ -91,6 +93,7 @@ _MODEL_REASON_CODES: dict[str, MemoryWriteFailureCode] = {
     "provider": MemoryWriteFailureCode.MODEL_PROVIDER_INTERNAL,
     "auth": MemoryWriteFailureCode.MODEL_AUTHENTICATION,
     "authz": MemoryWriteFailureCode.MODEL_AUTHORIZATION,
+    "blocked": MemoryWriteFailureCode.MODEL_TRANSPORT,
     "invalid": MemoryWriteFailureCode.MODEL_INVALID_REQUEST,
     "context": MemoryWriteFailureCode.MODEL_CONTEXT_LENGTH,
     "policy": MemoryWriteFailureCode.MODEL_CONTENT_POLICY,
@@ -106,6 +109,8 @@ _TRANSACTION_REASON_CODES = frozenset({
     MemoryWriteFailureCode.INVALID_ARGUMENT,
     MemoryWriteFailureCode.INVALID_TOPIC_FORMAT,
     MemoryWriteFailureCode.MISSING_SOURCE,
+    MemoryWriteFailureCode.OUTSIDE_FILE_READ_ONLY,
+    MemoryWriteFailureCode.SOURCE_NOT_ALLOWED,
     MemoryWriteFailureCode.PATCH_CONFLICT,
     MemoryWriteFailureCode.PATH_OUTSIDE_WORKSPACE,
     MemoryWriteFailureCode.READ_ONLY_PATH,

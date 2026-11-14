@@ -26,12 +26,27 @@ def call(action='describe', operation='', arguments=None):
         if operation == 'tabs.openWebTab':
             if len(body['arguments']) != 1 or not isinstance(body['arguments'][0], str):
                 raise ValueError('invalid_web_open_arguments')
-            from openprogram.host.resources import registry
-            return registry.invoke('web', 'open', {'url': body['arguments'][0]})
+            from openprogram.programs._host import services
+            browser = services.lookup('browser')
+            if browser is None:
+                raise ValueError('browser_not_enabled')
+            return browser.open_tab(body['arguments'][0])
+        if operation and not window:
+            from openprogram.runtime.agent.turn_request import get_turn_request
+            from openprogram.runtime.permissions.identity import detached_from_window
+            if detached_from_window(get_turn_request()):
+                # The only window open is the user's, not this run's: it is not moved under them.
+                raise ValueError(
+                    'no_window_for_this_run: this run was not started from an App window, so there is no window '
+                    'for it to command. Pass window_id to act on one on purpose; to open or read a web page use '
+                    'computer_use_agent with target browser, which works with the App closed.')
         if operation.startswith('native.webTab.') or operation == 'tabs.setWebTabPinned':
             from .web_interface import authorized_page
             with authorized_page(values, window) as page:
-                return request('/api/framework/interface', method='POST', body={**body, 'window_id': page['window_id'], 'page': page})
+                # The command's first argument names the tab; the App takes its own tab id there.
+                arguments = [page['tab_id'], *body['arguments'][1:]]
+                return request('/api/framework/interface', method='POST',
+                               body={**body, 'arguments': arguments, 'window_id': page['window_id'], 'page': page})
         return request('/api/framework/interface', method='POST', body=body)
     if action != 'invoke':
         raise ValueError('unsupported_framework_action')

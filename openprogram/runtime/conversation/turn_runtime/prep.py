@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from typing import Any, TYPE_CHECKING
+from typing import Any, Optional, TYPE_CHECKING
 
 from openprogram.runtime.events import emit_safe
 from openprogram.runtime.agent.turn_request import _InheritParent
@@ -40,6 +40,22 @@ def is_runtime_prompt(req: "TurnRequest") -> bool:
                 or req.restart_resume)
 
 
+def _own_branch_tip(session: dict, req: "TurnRequest") -> str | None:
+    """The tip of the branch the turn was admitted on, when that branch is
+    recorded and is not the selected one; ``None`` reads the selected head.
+
+    A turn keeps its branch: a message, a Goal continuation or a sub-agent's
+    return admitted on one branch continues it even after the person
+    switched to another."""
+    branch = getattr(req, "branch_id", None)
+    if not branch or branch == session.get("active_branch_id"):
+        return None
+    ref = (session.get("branch_refs") or {}).get(branch)
+    if not isinstance(ref, dict) or ref.get("status") == "aborted":
+        return None
+    return ref.get("head_id") or None
+
+
 def prepare_turn(
     *,
     db,
@@ -47,6 +63,7 @@ def prepare_turn(
     writer: "TurnWriter",
     user_msg_id: str,
     on_event: "EventCallback",
+    assistant_msg_id: str | None = None,
 ) -> tuple[dict, list[dict]]:
     """Steps 1-2 of the turn pipeline. Returns ``(session, history)``."""
     # 1. Ensure session exists. Load history along the *active branch*
@@ -66,9 +83,12 @@ def prepare_turn(
     if req.history_override is not None:
         history = list(req.history_override)
     elif isinstance(req.branch_from, _InheritParent):
-        # Normal append — walk the active branch.
+        # Normal append — walk the turn's own branch: the selected one
+        # unless the person selected another since it was admitted.
         from openprogram.runtime.context.persistence import rendered_history
-        history = rendered_history(db, req.session_id) \
+        own_tip = _own_branch_tip(session, req)
+        history = (rendered_history(db, req.session_id, head_id=own_tip) if own_tip
+                   else rendered_history(db, req.session_id)) \
             or db.get_messages(req.session_id)
     elif req.branch_from is None:
         # Root-level fork — LLM starts with empty history.
@@ -96,7 +116,7 @@ def prepare_turn(
         if history:
             user_caller_id = history[-1].get("id")
         else:
-            user_caller_id = session.get("head_id")
+            user_caller_id = _own_branch_tip(session, req) or session.get("head_id")
     else:
         user_caller_id = req.branch_from
     # Memory prefetch belongs to THIS turn, not to the system prompt
@@ -187,9 +207,49 @@ def prepare_turn(
         # Still drawn as the message it is; a reader of the history can tell
         # that nobody typed it (always_on/pending.py).
         user_msg["automation"] = req.automation
-    if memory_prefetch:
-        # Replay reproduces the exact wire user message from the node.
-        user_msg["memory_prefetch"] = memory_prefetch
+    # The date the turn is sent on goes beside its message, not in the system
+    # prompt, so a conversation that crosses midnight keeps its cached prefix.
+    # What goes beside the message is stored on its node as it happens
+    # (``context.turn_context``): the date, a rewind made before this turn,
+    # the memory it recalled (replay reproduces the exact wire message from
+    # the node) and a scheduled run's note, sent after the recalled memory.
+    from openprogram.runtime.context import turn_context as _turn_context
+    from openprogram.runtime.context.components import current_date_note
+    current_date = current_date_note()
+    beside = _turn_context.put([], _turn_context.ATTACHMENT, "date", current_date)
+    beside = _turn_context.put(beside, _turn_context.ATTACHMENT, "memory_prefetch", memory_prefetch or "")
+    beside = _turn_context.put(beside, _turn_context.ATTACHMENT, "run_note", req.run_note or "")
+    if not req.restart_resume:
+        # The reply this message follows was stopped: the note is written
+        # now, onto this message, so every later request sends it unchanged.
+        beside = _turn_context.put(beside, _turn_context.ATTACHMENT, "interrupted",
+                                   _interrupted_note(db, req, user_msg_id, user_caller_id))
+    from openprogram.runtime.conversation.turn_runtime.loop_runner import owns_conversation_contract
+    if owns_conversation_contract(req):
+        # A rewind is told to the conversation's own next turn. It is taken
+        # now, onto this message, so a turn that fails and is sent again
+        # still carries it.
+        from openprogram.runtime.conversation.rewind_marks import take_rewind_note
+        if req.user_already_persisted:
+            stored = (db.get_messages_by_id(req.session_id, [user_msg_id]) or [{}])[0] \
+                if hasattr(db, "get_messages_by_id") else {}
+            earlier = _turn_context.entry_text(_turn_context.entries(stored), "rewind")
+        else:
+            earlier = ""
+        beside = _turn_context.put(beside, _turn_context.ATTACHMENT, "rewind",
+                                   "\n\n".join(t for t in (earlier, take_rewind_note(req.session_id)) if t))
+    user_msg.update(_turn_context.node_metadata(beside))
+    turn_settings = getattr(req, "turn_settings", None)
+    if turn_settings:
+        # What this turn ran with and where each value came from, frozen at
+        # admission: the conversation's own record of the turn's settings.
+        user_msg["turn_settings"] = turn_settings
+        if turn_settings.get("model_changed_from"):
+            # The branch follows its Agent and the Agent's model changed:
+            # one quiet row above this message says so.
+            user_msg["model_change"] = {"from": turn_settings["model_changed_from"],
+                                        "to": turn_settings.get("model"),
+                                        "follows": "agent"}
     # Persist a lightweight attachment manifest (count + media types)
     # so /resume + the search picker can show "[2 images]" badges
     # without re-loading the base64 blobs. Full data still goes to
@@ -206,6 +266,18 @@ def prepare_turn(
                 })
         user_msg["extra"] = json.dumps({"attachments": manifest},
                                          default=str)
+        # The images themselves, kept so later requests send them again
+        # after the text, where the turn put them (``store.session.media``).
+        try:
+            from openprogram.state.store.session.media import records_for_attachments
+            # The text block comes first when the turn has text (loop_runner).
+            media = records_for_attachments(db._session_dir(req.session_id), req.attachments,  # noqa: SLF001
+                                            1 if req.user_text else 0)
+        except Exception:  # noqa: BLE001 - the turn goes on without the copy
+            _log.warning("user message media not kept for session %s", req.session_id, exc_info=True)
+            media = []
+        if media:
+            user_msg["media"] = media
     # Ensure ROOT node exists (session DAG root). Idempotent.
     #
     # ``advance_head=False``: seeding the graph root is not a turn
@@ -262,6 +334,7 @@ def prepare_turn(
                 "display": user_msg.get("display"),
                 "notice": user_msg.get("notice"),
                 "trigger": user_msg.get("trigger"),
+                "model_change": user_msg.get("model_change"),
             },
         })
     else:
@@ -274,15 +347,35 @@ def prepare_turn(
                 db, req.session_id, head_id=user_msg_id,
             ) or history
 
-    # A prompt that starts a turn is a point the session can rewind to.
+    # A prompt that starts a turn is a point its branch can rewind to, on the
+    # selected branch or beside it (another branch, a scheduled run's own).
+    # A turn with no point of its own records its file edits in the point it
+    # belongs to: its spawner's, or the nearest earlier prompt on its branch.
+    from openprogram.state.store.snapshot.checkpoint.helpers import (
+        capture_prompt_checkpoint,
+        join_prompt_checkpoint,
+    )
+    spawned = req.source == "agent_spawn" or bool(req.spawn_caller or req.spawned_from_session)
     if (
         req.source != "agent_spawn"
         and not is_runtime_prompt(req)
         and not req.restart_resume
-        and getattr(req, "advance_head", True)
+        and (getattr(req, "advance_head", True) or not spawned)
     ):
-        from openprogram.state.store.snapshot.checkpoint.helpers import capture_prompt_checkpoint
-        capture_prompt_checkpoint(db, req.session_id, user_msg_id)
+        capture_prompt_checkpoint(db, req.session_id, user_msg_id, assistant_msg_id)
+    elif assistant_msg_id:
+        join_prompt_checkpoint(
+            db, req.session_id, assistant_msg_id, spawned=spawned,
+            # A job names its caller's session even when that is this one.
+            spawned_by=(
+                req.spawn_caller
+                if req.spawned_from_session in (None, "", req.session_id) else None
+            ),
+            ancestors=lambda: [
+                message["id"] for message in reversed(db.get_branch(req.session_id, user_msg_id))
+                if message.get("id")
+            ],
+        )
 
     # 事件层 tap：无论哪条持久化路径（webui 先存 / dispatcher 自己存），
     # "用户消息提交了"都成立，所以放在分支外。
@@ -293,5 +386,56 @@ def prepare_turn(
     )
 
     if req.user_already_persisted:
-        db.merge_node_metadata(req.session_id, user_msg_id, stamp(req))
+        # The caller stored the message before this turn recalled memory or
+        # was given its note; later turns render both from the node.
+        sent_before = {key: value for key, value in (
+            ("turn_settings", getattr(req, "turn_settings", None)),
+            ("model_change", user_msg.get("model_change")),) if value}
+        db.merge_node_metadata(req.session_id, user_msg_id, {
+            **stamp(req), **sent_before, **_turn_context.node_metadata(beside)})
+    _record_last_branch(db, req)
     return session, history
+
+
+def _record_last_branch(db, req: "TurnRequest") -> None:
+    """Remember the branch a person's message was last written to
+    (``last_branch_id``): where an entry that names no branch, and a
+    conversation opened afresh, continue. A background turn (a scheduled
+    run, a check-in) is not a person's message and leaves it alone."""
+    branch = getattr(req, "branch_id", None)
+    if not branch or getattr(req, "background", False):
+        return
+    try:
+        if (db.get_session(req.session_id) or {}).get("last_branch_id") != branch:
+            db.update_session(req.session_id, last_branch_id=branch)
+    except Exception:  # noqa: BLE001 - the selected branch stays the default
+        _log.debug("last branch not recorded for %s", req.session_id, exc_info=True)
+
+
+def _interrupted_note(db, req: "TurnRequest", user_msg_id: str, parent_id: Optional[str]) -> str:
+    """The note this message carries when the reply it follows was stopped.
+
+    A message stored before this turn keeps the note it already has (a turn
+    sent again sends the same bytes); otherwise the note comes from the
+    reply the message follows on its own branch, so a message on a new
+    branch from a stopped reply carries it and a retry of the message
+    before it does not (``turn_context.interruption_note``).
+    """
+    from openprogram.runtime.context import turn_context as _turn_context
+
+    if not hasattr(db, "get_messages_by_id"):
+        return ""
+    try:
+        if req.user_already_persisted:
+            stored = (db.get_messages_by_id(req.session_id, [user_msg_id]) or [{}])[0]
+            kept = _turn_context.entry_text(_turn_context.entries(stored), "interrupted")
+            if kept or not isinstance(stored, dict):
+                return kept
+            parent_id = stored.get("predecessor") or parent_id
+        if not parent_id:
+            return ""
+        parent = (db.get_messages_by_id(req.session_id, [parent_id]) or [None])[0]
+        return _turn_context.interruption_note(_turn_context.reply_interruption(parent))
+    except Exception:  # noqa: BLE001 - the turn goes out without the note
+        _log.debug("interruption note not read for %s", req.session_id, exc_info=True)
+        return ""

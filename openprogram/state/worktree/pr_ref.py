@@ -85,7 +85,7 @@ def fetch_pr_info(pr_number: int, *, cwd: str) -> PrInfo:
         proc = subprocess.run(
             [gh, "pr", "view", str(pr_number),
              "--json", "headRefName,headRepositoryOwner,isCrossRepository"],
-            cwd=cwd, capture_output=True, text=True, timeout=_GIT_TIMEOUT_SECS,
+            cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=_GIT_TIMEOUT_SECS,
         )
     except subprocess.TimeoutExpired as e:
         raise PrRefError(f"gh pr view timed out after {_GIT_TIMEOUT_SECS}s") from e
@@ -112,7 +112,7 @@ def fetch_pr_info(pr_number: int, *, cwd: str) -> PrInfo:
 
 def _run_git(*args: str, cwd: str) -> tuple[int, str, str]:
     proc = subprocess.run(
-        ["git", *args], cwd=cwd, capture_output=True, text=True,
+        ["git", *args], cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace",
         timeout=_GIT_TIMEOUT_SECS,
     )
     return proc.returncode, proc.stdout, proc.stderr

@@ -102,6 +102,20 @@ class Worktree:
     # job is bound to at most one worktree.
     parent_session: Optional[str] = None
     parent_job: Optional[str] = None
+    # The conversation branch this worktree belongs to. A branch-scoped
+    # worktree is where that branch's turns run; other branches of the
+    # same conversation keep running in the checkout. ``None`` is a
+    # conversation-wide worktree (older records, and turns that have no
+    # branch). A sub-agent's worktree carries the branch that spawned it
+    # together with ``parent_job``.
+    parent_branch: Optional[str] = None
+    # The commit the worktree started from, resolved at create time, so
+    # "what changed" stays measured from the same point after the
+    # source repository's HEAD moves.
+    base_sha: Optional[str] = None
+    # Created for one sub-agent run (``agent(isolation="worktree")``):
+    # removed when that run ends with nothing changed in it.
+    ephemeral: bool = False
     # Default merge mode the agent will use if it doesn't override.
     merge_strategy: str = "ff-only"
     # Outcome / audit

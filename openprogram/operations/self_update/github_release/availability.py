@@ -15,6 +15,7 @@ import time
 
 from . import github
 from .detect import InstallMethod, detect_install_method
+from openprogram.host._platform import filesystem
 
 CHECK_INTERVAL_SECONDS = 24 * 3600
 RETRY_INTERVAL_SECONDS = 6 * 3600
@@ -71,7 +72,7 @@ def refresh() -> bool:
     path = _record_path()
     staging = path.with_name(f"{path.name}.staging")
     staging.write_text(json.dumps(record) + "\n", encoding="utf-8")
-    staging.replace(path)
+    filesystem.replace_file(staging, path)
     return True
 
 

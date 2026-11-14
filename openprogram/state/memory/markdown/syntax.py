@@ -57,12 +57,38 @@ def source_reference(_label: str, target: str) -> str:
     return resolved
 
 
-def definitions(
-    lines: list[str],
-) -> dict[
-    str,
-    tuple[str | None, tuple[str, ...], tuple[str, ...], tuple[str, ...]],
-]:
+Definition = tuple[str | None, tuple[str, ...], tuple[str, ...], tuple[str, ...]]
+
+
+def parse_definition(match: re.Match[str]) -> Definition:
+    """(when, chat refs, link targets, labels) of one footnote definition."""
+    citation_id = match.group("id")
+    when = match.group("when")
+    if when != "undated" and not is_valid_temporal_value(when):
+        raise TopicFormatError(f"invalid evidence date: {when}")
+    links = LINK.findall(match.group("sources"))
+    if not links:
+        raise TopicFormatError(
+            f"memory source links required: {citation_id}"
+        )
+    if any(not label.strip() for label, _target in links):
+        raise TopicFormatError(
+            f"memory source labels required: {citation_id}"
+        )
+    return (
+        None if when == "undated" else when,
+        tuple(source_reference(label, target) for label, target in links),
+        tuple(target for _label, target in links),
+        tuple(label for label, _target in links),
+    )
+
+
+def definitions(lines: list[str], *, strict: bool = True) -> dict[str, Definition]:
+    """Footnote definitions by ID.
+
+    Leniently read, a definition that does not parse, or repeats an ID,
+    is left out: a citation of it reads as plain text.
+    """
     values = {}
     for line in lines:
         match = definition_match(line)
@@ -70,27 +96,16 @@ def definitions(
             continue
         citation_id = match.group("id")
         if citation_id in values:
-            raise TopicFormatError(
-                f"duplicate footnote definition: {citation_id}"
-            )
-        when = match.group("when")
-        if when != "undated" and not is_valid_temporal_value(when):
-            raise TopicFormatError(f"invalid evidence date: {when}")
-        links = LINK.findall(match.group("sources"))
-        if not links:
-            raise TopicFormatError(
-                f"memory source links required: {citation_id}"
-            )
-        if any(not label.strip() for label, _target in links):
-            raise TopicFormatError(
-                f"memory source labels required: {citation_id}"
-            )
-        values[citation_id] = (
-            None if when == "undated" else when,
-            tuple(source_reference(label, target) for label, target in links),
-            tuple(target for _label, target in links),
-            tuple(label for label, _target in links),
-        )
+            if strict:
+                raise TopicFormatError(
+                    f"duplicate footnote definition: {citation_id}"
+                )
+            continue
+        try:
+            values[citation_id] = parse_definition(match)
+        except TopicFormatError:
+            if strict:
+                raise
     return values
 
 

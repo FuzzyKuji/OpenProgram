@@ -37,6 +37,7 @@ def _run(
     message: str,
     agent_id: str,
     base_peer: int | None,
+    branch_id: str | None = None,
 ) -> dict:
     from openprogram.runtime.conversation.merge import process_merge_turn
     out = process_merge_turn(
@@ -46,6 +47,7 @@ def _run(
         message=message,
         agent_id=agent_id,
         base_peer=base_peer,
+        target_branch_id=branch_id,
     )
     return {
         "target_assistant_id": out.target_assistant_id,
@@ -55,6 +57,7 @@ def _run(
         "failed": out.failed,
         "error": out.error,
         "base_peer": out.base_peer,
+        "branch_id": out.branch_id,
     }
 
 
@@ -143,12 +146,15 @@ async def handle_merge_branches(ws, cmd: dict) -> None:
             "error": _s.RUN_ACTIVE_ERROR,
         }
     else:
+        # The merge belongs to the branch selected when it was asked for.
+        branch_id = (cmd.get("branch_id") or "").strip() or await asyncio.to_thread(
+            _s._selected_branch, target_session_id)
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(
             None,
             lambda: _run(
                 target_session_id, peers, sub_sessions, message, agent_id,
-                base_peer,
+                base_peer, branch_id,
             ),
         )
         payload = {"session_id": target_session_id, **result}
@@ -163,9 +169,12 @@ async def handle_merge_branches(ws, cmd: dict) -> None:
         # session; mirror it into conv["head_id"] / conv["messages"]
         # BEFORE clients reload, or the next _save_session flushes the
         # stale pre-merge head back over it and orphans the merge reply.
+        # Only while the merge's branch is still selected.
         try:
-            _s._set_active_head(
-                target_session_id, payload["target_assistant_id"])
+            from openprogram.runtime.conversation.merge import still_selected
+            if still_selected(target_session_id, payload.get("branch_id")):
+                _s._set_active_head(
+                    target_session_id, payload["target_assistant_id"])
         except Exception:
             # The publisher notice below still runs; the next save may revert the merge head.
             _log.warning(

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import uuid
 
 
 def _after_graph_change(session_id: str, head_after) -> None:
@@ -32,16 +33,29 @@ def _after_graph_change(session_id: str, head_after) -> None:
     _s.refresh_context_stats(session_id)
 
 
-async def _run(ws, cmd: dict, reply_type: str, op) -> None:
+async def _run(ws, cmd: dict, reply_type: str, op, node_ids=None) -> None:
+    """Run a node operation. ``node_ids`` names the nodes it removes: only
+    the branches whose line holds one of them have to be free (each held
+    for the operation), so a turn on any other branch keeps running.
+    Without ids (a restore) every branch has to be free."""
     from openprogram.interfaces.server import server as _s
     from openprogram.state.store.session.session_store.node_deletion import NodeDeletionError
 
     session_id = cmd.get("session_id")
     data = {"session_id": session_id, "ok": False, "error": None}
+    owners: list[str] = []
+    refusal = None
+    if session_id and node_ids is not None:
+        touched = await asyncio.to_thread(_s.branches_through, session_id, node_ids)
+        refusal, owners = await asyncio.to_thread(
+            _s.reserve_branches_operation, session_id, touched, "branch", f"delete-{uuid.uuid4().hex}")
     if not session_id:
         data["error"] = "session_id required"
-    elif _s._is_run_active(session_id):
-        # The in-flight turn may be writing under the nodes we'd remove.
+    elif refusal is not None:
+        # The turn on that branch may be writing under the nodes we'd remove.
+        data.update(error=refusal["error"], code=refusal.get("code"),
+                    blocking=refusal.get("blocking"))
+    elif node_ids is None and _s._is_run_active(session_id):
         data["error"] = _s.RUN_ACTIVE_ERROR
     else:
         try:
@@ -55,6 +69,8 @@ async def _run(ws, cmd: dict, reply_type: str, op) -> None:
             data["error"] = str(e)
         except Exception as e:  # noqa: BLE001
             data["error"] = f"{type(e).__name__}: {e}"
+    if owners:
+        await asyncio.to_thread(_s.release_branches_operation, session_id, owners)
     await ws.send_text(json.dumps({"type": reply_type, "data": data}, default=str))
 
 
@@ -63,7 +79,7 @@ async def handle_delete_nodes(ws, cmd: dict) -> None:
 
     ids = [str(x) for x in (cmd.get("node_ids") or []) if x]
     await _run(ws, cmd, "nodes_deleted",
-               lambda sid: default_db().delete_nodes(sid, ids))
+               lambda sid: default_db().delete_nodes(sid, ids), node_ids=ids)
 
 
 async def handle_restore_deleted_nodes(ws, cmd: dict) -> None:

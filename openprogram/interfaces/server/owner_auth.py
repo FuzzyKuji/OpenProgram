@@ -106,9 +106,9 @@ def _write_private_text(
             handle.write(content)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(tmp, path)
-        from openprogram.host._platform.filesystem import restrict_to_user
+        from openprogram.host._platform.filesystem import replace_file, restrict_to_user
 
+        replace_file(tmp, path)
         restrict_to_user(path)
         if path.read_text(encoding="ascii") != content:
             path.unlink(missing_ok=True)

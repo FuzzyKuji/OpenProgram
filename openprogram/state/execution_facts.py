@@ -31,6 +31,8 @@ FACTS = frozenset({
     "current_job_operation_timeout",
     "record_current_job_activity",
     "forget_session_runs",
+    "turn_branch",
+    "unfinished_jobs",
 })
 
 
@@ -116,6 +118,20 @@ def record_current_job_activity(activity_kind: str) -> bool:
     return bool(provider(activity_kind)) if provider else False
 
 
+def turn_branch(session_id: str) -> str | None:
+    """The branch of the turn in flight in this context, when that turn is
+    one of ``session_id``'s; None otherwise."""
+    provider = _provider("turn_branch")
+    return provider(session_id) if provider else None
+
+
+def unfinished_jobs(session_id: str) -> list[tuple[str, str, str]]:
+    """``(id, name, status)`` of each background Job on ``session_id`` that
+    has not finished; none if no runtime ran."""
+    provider = _provider("unfinished_jobs")
+    return list(provider(session_id)) if provider else []
+
+
 __all__ = [
     "FACTS",
     "agent_registry",
@@ -127,5 +143,7 @@ __all__ = [
     "register",
     "session_chat_model",
     "session_has_live_work",
+    "turn_branch",
     "turn_running",
+    "unfinished_jobs",
 ]

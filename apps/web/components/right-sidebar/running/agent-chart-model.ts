@@ -357,30 +357,15 @@ export function opensInPlace(node: ChartNode): boolean {
   return node.depth === 1 && Boolean(run && (run.asked_preview.trim() || run.reply.trim()));
 }
 
+/** The room a closed block already gives what opens in it: a failed step's
+ *  two lines of error. Its details grow from there, and shrink back to it. */
+export const closedRoom = (node: ChartNode): number => node.depth >= 2 && node.detail ? ERROR_HEIGHT : 0;
+
 export const rootHeight = (root: Exclude<ChartRoot, { kind: "topic" }>): number => ROOT_HEIGHT[root.kind];
 
 export function forEachNode(node: ChartNode, visit: (node: ChartNode) => void) {
   visit(node);
   node.kids?.forEach(kid => forEachNode(kid, visit));
-}
-
-/** The next column's blocks reach their full height over this much of its arrival. */
-const COLUMN_ARRIVAL = 64;
-
-/** Where a sideways scroll comes to rest once it stops: on a column edge, or
- *  at the far end. A scroll that got a column far enough to read carries on
- *  to it, and one that did not falls back. */
-export function columnStop(left: number, from: number, max: number): number {
-  const lower = Math.min(max, Math.floor(left / COLUMN_WIDTH) * COLUMN_WIDTH);
-  const upper = Math.min(max, lower + COLUMN_WIDTH);
-  const enough = Math.min(COLUMN_ARRIVAL, (upper - lower) / 2);
-  return left > from ? (left - lower >= enough ? upper : lower) : (upper - left >= enough ? lower : upper);
-}
-
-/** Where one sideways swipe from a stop ends: the next column that way, never further. */
-export function pageStop(from: number, direction: number, max: number): number {
-  const next = direction > 0 ? (Math.floor(from / COLUMN_WIDTH) + 1) * COLUMN_WIDTH : (Math.ceil(from / COLUMN_WIDTH) - 1) * COLUMN_WIDTH;
-  return Math.max(0, Math.min(max, next));
 }
 
 /** A call's input for reading: the one thing it was given, or a line per
@@ -394,20 +379,47 @@ export function readableInput(input: unknown): string {
   return fields.map(([key, value]) => `${key}: ${words(value)}`).join("\n");
 }
 
-/** How many levels are open, with the part-way state only while a column
- *  is arriving: a column that shows more than that reads in full, whatever
- *  width the panel happens to rest at. */
-export function levelAt(scrollLeft: number, clientWidth: number): number {
-  const reach = scrollLeft + clientWidth - 16;
-  const whole = Math.floor(reach / COLUMN_WIDTH);
-  const arriving = Math.min(1, (reach - whole * COLUMN_WIDTH) / COLUMN_ARRIVAL);
-  return Math.min(LEVELS - 1, Math.max(0, whole - 1 + arriving));
+/** The most columns the chart shows side by side. */
+export const MAX_COLUMNS = 3;
+/** What the right sidebar takes around the chart: the card's gutter (16)
+ *  and the Activity page's own padding (16). */
+export const PANEL_INSET = 32;
+
+/** The sidebar width at which exactly `count` columns fit at their natural
+ *  width: the sidebar's snaps, the first of them its default. */
+export const panelWidthFor = (count: number): number => count * COLUMN_WIDTH + PANEL_INSET;
+export const PANEL_SNAP_WIDTHS: readonly number[] = Array.from({ length: MAX_COLUMNS }, (_, index) => panelWidthFor(index + 1));
+
+/** How many whole columns a chart this wide shows: never a part of one.
+ *  Between two snaps the columns stretch to fill the width. */
+export function columnsFor(width: number): number {
+  return Math.max(1, Math.min(MAX_COLUMNS, LEVELS, Math.floor((width + 1) / COLUMN_WIDTH)));
 }
 
-export const heightAt = (node: ChartNode, level: number): number => {
-  const below = Math.min(LEVELS - 2, Math.floor(level));
-  const fraction = Math.min(1, level - below);
-  return node.heights[below] + (node.heights[below + 1] - node.heights[below]) * fraction;
-};
+/** Which columns show: `focus` is the deepest column the reader went to, and
+ *  the view ends on it, or starts at the first column when it fits there.
+ *  `last` is also the level the chart is laid out at. */
+export function chartWindow(focus: number, count: number): { first: number; last: number } {
+  const first = Math.max(0, Math.min(LEVELS - count, focus - count + 1));
+  return { first, last: Math.min(LEVELS - 1, first + count - 1) };
+}
 
-export const easeInOut = (t: number): number => t < 0.5 ? 4 * t * t * t : 1 - Math.pow(2 - 2 * t, 3) / 2;
+/** The focus after the reader opens `column`: a column already in view moves
+ *  nothing, and is remembered for when the sidebar narrows. */
+export function focusOn(focus: number, count: number, column: number): number {
+  const { first, last } = chartWindow(focus, count);
+  if (column >= first && column <= last) return Math.max(focus, column);
+  return Math.max(0, Math.min(LEVELS - 1, column < first ? column + count - 1 : column));
+}
+
+/** One column further (1) or back (-1); null when the view is already at that end. */
+export function stepFocus(focus: number, count: number, direction: number): number | null {
+  const { first, last } = chartWindow(focus, count);
+  if (direction > 0) return last >= LEVELS - 1 ? null : last + 1;
+  return first <= 0 ? null : last - 1;
+}
+
+/** How long a move between columns takes: the slow motion tier for a whole
+ *  column, less for what is left of one, never under the fast tier. */
+export const travelMs = (distance: number, column: number): number =>
+  Math.round(Math.max(120, Math.min(240, 240 * Math.abs(distance) / Math.max(1, column))));

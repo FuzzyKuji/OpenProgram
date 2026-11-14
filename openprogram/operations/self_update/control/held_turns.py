@@ -26,6 +26,7 @@ from typing import Any, Callable
 from ..store import SelfUpdateStore
 from ..types import PROTOCOL_VERSION
 from .maintenance import closes_admission, holds_turns, load_maintenance
+from openprogram.host._platform import filesystem
 
 HELD_MESSAGE = "Switching versions; this runs as soon as that finishes."
 HELD_REASON = "SELF_UPDATE_HELD"
@@ -164,7 +165,7 @@ def _give_up(store: SelfUpdateStore, path: Path, values: dict[str, Any] | None) 
     directory = _failed(store)
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     saved = directory / path.name
-    os.replace(path, saved)
+    filesystem.replace_file(path, saved)
     _log.error("held turn %s was given up on; it is saved at %s", path.name, saved)
     _tell_owner(saved, values)
 
@@ -243,7 +244,7 @@ def drain(*, store: SelfUpdateStore | None = None, run: Callable[[dict], None] =
             for path in arrivals:
                 session_id = _session_of(target, path)
                 moved = claimed / path.name
-                os.replace(path, moved)
+                filesystem.replace_file(path, moved)
                 by_session.setdefault(session_id, []).append(moved)
                 _running.add(moved.name)
     for paths in by_session.values():

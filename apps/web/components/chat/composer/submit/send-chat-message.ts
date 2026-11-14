@@ -154,6 +154,25 @@ function reservePendingChatSend(
   };
 }
 
+/** The controls a message carries. A conversation the server has stores
+ *  each control on its branch the moment it is changed, so its messages
+ *  carry none: the branch decides, and an unchanged control never pins
+ *  the Agent's value onto it. A draft carries only the controls the person
+ *  changed in it (``draftTouched``); the rest follow the Agent. */
+export function sentControls(
+  sessionId: string | null | undefined,
+  draft: { draftTouched?: string[] } | undefined,
+  controls: { thinking: string; webSearchEnabled: boolean },
+): Record<string, unknown> {
+  const existing = Boolean(sessionId && useSessionStore.getState().conversations?.[sessionId]);
+  if (existing) return {};
+  const touched = new Set(draft?.draftTouched ?? []);
+  return {
+    ...(touched.has("thinking") ? { thinking_effort: controls.thinking } : {}),
+    ...(touched.has("webSearch") ? { web_search: controls.webSearchEnabled } : {}),
+  };
+}
+
 /**
  * Write a `chat` turn to the WebSocket. Returns `true` if the socket
  * was open and the payload was sent; `false` otherwise (caller keeps
@@ -252,9 +271,9 @@ export function sendChatMessage({
     ...(textElements?.length ? { text_elements: textElements } : {}),
     session_id: sessionId,
     client_request_id: requestId,
-    thinking_effort: thinking,
+    expected_branch_id: sessionId ? useSessionStore.getState().composerSettingsBySession[sessionId]?.active_branch_id ?? null : null,
+    ...sentControls(sessionId, draftSettings, { thinking, webSearchEnabled }),
     exec_thinking_effort: runtimeState._execThinkingEffort ?? undefined,
-    web_search: webSearchEnabled,
     permission_mode: permissionMode,
   };
   const invocation = draftSettings?.agentInvocation;

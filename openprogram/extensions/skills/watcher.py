@@ -54,10 +54,23 @@ def _try_watchdog() -> bool:
         return False
 
 
+def _scan() -> dict | None:
+    """One reading of the skill folders, or ``None`` when it could not be
+    taken (a folder vanished mid-walk, the state directory is unreadable):
+    the watcher tries again at the next tick instead of ending for good."""
+    try:
+        return _mtime_map()
+    except Exception:
+        _log.warning("skills folders could not be read; trying again", exc_info=True)
+        return None
+
+
 def _run_polling() -> None:
-    prev = _mtime_map()
+    prev = _scan()
     while not _stop.wait(5.0):
-        cur = _mtime_map()
+        cur = _scan()
+        if cur is None:
+            continue
         if cur != prev:
             prev = cur
             _emit()

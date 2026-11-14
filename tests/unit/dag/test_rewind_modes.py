@@ -1,4 +1,4 @@
-"""Rewind's three modes, per-prompt checkpoints, per-file skips, Undo and Redo."""
+"""Rewind's three modes, per-prompt checkpoints, atomic conflict refusal, Undo and Redo."""
 from __future__ import annotations
 
 import json
@@ -33,6 +33,7 @@ def store(tmp_path: Path, monkeypatch):
 def _append(store, sid, msg_id, role, pred, display=None):
     store.append_message(sid, {
         "id": msg_id, "role": role, "content": msg_id, "predecessor": pred,
+        **({"caller": "ROOT"} if role == "user" and display != "root" else {}),
         **({"display": display} if display else {}),
     })
 
@@ -139,12 +140,13 @@ def test_a_file_created_later_is_deleted(store, tmp_path):
     assert not new.exists()
 
 
-def test_restores_over_a_shell_change_and_our_own_undo(seeded):
+def test_later_shell_change_blocks_rewind(seeded, store):
     session, a = seeded
     a.write_text("a shell command wrote this\n")
-    _, result = _apply("s", "u2")
-    assert result["status"] == "committed"
-    assert a.read_text() == "two\nmore\n"
+    result = rewind_to("s", "u2")
+    assert result["status"] == "blocked"
+    assert store.get_session("s")["head_id"] == "a2"
+    assert a.read_text() == "a shell command wrote this\n"
 
 
 def test_a_shell_change_between_prompts_is_part_of_the_next_checkpoint(store, tmp_path):
@@ -158,7 +160,7 @@ def test_a_shell_change_between_prompts_is_part_of_the_next_checkpoint(store, tm
     assert a.read_text() == "shell between prompts\n"
 
 
-def test_file_another_session_changed_later_is_skipped_and_the_rest_restored(seeded, store, tmp_path):
+def test_file_another_session_changed_later_blocks_the_whole_restore(seeded, store, tmp_path):
     session, a = seeded
     b = tmp_path / "work" / "b.py"
     b.write_text("b0\n")
@@ -167,15 +169,16 @@ def test_file_another_session_changed_later_is_skipped_and_the_rest_restored(see
     other.backup_before_edit("t", str(a))
     a.write_text("other session\n")
     other.commit_after_edit("t", str(a), operation="edit")
-    plan, result = _apply("s", "u1")
+    plan, result = plan_rewind("s", "u1"), rewind_to("s", "u1")
     assert [(r["path"], r["reason"]) for r in plan["skipped"]] == [(str(a), "other_session")]
-    assert result["status"] == "committed"
+    assert result["status"] == "blocked"
     assert [r["path"] for r in result["skipped"]] == [str(a)]
-    assert a.read_text() == "other session\n" and b.read_text() == "b0\n"
-    assert rewind_marks.take_rewind_note("s").strip() == rewind_marks.NOTES["partial"]
+    assert a.read_text() == "other session\n" and b.read_text() == "b1\n"
+    assert store.get_session("s")["head_id"] == "a3"
+    assert rewind_marks.take_rewind_note("s") == ""
 
 
-def test_unsafe_path_is_skipped_per_file(seeded, tmp_path):
+def test_unsafe_path_blocks_the_whole_restore(seeded, tmp_path):
     session, a = seeded
     b = tmp_path / "work" / "b.py"
     b.write_text("b0\n")
@@ -184,10 +187,10 @@ def test_unsafe_path_is_skipped_per_file(seeded, tmp_path):
     target.write_text("elsewhere\n")
     a.unlink()
     a.symlink_to(target)
-    plan, result = _apply("s", "u1")
+    plan, result = plan_rewind("s", "u1"), rewind_to("s", "u1")
     assert [(r["path"], r["reason"]) for r in plan["skipped"]] == [(str(a), "unsafe_path")]
-    assert b.read_text() == "b0\n" and target.read_text() == "elsewhere\n"
-    assert result["status"] == "committed"
+    assert b.read_text() == "b1\n" and target.read_text() == "elsewhere\n"
+    assert result["status"] == "blocked"
 
 
 def test_a_file_that_cannot_be_captured_does_not_stop_the_edit(store, tmp_path, monkeypatch):
@@ -223,13 +226,16 @@ def test_a_file_with_no_backup_is_reported_as_skipped(store, tmp_path, monkeypat
     monkeypatch.setattr(PromptCheckpoints, "store_blob", lambda self, source: (_ for _ in ()).throw(OSError("no")))
     session.turn_edits()
     session.prompts.track(str(path))
+    session.journal.backup_before_edit("a1", str(path))
+    path.write_text("changed\n")
+    session.journal.commit_after_edit("a1", str(path), operation="edit")
     monkeypatch.undo()
     monkeypatch.setattr(
         "openprogram.state.store.session.session_store.shared._default_store", store, raising=False,
     )
     monkeypatch.setattr("openprogram.state.paths.get_state_dir", lambda: tmp_path / "state")
     plan = plan_rewind("s", "u1")
-    assert plan["status"] == "ready"
+    assert plan["status"] == "blocked"
     assert [(r["path"], r["reason"]) for r in plan["skipped"]] == [(str(path), "no_backup")]
 
 
@@ -251,8 +257,8 @@ def test_legacy_session_is_synthesized_from_the_journal_without_rewriting_it(sto
     plan = plan_rewind("s", "u1")
     assert plan["checkpoint"] == "legacy" and plan["files"][0]["reason"] == "changed_since_edit"
     assert not (session_backup_root(session.journal.session_dir) / "checkpoints").exists()
-    _, result = _apply("s", "u1")
-    assert result["status"] == "committed" and [r["path"] for r in result["skipped"]] == [str(a)]
+    result = rewind_to("s", "u1")
+    assert result["status"] == "blocked" and [r["path"] for r in result["skipped"]] == [str(a)]
     assert a.read_text() == "by hand\n"
 
 
@@ -359,6 +365,7 @@ def test_an_archived_conversation_cannot_rewind_or_switch(seeded, store):
 
 
 def test_a_code_only_note_survives_a_mark_switch_until_the_next_send(seeded, store):
+    _apply("s", "u2", mode="code")
     _apply("s", "u2", mode="conversation")
     _send_after_rewind(store, "s", "u9", "a9", "a1")
     plan = plan_rewind("s", "u1", mode="code")
@@ -422,9 +429,9 @@ def test_another_session_writing_before_our_later_edit_still_protects_the_file(s
     a.write_text("A1+B work")
     other.commit_after_edit("t", str(a), operation="edit")
     session.turn_edits((a, "A1+B work+A2"))
-    plan, result = _apply("s", "u1")
+    plan, result = plan_rewind("s", "u1"), rewind_to("s", "u1")
     assert [(r["path"], r["reason"]) for r in plan["skipped"]] == [(str(a), "other_session")]
-    assert result["status"] == "committed" and a.read_text() == "A1+B work+A2"
+    assert result["status"] == "blocked" and a.read_text() == "A1+B work+A2"
 
 
 def test_an_edit_another_session_has_started_protects_the_file(store, tmp_path):
@@ -583,7 +590,7 @@ def test_rewind_drops_read_baselines(seeded, tmp_path):
     assert read_tracking.check_fresh(str(a), session_id="s") == read_tracking.NEVER_READ
 
 
-def test_rewind_can_be_rolled_back_with_a_change_no_journal_saw(seeded, store, monkeypatch):
+def test_rewind_blocks_a_change_no_journal_saw_before_cas(seeded, store, monkeypatch):
     session, a = seeded
     a.write_text("hand written\n")
     original = CheckpointStore._apply_state
@@ -597,7 +604,7 @@ def test_rewind_can_be_rolled_back_with_a_change_no_journal_saw(seeded, store, m
     monkeypatch.setattr(store, "compare_and_set_head", lambda *a, **k: False)
     plan = plan_rewind("s", "u1", recover=False)
     result = rewind_to("s", "u1", idempotency_key="k", expected_plan_hash=plan["plan_hash"])
-    assert result["status"] == "rolled_back" and calls["count"] == 2
+    assert result["status"] == "blocked" and calls["count"] == 0
     assert a.read_text() == "hand written\n"
 
 

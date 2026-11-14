@@ -59,11 +59,11 @@ def _resolve_source_repo(source_repo: str) -> Optional[str]:
     description=(
         "Create an isolated `git worktree` on a real git repository "
         "(the user's source code, NOT OpenProgram's own session "
-        "storage). Subsequent bash / edit / write / read calls in "
-        "this session default their cwd to the new worktree, so the "
-        "agent can experiment freely without touching the source "
-        "repo's working tree. Use worktree_merge to ship the changes "
-        "back, worktree_discard to drop them.\n"
+        "storage). Subsequent bash / edit / write / read / glob / grep "
+        "/ list / apply_patch calls on this conversation branch resolve "
+        "relative paths and their default folder against the new "
+        "worktree; other branches keep the checkout. Use worktree_merge "
+        "to ship the changes back, worktree_discard to drop them.\n"
         "\n"
         "Args:\n"
         "  source_repo: absolute path of the source git repo. If "
@@ -86,7 +86,8 @@ def _resolve_source_repo(source_repo: str) -> Optional[str]:
         "for this PR, returns its path instead of creating a duplicate."
     ),
     toolset=["core"],
-    requires_approval=True,
+    # Creating a worktree changes nothing the user has; only discarding
+    # one (a deletion) asks first.
 )
 def worktree_create(
     source_repo: str = "",
@@ -109,6 +110,8 @@ def worktree_create(
     """
     sid = _current_session_id()
     mgr = get_manager()
+    from openprogram.state.worktree.store import current_branch_for
+    branch = current_branch_for(sid) if sid else None
 
     # Enforce one-active-worktree-per-session at the tool layer.
     if sid:
@@ -136,6 +139,7 @@ def worktree_create(
             base_ref=(base_ref or "HEAD").strip() or "HEAD",
             label=label.strip() or None,
             parent_session=sid,
+            parent_branch=branch,
             pr=pr.strip() or None,
         )
     except WorktreeError as e:
@@ -152,8 +156,8 @@ def worktree_create(
     msg = (
         f"[worktree_create] id={wt.id} path={wt.worktree_path} "
         f"branch={wt.branch_name} base={wt.base_ref}\n"
-        f"Active for this session. bash / edit / write / read now "
-        f"default cwd here."
+        f"Active for this branch. File tools and bash now resolve "
+        f"relative paths here."
     )
     if wt.include_synced:
         msg += f"\n.worktreeinclude: copied {len(wt.include_synced)} file(s): " \

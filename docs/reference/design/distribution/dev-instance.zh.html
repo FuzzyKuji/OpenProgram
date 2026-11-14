@@ -46,7 +46,7 @@
 <tr><th scope="row">构建</th><td><code translate="no">scripts/release/build-desktop-shell.sh</code>：electron-builder 使用发布配置但不带运行时，所以 <code translate="no">apps/desktop/package.json</code> 锁定的 Electron 先在这里运行</td></tr>
 <tr><th scope="row">签名</th><td><code translate="no">local-macos-signing.py sign --development</code>，本地身份，只签外层 App</td></tr>
 <tr><th scope="row">安装</th><td>构建在稳定版 App 旁边，绝不写进它。App 关闭时替换 bundle，之前开着就重新打开，只有用户当时正在用它才回到前台。</td></tr>
-<tr><th scope="row">浏览器工具</th><td><code translate="no">programs/applications/browser/chrome.py</code> 按 profile 选调试端口，开发版 Agent 不会操作稳定版 App 的标签页</td></tr>
+<tr><th scope="row">浏览器工具</th><td><code translate="no">programs/applications/browser/app_endpoint.py</code> 按 profile 选调试端口，开发版 Agent 不会操作稳定版 App 的标签页</td></tr>
 </tbody>
 </table>
 </details>

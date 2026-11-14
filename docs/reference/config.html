@@ -45,7 +45,7 @@ openprogram config set ui.web_port 8101</code></pre>
 <tr><th scope="row"><code translate="no">sandbox.deny_write</code></th><td>Unwritable globs, on top of the function-watcher directory and protected startup files</td><td>[]</td><td>live</td></tr>
 <tr><th scope="row"><code translate="no">sandbox.network</code></th><td>Network access</td><td>false</td><td>live</td></tr>
 <tr><th scope="row"><code translate="no">sandbox.pass_env</code></th><td>Env names passed beyond the built-in allowlist</td><td>[]</td><td>live</td></tr>
-<tr><th scope="row"><code translate="no">sandbox.unavailable_policy</code></th><td><code translate="no">refuse</code> fails the command when the backend is missing or cannot isolate; <code translate="no">warn</code> runs it unsandboxed</td><td>refuse</td><td>live</td></tr>
+<tr><th scope="row"><code translate="no">sandbox.unavailable_policy</code></th><td><code translate="no">refuse</code> fails the command when the backend is missing or cannot isolate; <code translate="no">warn</code> runs it unsandboxed</td><td>refuse; warn on Windows</td><td>live</td></tr>
 </tbody>
 </table>
 <p class="note">Backends: Seatbelt on macOS, bubblewrap on Linux, bubblewrap through the default WSL2 distribution on Windows. Docker is not an automatic fallback.</p>

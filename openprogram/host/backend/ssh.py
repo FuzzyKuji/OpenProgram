@@ -7,7 +7,11 @@ have set up key-based auth ahead of time.
 Calls share one multiplexed connection per target (``ControlMaster``),
 so the many small reads and writes a file tool makes don't each pay a
 full handshake. ``workdir`` is where commands start when the caller
-gives no cwd: an SSH environment's remote folder.
+gives no cwd: an SSH environment's remote folder. Windows' OpenSSH client
+has no connection sharing, so there every call opens its own connection.
+
+The remote side speaks UTF-8 whatever this machine's code page is, and the
+client never opens a console window of its own.
 """
 from __future__ import annotations
 
@@ -16,6 +20,7 @@ import shlex
 import subprocess
 
 from openprogram.host.backend.base import Backend, RunResult, decode_maybe
+from openprogram.host._platform.process_ownership import no_window_creation_flags
 
 
 def _control_dir() -> str | None:
@@ -72,7 +77,10 @@ class SshBackend(Backend):
                 self._ssh_argv(command, cwd),
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=timeout,
+                creationflags=no_window_creation_flags(),
             )
             return RunResult(proc.returncode, proc.stdout, proc.stderr)
         except subprocess.TimeoutExpired as e:
@@ -104,6 +112,7 @@ class SshBackend(Backend):
                 input=data if data is not None else b"",
                 capture_output=True,
                 timeout=timeout,
+                creationflags=no_window_creation_flags(),
             )
             return proc.returncode, proc.stdout, proc.stderr
         except subprocess.TimeoutExpired:
@@ -113,7 +122,8 @@ class SshBackend(Backend):
 
     def spawn_spec(self, command: str, cwd: str | None = None) -> dict:
         return {"args": ["ssh", "-T", *self._options(), self.target,
-                         self._remote_command(command, cwd)]}
+                         self._remote_command(command, cwd)],
+                "creationflags": no_window_creation_flags()}
 
     def spawn(self, command: str,
               cwd: str | None = None) -> subprocess.Popen:
@@ -126,5 +136,7 @@ class SshBackend(Backend):
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             bufsize=1,
         )

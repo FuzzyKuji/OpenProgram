@@ -272,3 +272,64 @@ def test_nightly_reorganize_covers_project_memory(setup, monkeypatch):
     )
     scheduler.reorganize_spaces()
     assert seen == [setup.personal, setup.project]
+
+
+def test_a_chat_edit_in_a_project_with_empty_memory_lands_in_the_project(
+    setup, monkeypatch, chats,
+):
+    """Background writes already go to the project while its memory is
+    still empty; an edit from the chat must land in the same place."""
+    from openprogram.programs.tools.knowledge.memory import memory as tools
+
+    monkeypatch.setattr(tools, "authority_from_message", lambda *_: OWNER)
+    said = chats.link("s1", "d1-1", "the API uses gRPC")
+    _turn_on(setup, writes=True)
+    assert not setup.project.exists()
+    accepted = json.loads(tools.memory_update(memory_changes=[{
+        "op": "create_record", "content": "The API uses gRPC.",
+        "time": "2026-01-01",
+        "sources": [{"source": said, "label": "gRPC"}],
+        "destination": {
+            "topic_path": "topics/api.md", "headings": [], "position": "end",
+        },
+    }]))
+    assert accepted["ok"] is True and accepted["layer"] == "project", accepted
+    assert "gRPC" in (setup.project / "topics/api.md").read_text(encoding="utf-8")
+    assert not (setup.personal / "topics/api.md").exists()
+    # Personal memory is still read beside it.
+    assert "tea" in tools.memory_get(path="personal:topics/note.md")
+
+
+def test_an_empty_project_adds_no_layer_while_writes_stay_personal(setup):
+    from openprogram.state.memory import project_layer
+
+    _turn_on(setup, writes=False)
+    assert project_layer.read_layers("s-project").single
+    assert not setup.project.exists()
+
+
+def test_an_empty_project_reads_as_before_while_writes_go_to_it(
+    setup, monkeypatch, chats,
+):
+    """Until the project holds notes, reads and edits of what exists are
+    the personal memory's, unqualified, exactly as with project writes
+    off; only a new record goes where the background writer puts it."""
+    from openprogram.programs.tools.knowledge.memory import memory as tools
+
+    monkeypatch.setattr(tools, "authority_from_message", lambda *_: OWNER)
+    said = chats.link("s1", "d1-1", "green tea")
+    _turn_on(setup, writes=True)
+
+    assert "personal:" not in tools.memory_get()
+    assert "tea" in tools.memory_get(path="topics/note.md")
+    assert "personal:" not in tools.memory_search(query="tea")
+    updated = json.loads(tools.memory_update(memory_changes=[{
+        "op": "update_record", "memory_id": "abc11111",
+        "content": "Personal: the user prefers green tea.",
+        "time": "2026-01-01",
+        "sources": [{"source": said, "label": "tea"}],
+    }]))
+    assert updated["ok"] is True and "layer" not in updated, updated
+    assert "green tea" in (setup.personal / "topics/note.md").read_text()
+    # Nothing landed in the project, so its workspace is not created.
+    assert not setup.project.exists()

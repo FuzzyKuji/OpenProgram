@@ -112,7 +112,7 @@ def load(state: Path) -> dict | None:
         return None
     for name in ("identity.json", "certificate.der", "password", "signing.keychain-db"):
         private(state / name)
-    value = json.loads(receipt.read_text())
+    value = json.loads(receipt.read_text(encoding="utf-8"))
     if (value.get("schema") != 1 or not re.fullmatch(r"[0-9a-f]{40}", value.get("certificate", ""))
             or fingerprint((state / "certificate.der").read_bytes()) != value["certificate"]):
         raise RuntimeError("invalid local signing identity")
@@ -123,7 +123,7 @@ def load(state: Path) -> dict | None:
 
 def create(state: Path) -> dict:
     password = secrets.token_hex(32)
-    (state / "password").write_text(password)
+    (state / "password").write_text(password, encoding="utf-8")
     (state / "password").chmod(0o600)
     keychain = str(state / "signing.keychain-db")
     with tempfile.TemporaryDirectory(prefix="generate-", dir=state) as directory:
@@ -133,7 +133,7 @@ def create(state: Path) -> dict:
                           "[dn]\nCN=OpenProgram Local Development\n[extensions]\n"
                           "basicConstraints=critical,CA:TRUE\n"
                           "keyUsage=critical,digitalSignature,keyCertSign\n"
-                          "extendedKeyUsage=critical,codeSigning\n")
+                          "extendedKeyUsage=critical,codeSigning\n", encoding="utf-8")
         run("/usr/bin/openssl", "req", "-new", "-newkey", "rsa:3072", "-nodes", "-x509",
             "-days", "3650", "-config", str(config), "-keyout", str(stage / "key.pem"),
             "-out", str(stage / "certificate.pem"))
@@ -151,14 +151,14 @@ def create(state: Path) -> dict:
             "-k", password, keychain)
     (state / "signing.keychain-db").chmod(0o600)
     value = {"schema": 1, "certificate": fingerprint((state / "certificate.der").read_bytes())}
-    (state / "identity.json").write_text(json.dumps(value) + "\n")
+    (state / "identity.json").write_text(json.dumps(value) + "\n", encoding="utf-8")
     (state / "identity.json").chmod(0o600)
     return value
 
 
 def ready(state: Path) -> None:
     keychain = str(state / "signing.keychain-db")
-    run("/usr/bin/security", "unlock-keychain", "-p", (state / "password").read_text(), keychain)
+    run("/usr/bin/security", "unlock-keychain", "-p", (state / "password").read_text(encoding="utf-8"), keychain)
     # codesign needs the certificate's keychain on its search list, even with
     # --keychain. Preserve all existing entries and never change the default
     # keychain or certificate trust settings.

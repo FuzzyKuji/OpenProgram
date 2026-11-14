@@ -7,9 +7,9 @@
 <table class="stack" id="choose">
 <thead><tr><th scope="col">你的电脑</th><th scope="col">App</th><th scope="col">终端和服务器</th></tr></thead>
 <tbody>
-<tr><th scope="row">macOS 13 或更高</th><td><a href="https://github.com/FuzzyKuji/OpenProgram/releases/download/v1.0.0/OpenProgram-1.0.0-mac-arm64.dmg">Apple 芯片 DMG</a> · <a href="https://github.com/FuzzyKuji/OpenProgram/releases/download/v1.0.0/OpenProgram-1.0.0-mac-x64.dmg">Intel DMG</a></td><td><code translate="no">curl -fsSL https://openprogram.io/install | sh</code></td></tr>
-<tr><th scope="row">glibc 2.35 或更高的 Linux<span class="arg">Ubuntu 22.04、Debian 12 或更新</span></th><td>v1.1.0 起：<a href="#linux">deb 或 AppImage</a></td><td><code translate="no">curl -fsSL https://openprogram.io/install | sh</code></td></tr>
-<tr><th scope="row">Windows 10 或 11，x64</th><td>v1.1.0 起：<a href="#windows">安装程序</a></td><td>v1.1.0 起：<code translate="no">irm https://openprogram.io/install.ps1 | iex</code><br>在此之前：<a href="#development-checkout">源码 checkout</a></td></tr>
+<tr><th scope="row">macOS 13 或更高</th><td><a href="https://github.com/FuzzyKuji/OpenProgram/releases/download/v1.1.0/OpenProgram-1.1.0-mac-arm64.dmg">Apple 芯片 DMG</a> · <a href="https://github.com/FuzzyKuji/OpenProgram/releases/download/v1.1.0/OpenProgram-1.1.0-mac-x64.dmg">Intel DMG</a></td><td><code translate="no">curl -fsSL https://openprogram.io/install | sh</code></td></tr>
+<tr><th scope="row">glibc 2.35 或更高的 Linux<span class="arg">Ubuntu 22.04、Debian 12 或更新</span></th><td><a href="#linux">deb 或 AppImage</a></td><td><code translate="no">curl -fsSL https://openprogram.io/install | sh</code></td></tr>
+<tr><th scope="row">Windows 10 或 11，x64</th><td>v1.2.0 起：<a href="#windows">安装程序</a></td><td>v1.2.0 起：<code translate="no">irm https://openprogram.io/install.ps1 | iex</code><br>在此之前：<a href="#development-checkout">源码 checkout</a></td></tr>
 </tbody>
 </table>
 <p class="note"><code translate="no">openprogram.io</code> 打不开时，直接从 GitHub 取同一份脚本：</p>
@@ -27,11 +27,11 @@ irm https://raw.githubusercontent.com/FuzzyKuji/OpenProgram/main/docs/_static_ro
 
 <h2 id="releases">每个版本提供什么</h2>
 <table class="stack" id="release-support">
-<thead><tr><th scope="col"></th><th scope="col">v1.0.0，最新已发布</th><th scope="col">v1.1.0，下一个版本</th></tr></thead>
+<thead><tr><th scope="col"></th><th scope="col">v1.1.0，最新已发布</th><th scope="col">v1.2.0，下一个版本</th></tr></thead>
 <tbody>
-<tr><th scope="row">macOS</th><td data-label="v1.0.0，最新已发布">App，已签名并公证。终端安装。</td><td data-label="v1.1.0，下一个版本">相同，并自带 Git。</td></tr>
-<tr><th scope="row">Linux</th><td data-label="v1.0.0，最新已发布">只有终端安装，x86_64 和 arm64。</td><td data-label="v1.1.0，下一个版本">增加 App：deb 和 AppImage，x86_64 和 arm64。</td></tr>
-<tr><th scope="row">Windows</th><td data-label="v1.0.0，最新已发布">没有预构建文件。PowerShell 命令会停下并说明原因，只能用源码 checkout。</td><td data-label="v1.1.0，下一个版本">增加 App 和终端安装，x64。Windows on Arm 以后再做。</td></tr>
+<tr><th scope="row">macOS</th><td data-label="v1.1.0，最新已发布">App，已签名并公证。终端安装。自带 Git。</td><td data-label="v1.2.0，下一个版本">相同。</td></tr>
+<tr><th scope="row">Linux</th><td data-label="v1.1.0，最新已发布">App（deb 和 AppImage）和终端安装，x86_64 和 arm64。</td><td data-label="v1.2.0，下一个版本">相同。</td></tr>
+<tr><th scope="row">Windows</th><td data-label="v1.1.0，最新已发布">没有 App。x64 终端压缩包在<a href="download.zh.html#v1-1-0">下载</a>页。</td><td data-label="v1.2.0，下一个版本">增加 App，x64。Windows on Arm 以后再做。</td></tr>
 </tbody>
 </table>
 <p class="note">某个版本缺少的安装包，会在 <a href="https://github.com/FuzzyKuji/OpenProgram/releases">GitHub Releases</a> 该版本说明的 "Not in this release" 下列出。<a href="download.zh.html">全部文件</a>。</p>
@@ -74,7 +74,7 @@ APPIMAGE_EXTRACT_AND_RUN=1 ./OpenProgram-X.Y.Z-linux-x86_64.AppImage</code></pre
 
 <h2 id="windows">Windows</h2>
 <ol>
-<li>v1.1.0 起，从<a href="https://github.com/FuzzyKuji/OpenProgram/releases/latest">最新版本</a>下载 <code translate="no">OpenProgram-X.Y.Z-win-x64.exe</code>。</li>
+<li>v1.2.0 起，从<a href="https://github.com/FuzzyKuji/OpenProgram/releases/latest">最新版本</a>下载 <code translate="no">OpenProgram-X.Y.Z-win-x64.exe</code>。</li>
 <li>运行它。只安装给当前账户，不需要管理员。</li>
 </ol>
 <table class="stack fixed">
@@ -95,7 +95,7 @@ APPIMAGE_EXTRACT_AND_RUN=1 ./OpenProgram-X.Y.Z-linux-x86_64.AppImage</code></pre
 <tr><th scope="row">命令提示符</th><td><code translate="no">set HTTPS_PROXY=http://proxy.example:8080</code></td></tr>
 </tbody>
 </table>
-<p class="note">不走代理的主机写进 <code translate="no">NO_PROXY</code>。安装器和 <code translate="no">openprogram upgrade</code> 都读取这两个变量。v1.1.0 起，App 的更新检查跟随系统代理设置。</p>
+<p class="note">不走代理的主机写进 <code translate="no">NO_PROXY</code>。安装器和 <code translate="no">openprogram upgrade</code> 都读取这两个变量。v1.2.0 起，App 的更新检查跟随系统代理设置。</p>
 
 <h2 id="advanced">高级</h2>
 
@@ -165,7 +165,7 @@ APPIMAGE_EXTRACT_AND_RUN=1 ./OpenProgram-X.Y.Z-linux-x86_64.AppImage</code></pre
 </details>
 
 <h2 id="development-checkout">开发 checkout</h2>
-<p>给贡献者用，v1.1.0 之前的 Windows 也用它。不定义 <code translate="no">stable</code> 通道。</p>
+<p>给贡献者用，v1.2.0 之前的 Windows 也用它。不定义 <code translate="no">stable</code> 通道。</p>
 <table class="stack fixed">
 <thead class="sr"><tr><th scope="col">平台</th><th scope="col">命令</th></tr></thead>
 <tbody>

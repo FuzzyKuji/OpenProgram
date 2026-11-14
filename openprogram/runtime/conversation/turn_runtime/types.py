@@ -57,6 +57,13 @@ class TurnResult:
     error_reason: Optional[str] = None
     error_retryable: Optional[bool] = None
     error_retry_after_s: Optional[float] = None
+    # The failure's stable category beside its reason (``errors.error_kind``:
+    # ``stream_idle``, ``stream_total``, ``memory_unavailable``, ``auth``).
+    error_kind: Optional[str] = None
+    # Which limit or refusal it was (``errors.failure_cause``): a spent quota
+    # with its reset time, a rejected key, a region or plan not served, an
+    # unreachable host. ``None`` for any other failure.
+    error_cause: Optional[dict] = None
     # Per-turn ordered LLM blocks (thinking/text/tool, in emission
     # order). Mirrors what's persisted to ``extra.blocks`` so the
     # webui result-envelope path and the after-refresh DB-rebuilt

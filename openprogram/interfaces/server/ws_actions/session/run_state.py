@@ -9,13 +9,16 @@ async def handle_get_run_state(ws, cmd: dict):
     from openprogram.interfaces.server import server as _s
     session_id = cmd.get("session_id")
     run_seq = _s._next_run_seq()
-    run_active = bool(session_id and _s._is_run_active(session_id))
+    # ``run_active`` is the selected branch's turn, as it has always been;
+    # ``running_branches`` lists every running turn with its branch.
+    run_active = bool(session_id and _s._is_selected_run_active(session_id))
     await ws.send_text(json.dumps({
         "type": "run_state",
         "data": {
             "session_id": session_id,
             "run_active": run_active,
             "run_task": _s._run_identity(session_id) if run_active else None,
+            "running_branches": _s._running_branches(session_id) if session_id else [],
             "run_seq": run_seq,
         },
     }))

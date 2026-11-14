@@ -6,8 +6,8 @@
 <thead><tr><th scope="col">Platform</th><th scope="col">Install</th><th scope="col">Terminal panes</th></tr></thead>
 <tbody>
 <tr><th scope="row">macOS</th><td>Architecture-matched DMG, copy <code translate="no">OpenProgram.app</code> to <code translate="no">/Applications</code>. Developer ID signed, notarized.</td><td>Login shell</td></tr>
-<tr><th scope="row">Windows</th><td>From v1.1.0: per-user <code translate="no">win-x64.exe</code> on a <a href="https://github.com/FuzzyKuji/OpenProgram/releases">GitHub Release</a> (<a href="../install/install.html#windows">steps</a>). Before that, use a source checkout and the browser UI.</td><td>PowerShell through ConPTY</td></tr>
-<tr><th scope="row">Linux</th><td>From v1.1.0: <a href="../install/install.html#linux">deb or AppImage</a>. Before that, the terminal install and the browser UI.</td><td>Absolute <code translate="no">SHELL</code>, then <code translate="no">/bin/bash</code>, <code translate="no">/bin/sh</code>. Reports a missing shell before starting.</td></tr>
+<tr><th scope="row">Windows</th><td>From v1.2.0: per-user <code translate="no">win-x64.exe</code> on a <a href="https://github.com/FuzzyKuji/OpenProgram/releases">GitHub Release</a> (<a href="../install/install.html#windows">steps</a>). Before that, use a source checkout and the browser UI.</td><td>PowerShell through ConPTY</td></tr>
+<tr><th scope="row">Linux</th><td><a href="../install/install.html#linux">deb or AppImage</a>, from v1.1.0.</td><td>Absolute <code translate="no">SHELL</code>, then <code translate="no">/bin/bash</code>, <code translate="no">/bin/sh</code>. Reports a missing shell before starting.</td></tr>
 </tbody>
 </table>
 <p class="note"><a href="../install/install.html">Full installation</a>. Packaged Apps start the worker from their embedded Python, needing no system Python or Node.js.</p>
@@ -143,7 +143,7 @@
 <p class="note">Never imported: passwords, payment or address autofill, downloads, cache, localStorage, Service Workers, extensions and their storage. The source profile is unchanged.</p>
 <h3>Extensions</h3>
 <p>Not supported; see <a href="../start/faq.html#browser-extensions">the FAQ</a>.</p>
-<p class="next">Design: <a href="../reference/design/ui/browser/built-in-browser.html">Built-in browser</a>, <a href="../reference/design/integrations/web-use.html">Web Use and Computer Use boundary</a></p>
+<p class="next">Design: <a href="../reference/design/ui/browser/built-in-browser.html">Built-in browser</a>, <a href="../reference/design/integrations/browser-application.html">Browser application</a></p>
 <h2>The Agent and a Browser pane</h2>
 <p>A visible built-in Browser pane in the same window attaches a bounded description of that exact tab before the first model response: title, origin, visible text, ARIA landmarks, and a browser-control tool. It works on either side or in picture-in-picture, without OS focus.</p>
 <table class="stack fixed">
@@ -255,7 +255,7 @@
 <details>
 <summary>The browser tool after a restart</summary>
 <ul>
-<li>Listing pages waits up to 20 seconds for the App, then reports <code translate="no">desktop_unavailable</code> and asks to retry. If the window is gone, other windows' pages are listed.</li>
+<li>Listing pages waits up to 20 seconds for an App that is restarting, then reports <code translate="no">desktop_unavailable</code> and asks to retry. If the window is gone, other windows' pages are listed. With the App closed there is no wait: a page an Agent opens goes into a background browser with no window and none of the App's sign-ins.</li>
 <li>An earlier session or page token leads back to the same tab with a fresh observation. The action is not repeated and closed pages are not reopened.</li>
 <li>An unknown tab returns the current pages with fresh tokens.</li>
 <li>A screenshot right after an action observes first, so it does not fail as stale.</li>

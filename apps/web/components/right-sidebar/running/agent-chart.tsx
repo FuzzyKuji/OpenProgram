@@ -1,30 +1,32 @@
 "use client";
 
 /** An Agent's time chart. React draws the blocks; where they sit is written
- *  straight on the elements, because it follows every frame of a sideways
- *  scroll. A block with more under it leads one column right; a block that
- *  is one call or one message opens its details in place. */
-import { useCallback, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type MouseEvent, type RefObject } from "react";
+ *  straight on the elements. The sidebar's width decides how many whole
+ *  columns show; moving between columns slides the track by its transform
+ *  alone, with the blocks already laid out for where it ends. A block with
+ *  more under it leads one column right; a block that is one call or one
+ *  message opens its details in place. */
+import { useCallback, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type MouseEvent, type MutableRefObject, type RefObject } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { availableExecutionActions, buildExecutionCommand, newCommandId, type ExecutionCommandAction, type ExecutionSnapshot } from "@/lib/execution/execution-debugger";
 import type { ActivityRun } from "@/lib/net/execution/activity-runs-client";
 import { processIsActive } from "@/lib/net/execution/process-client";
-import type { ActivityPanelContext } from "./activity-page-types";
+import type { ActivityPanelContext, PagePull } from "./activity-page-types";
 import { ActivityKeyValue, ActivityRowStoreReact, createActivityRowStore } from "./activity-page-row";
 import { stepTitle } from "./activity-run-wording";
-import { COLUMN_WIDTH, HEADER_HEIGHT, LEVELS, buildChart, columnStop, easeInOut, pageStop, readableInput, forEachNode, heightAt, levelAt, opensInPlace, paintColor, rootHeight, sizeChart, type ChartNode, type ChartRoot } from "./agent-chart-model";
+import { COLUMN_WIDTH, HEADER_HEIGHT, LEVELS, buildChart, chartWindow, closedRoom, columnsFor, focusOn, readableInput, forEachNode, opensInPlace, paintColor, rootHeight, sizeChart, stepFocus, travelMs, type ChartNode, type ChartRoot } from "./agent-chart-model";
 import { useExecutionControls } from "./execution-controls";
 import { EventDetail } from "./run-insides";
+import { observeSwipe, rubberBand, swipeTurns, tweenTo } from "./sideways";
 import { useActivityRuns } from "./use-activity-runs";
 import { useRunInspection } from "./use-run-inspection";
 import styles from "./agent-chart.module.css";
 
-const TRAVEL_MS = 620;
-/** How long the wheel stays quiet before a sideways scroll settles on a column. */
-const SETTLE_MS = 160;
-/** How far a sideways swipe goes before it turns the column. */
+/** How far a sideways swipe goes before lifting the fingers turns the column. */
 const SWIPE_TURNS = 48;
+/** How long a block takes to open over its details or close over them: --motion-slow. */
+const GROW_MS = 240;
 const NO_ROWS_OPEN = () => false;
 
 interface AgentChartProps {
@@ -34,6 +36,10 @@ interface AgentChartProps {
   reportName: (run: ActivityRun) => string | null;
   nextWake: { at: number; line: string } | null;
   onOpenNextWake: () => void;
+  /** Set to what moves the chart one column back, for the page's Back. */
+  stepBack?: MutableRefObject<(() => boolean) | null>;
+  /** A swipe past the first column pulls the page itself: the way back. */
+  onPull?: PagePull;
 }
 
 const LIVE_ACTIONS: readonly ExecutionCommandAction[] = ["pause", "continue", "cancel"];
@@ -140,8 +146,8 @@ function Block({ node, context, executionOf, open, onOpen, onBack, onMeasure }: 
   </div>;
 }
 
-/** The chart's elements, found once per chart: a frame of a sideways scroll
- *  writes to all of them, and looking them up again cost more than the writes. */
+/** The chart's elements, found once per chart: a layout writes to all of
+ *  them, and looking them up again cost more than the writes. */
 interface ChartParts {
   blocks: Map<string, HTMLElement>;
   bars: Map<string, HTMLElement>;
@@ -161,7 +167,13 @@ function findParts(content: HTMLElement): ChartParts {
   return { blocks, bars, others, cells: new Map(all("[data-chart-cell]").map(element => [element.dataset.chartCell!, element])), columnElements: all("[data-chart-column]"), crumbs: all("[data-chart-crumb]") };
 }
 
-export function AgentChart({ head, context, box, reportName, nextWake, onOpenNextWake }: AgentChartProps) {
+function nodesByDepth(roots: ChartRoot[]): ChartNode[][] {
+  const columns: ChartNode[][] = Array.from({ length: LEVELS }, () => []);
+  for (const root of roots) if (root.kind === "topic") forEachNode(root.node, node => columns[node.depth].push(node));
+  return columns;
+}
+
+export function AgentChart({ head, context, box, reportName, nextWake, onOpenNextWake, stepBack, onPull }: AgentChartProps) {
   const { text, now } = context;
   const source = useMemo(() => ({ kind: "branch" as const, head }), [head]);
   const { runs, total, loaded, failed, showMore } = useActivityRuns({ sessionId: context.sessionId, source, active: context.active, isOpen: NO_ROWS_OPEN, openVersion: 0, chart: true });
@@ -189,14 +201,21 @@ export function AgentChart({ head, context, box, reportName, nextWake, onOpenNex
   }), [runs, total, beat, waiting, text, executionOf, nextWake?.at, nextWake?.line, context.processes.calls, context.processes.items]);
 
   const inner = useRef<HTMLDivElement>(null);
-  const pin = useRef<{ node: ChartNode; view: number } | null>(null);
-  const travel = useRef(0);
-  const frame = useRef(0);
-  const moving = useRef(false);
-  const settling = useRef(0);
   const parts = useRef<ChartParts | null>(null);
   const rootsNow = useRef(roots);
   rootsNow.current = roots;
+  const columnsNow = useRef<ChartNode[][]>([]);
+  // The columns: how many show, how wide each is, the deepest one the reader
+  // went to, the level the blocks are laid out at, and where the track sits.
+  const count = useRef(1);
+  const columnWidth = useRef(COLUMN_WIDTH);
+  const focus = useRef(0);
+  const drawn = useRef(-1);
+  const shift = useRef(0);
+  // A move between columns, or fingers on the trackpad, owns the track.
+  const moving = useRef(false);
+  const stopTravel = useRef<() => void>(() => {});
+  const frame = useRef(0);
   // Which blocks are open, and how tall each one's details measured.
   const [store] = useState(createActivityRowStore);
   useSyncExternalStore(store.subscribe, store.version, store.version);
@@ -206,46 +225,75 @@ export function AgentChart({ head, context, box, reportName, nextWake, onOpenNex
     sizeChart(rootsNow.current);
   }, []);
 
-  const layout = useCallback(() => {
+  const setShift = useCallback((x: number) => {
+    shift.current = x;
+    if (inner.current) inner.current.style.transform = x ? `translate3d(${x}px,0,0)` : "";
+  }, []);
+
+  /** Draws the blocks near the view and names each column's parent. It
+   *  moves nothing, so it can run on every frame of a vertical scroll. */
+  const reveal = useCallback(() => {
+    const scroller = box.current;
+    const found = parts.current;
+    if (!scroller || !found) return;
+    const columns = columnsNow.current;
+    const at = scroller.scrollTop;
+    const view = scroller.clientHeight || 0;
+    // Only blocks near the view are drawn: a long chart has hundreds a screen away.
+    if (view > 0) {
+      const show = (element: HTMLElement | undefined, node: ChartNode) => {
+        if (!element) return;
+        const display = node.top < at + 2 * view && node.top + node.height > at - view ? "" : "none";
+        if (element.style.display !== display) element.style.display = display;
+      };
+      for (let depth = 0; depth < LEVELS - 1; depth += 1) for (const node of columns[depth] ?? []) show(found.blocks.get(node.id), node);
+      for (const node of columns[LEVELS - 2] ?? []) if (node.kids) show(found.cells.get(node.id), node);
+    }
+    found.crumbs.forEach(crumb => {
+      const list = columns[Number(crumb.dataset.chartCrumb)] ?? [];
+      const top = list.find(node => node.top + node.height > at + HEADER_HEIGHT);
+      const name = top?.parent ? top.parent.title ?? top.parent.line : "";
+      if (crumb.textContent !== name) crumb.textContent = name;
+    });
+  }, [box]);
+
+  /** Lays every block out at one level, at once. The block given as `held`,
+   *  or else the one at the top of the view, keeps its place on screen. */
+  const place = useCallback((level: number, held: ChartNode | null = null) => {
     const scroller = box.current;
     const content = inner.current;
     if (!scroller || !content) return;
-    const place = (element: HTMLElement | undefined, top: number, height: number) => { if (element) { element.style.top = `${top}px`; element.style.height = `${height}px`; } };
-    const { blocks, bars, cells, others, columnElements, crumbs } = parts.current ??= findParts(content);
+    const put = (element: HTMLElement | undefined, top: number, height: number) => { if (element) { element.style.top = `${top}px`; element.style.height = `${height}px`; } };
+    const { blocks, bars, cells, others, columnElements } = parts.current ??= findParts(content);
+    const columns = columnsNow.current = nodesByDepth(rootsNow.current);
     // Read the box before any write below, or each read costs a layout.
-    const width = scroller.clientWidth || 0;
-    const view = scroller.clientHeight || 0;
-    const level = levelAt(scroller.scrollLeft || 0, width);
-    const columns: ChartNode[][] = Array.from({ length: LEVELS }, () => []);
-    for (const root of rootsNow.current) if (root.kind === "topic") forEachNode(root.node, node => columns[node.depth].push(node));
-
-    // The block the reader is looking at stays where it is while heights change.
-    const held = pin.current;
-    let anchor: ChartNode | undefined = held?.node;
+    const at = scroller.scrollTop;
+    let anchor: ChartNode | undefined = held ?? undefined;
+    const offset = held ? held.top - at : 0;
     let fraction = 0;
-    if (!anchor) {
-      const at = scroller.scrollTop;
-      anchor = columns[Math.min(LEVELS - 1, Math.round(level))].filter(node => node.depth < LEVELS - 1 && node.height > 0).find(node => node.top + node.height > at);
+    if (!anchor && at >= 1) {
+      const depth = Math.min(LEVELS - 2, drawn.current < 0 ? level : Math.min(drawn.current, level));
+      anchor = columns[depth].find(node => node.height > 0 && node.top + node.height > at);
       if (anchor) fraction = (at - anchor.top) / anchor.height;
     }
 
     const placeNode = (node: ChartNode, top: number): number => {
-      const height = heightAt(node, level);
+      const height = node.heights[level];
       const moved = node.top !== top || node.height !== height;
       node.top = top; node.height = height;
       if (moved) {
-        place(blocks.get(node.id), top, height);
+        put(blocks.get(node.id), top, height);
         const bar = bars.get(node.id);
         if (bar) bar.style.height = `${Math.max(2, height - 6)}px`;
       }
       if (!node.kids) return height;
       if (node.depth === LEVELS - 2) {
         const cell = cells.get(node.id);
-        if (moved) place(cell, top, height);
+        if (moved) put(cell, top, height);
         let below = 0;
         for (const kid of node.kids) below += placeNode(kid, below);
         if (cell) {
-          const scrolls = level > LEVELS - 1.02 && below > height + 1;
+          const scrolls = level === LEVELS - 1 && below > height + 1;
           // Setting scrollTop lays the page out, so only a cell that did scroll is reset.
           if (scrolls) cell.dataset.scrolls = "1";
           else if (cell.dataset.scrolls) { delete cell.dataset.scrolls; cell.scrollTop = 0; }
@@ -261,158 +309,223 @@ export function AgentChart({ head, context, box, reportName, nextWake, onOpenNex
     for (const root of rootsNow.current) {
       if (root.kind === "topic") { y += placeNode(root.node, y); continue; }
       const height = rootHeight(root);
-      others.get(root.id)?.forEach(element => place(element, y, height));
+      others.get(root.id)?.forEach(element => put(element, y, height));
       if (root.kind === "next") { const bar = others.get(root.id)?.[0]?.querySelector<HTMLElement>("[data-bar]"); if (bar) bar.style.height = `${height - 6}px`; }
       y += height;
     }
     content.style.height = `${y + 12}px`;
-    columnElements.forEach(column => { column.style.height = `${y}px`; });
-    if (width > 0) content.style.paddingRight = width < 2 * COLUMN_WIDTH ? `${width - COLUMN_WIDTH}px` : "0px";
-    if (anchor) scroller.scrollTop = held ? anchor.top - held.view : anchor.top + fraction * anchor.height;
-
-    const at = scroller.scrollTop;
-    // Only blocks near the view are drawn: a long chart has hundreds a screen away.
-    if (view > 0) {
-      const show = (element: HTMLElement | undefined, node: ChartNode) => {
-        if (!element) return;
-        const display = node.top < at + 2 * view && node.top + node.height > at - view ? "" : "none";
-        if (element.style.display !== display) element.style.display = display;
-      };
-      for (let depth = 0; depth < LEVELS - 1; depth += 1) for (const node of columns[depth]) show(blocks.get(node.id), node);
-      for (const node of columns[LEVELS - 2]) if (node.kids) show(cells.get(node.id), node);
-    }
-    // A column on its way in fades in as its blocks open, instead of showing them stacked.
-    const arriving = level % 1;
     columnElements.forEach((column, depth) => {
-      const opacity = arriving > 0 && depth === Math.floor(level) + 1 ? String(arriving * arriving) : "";
+      column.style.height = `${y}px`;
+      // A column deeper than the level is not laid out for reading: it is
+      // never seen, even while it slides out.
+      const opacity = depth > level ? "0" : "";
       if (column.style.opacity !== opacity) column.style.opacity = opacity;
     });
-    crumbs.forEach(crumb => {
-      const list = columns[Number(crumb.dataset.chartCrumb)];
-      const top = list.find(node => node.top + node.height > at + HEADER_HEIGHT);
-      const name = top?.parent ? top.parent.title ?? top.parent.line : "";
-      if (crumb.textContent !== name) crumb.textContent = name;
-    });
+    drawn.current = level;
+    if (anchor && anchor.height > 0) {
+      const top = held ? anchor.top - offset : anchor.top + fraction * anchor.height;
+      if (Math.abs(scroller.scrollTop - top) >= 1) scroller.scrollTop = top;
+    }
+    reveal();
+  }, [box, reveal]);
+
+  /** How many columns the width holds and how wide each is. True when that changed. */
+  const fit = useCallback((): boolean => {
+    const scroller = box.current;
+    const content = inner.current;
+    const width = scroller?.clientWidth ?? 0;
+    if (!scroller || !content || width <= 0) return false;
+    const columns = columnsFor(width);
+    const each = width / columns;
+    if (columns === count.current && each === columnWidth.current && content.style.getPropertyValue("--chart-col")) return false;
+    count.current = columns;
+    columnWidth.current = each;
+    content.style.setProperty("--chart-col", `${each}px`);
+    return true;
   }, [box]);
 
-  useLayoutEffect(() => { parts.current = null; if (extras.current.size) applyExtras(); layout(); }, [roots, layout, applyExtras]);
-  const onMeasure = useCallback((id: string, height: number) => {
-    if (!store.has(id) || extras.current.get(id) === height) return;
-    extras.current.set(id, height);
-    applyExtras();
-    layout();
-  }, [store, applyExtras, layout]);
-  const moveTo = useCallback((target: number, held: ChartNode | null) => {
-    const scroller = box.current;
-    if (!scroller) return;
-    const from = scroller.scrollLeft;
-    const to = Math.max(0, Math.min(target, scroller.scrollWidth - scroller.clientWidth));
-    if (Math.abs(to - from) < 1) return;
-    const token = ++travel.current;
-    moving.current = true;
-    window.clearTimeout(settling.current);
-    pin.current = held ? { node: held, view: held.top - scroller.scrollTop } : null;
-    const still = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
-    // A full column takes the whole time; the last few pixels of a settle don't.
-    const duration = TRAVEL_MS * Math.min(1, 0.4 + 0.6 * Math.abs(to - from) / COLUMN_WIDTH);
-    const started = performance.now();
-    const step = (time: number) => {
-      if (token !== travel.current) return;
-      const progress = still ? 1 : Math.min(1, Math.max(0, time - started) / duration);
-      scroller.scrollLeft = from + (to - from) * easeInOut(progress);
-      layout();
-      if (progress < 1) requestAnimationFrame(step); else { pin.current = null; moving.current = false; }
-    };
-    requestAnimationFrame(step);
-  }, [box, layout]);
+  /** The view the focus asks for, at once: a width change lands in its own frame. */
+  const rest = useCallback(() => {
+    stopTravel.current();
+    moving.current = false;
+    if (inner.current) inner.current.style.willChange = "";
+    const { first, last } = chartWindow(focus.current, count.current);
+    setShift(-first * columnWidth.current);
+    if (last !== drawn.current) place(last);
+  }, [place, setShift]);
 
   useLayoutEffect(() => {
+    parts.current = null;
+    if (extras.current.size) applyExtras();
+    fit();
+    const { first, last } = chartWindow(focus.current, count.current);
+    if (!moving.current) setShift(-first * columnWidth.current);
+    place(drawn.current < 0 ? last : drawn.current);
+  }, [roots, place, fit, setShift, applyExtras]);
+
+  // An opened block grows to its details and shrinks away from them in one
+  // move of the slow tier, the same as a column's; the blocks below ride along.
+  const growing = useRef(new Map<string, () => void>());
+  const wanted = useRef(new Map<string, number>());
+  const closing = useRef(new Set<string>());
+  const growTo = useCallback((id: string, to: number, onDone?: () => void) => {
+    let from = extras.current.get(id);
+    if (from === undefined) {
+      // A step that failed already shows two lines of its error: the details grow out of those.
+      from = 0;
+      for (const root of rootsNow.current) if (root.kind === "topic") forEachNode(root.node, node => { if (node.id === id) from = closedRoom(node); });
+    }
+    growing.current.get(id)?.();
+    growing.current.set(id, tweenTo(from, to, GROW_MS, value => {
+      extras.current.set(id, value);
+      applyExtras();
+      place(drawn.current);
+    }, () => { growing.current.delete(id); onDone?.(); }));
+  }, [applyExtras, place]);
+  const onMeasure = useCallback((id: string, height: number) => {
+    if (!store.has(id) || closing.current.has(id) || wanted.current.get(id) === height) return;
+    wanted.current.set(id, height);
+    growTo(id, height);
+  }, [store, growTo]);
+  useLayoutEffect(() => {
+    const running = growing.current;
+    return () => { running.forEach(stop => stop()); running.clear(); };
+  }, []);
+
+  /** Moves the view to `target`, the deepest column to show. The blocks are
+   *  laid out for where it ends before it starts, so the move is the track
+   *  sliding and nothing else; `held` keeps its place on screen. */
+  const travel = useCallback((target: number, held: ChartNode | null) => {
+    const content = inner.current;
+    if (!content) return;
+    stopTravel.current();
+    focus.current = target;
+    const { first, last } = chartWindow(target, count.current);
+    if (last !== drawn.current) place(last, held);
+    const from = shift.current;
+    const to = -first * columnWidth.current;
+    const done = () => { moving.current = false; content.style.willChange = ""; stopTravel.current = () => {}; };
+    if (Math.abs(to - from) < 0.5) { setShift(to); done(); return; }
+    moving.current = true;
+    content.style.willChange = "transform";
+    stopTravel.current = tweenTo(from, to, travelMs(to - from, columnWidth.current), setShift, done);
+  }, [place, setShift]);
+
+  const pull = useRef(onPull);
+  pull.current = onPull;
+  useLayoutEffect(() => {
     const scroller = box.current;
-    if (!scroller) return;
-    let lastLeft = scroller.scrollLeft;
-    let gestureFrom: number | null = null;
+    const content = inner.current;
+    if (!scroller || !content) return;
+    const onPull = { move: (distance: number) => pull.current?.move(distance), end: (distance: number, speed: number) => pull.current?.end(distance, speed) };
+    // Columns move by the track's transform alone; the box never scrolls sideways.
     const onScroll = () => {
-      if (!frame.current) frame.current = requestAnimationFrame(() => { frame.current = 0; layout(); });
-      const left = scroller.scrollLeft;
-      if (left === lastLeft) return;
-      if (moving.current || swipe) { lastLeft = left; return; }
-      gestureFrom ??= lastLeft;
-      lastLeft = left;
-      // Still scrolling holds the chart where it is; once the wheel goes quiet it settles on a column.
-      window.clearTimeout(settling.current);
-      settling.current = window.setTimeout(() => {
-        const from = gestureFrom ?? scroller.scrollLeft;
-        gestureFrom = null;
-        moveTo(columnStop(scroller.scrollLeft, from, scroller.scrollWidth - scroller.clientWidth), null);
-      }, SETTLE_MS);
+      if (scroller.scrollLeft) scroller.scrollLeft = 0;
+      if (!frame.current) frame.current = requestAnimationFrame(() => { frame.current = 0; reveal(); });
     };
-    // A sideways swipe turns one column, like a page: the chart follows the
-    // hand until the swipe has gone far enough, then travels to the next
-    // column, and what is left of the swipe and its momentum moves nothing.
-    let swipe: { from: number; sum: number; turned: boolean; peak: number; low: number } | null = null;
-    let quiet = 0;
-    let target = scroller.scrollLeft;
-    const onWheel = (event: WheelEvent) => {
-      if (Math.abs(event.deltaX) <= Math.abs(event.deltaY)) return;
-      event.preventDefault();
-      window.clearTimeout(quiet);
-      window.clearTimeout(settling.current);
-      const size = Math.abs(event.deltaX);
-      // A swipe rises once and then fades, momentum included, so one that has
-      // faded and grows again is a new swipe.
-      if (swipe?.turned && swipe.low < swipe.peak * 0.6 && size > swipe.low * 1.5 && size > swipe.low + 8) swipe = null;
-      if (!swipe) {
-        const from = moving.current ? target : scroller.scrollLeft;
-        travel.current += 1; moving.current = false; pin.current = null;
-        swipe = { from, sum: 0, turned: false, peak: size, low: size };
-      }
-      if (size > swipe.peak) { swipe.peak = size; swipe.low = size; } else swipe.low = Math.min(swipe.low, size);
-      if (!swipe.turned) {
-        swipe.sum += event.deltaX;
-        const max = scroller.scrollWidth - scroller.clientWidth;
-        if (Math.abs(swipe.sum) >= SWIPE_TURNS) { swipe.turned = true; target = pageStop(swipe.from, swipe.sum, max); moveTo(target, null); }
-        else scroller.scrollLeft = swipe.from + swipe.sum;
-      }
-      quiet = window.setTimeout(() => {
-        const ended = swipe;
-        swipe = null;
-        if (ended && !ended.turned) moveTo(ended.from, null);
-      }, SETTLE_MS);
+    // A sideways swipe turns one column: the track follows the fingers, a
+    // column at most; when they lift it carries on to the column they were
+    // heading for if they went far or fast enough, and otherwise returns,
+    // in one move. Past the last column it gives a little. Past the first,
+    // the whole page follows: that is the way back.
+    let home = 0;
+    let start = 0;
+    let pulled = 0;
+    const stopSwipe = observeSwipe(scroller, {
+      begin: () => {
+        // A swipe that starts while the track still moves carries on from where it is.
+        stopTravel.current();
+        home = focus.current;
+        start = shift.current;
+        moving.current = true;
+        content.style.willChange = "transform";
+        return true;
+      },
+      move: moved => {
+        const each = columnWidth.current;
+        const columns = count.current;
+        const homeX = -chartWindow(home, columns).first * each;
+        const back = homeX > -0.5 && start > -0.5 && pull.current ? Math.max(0, -moved) : 0;
+        if (back > 0 || pulled > 0) { pulled = back; onPull.move(back); }
+        if (back > 0) { setShift(0); return; }
+        let x = Math.max(homeX - each, Math.min(homeX + each, start - moved));
+        // The column coming in from the right is laid out before it shows.
+        const ahead = x < homeX - 0.5 ? stepFocus(home, columns, 1) : null;
+        const level = chartWindow(ahead ?? home, columns).last;
+        if (level !== drawn.current) place(level);
+        const far = -(LEVELS - columns) * each;
+        if (x > 0) x = rubberBand(x);
+        else if (x < far) x = far + rubberBand(x - far);
+        setShift(x);
+      },
+      end: (moved, speed) => {
+        if (pulled > 0) { const distance = pulled; pulled = 0; moving.current = false; content.style.willChange = ""; onPull.end(distance, -speed); return; }
+        const next = swipeTurns(moved, speed, SWIPE_TURNS) ? stepFocus(home, count.current, Math.sign(moved)) : null;
+        travel(next ?? home, null);
+      },
+      notch: direction => {
+        const next = stepFocus(focus.current, count.current, direction);
+        if (next !== null) travel(next, null);
+      },
+    }, true);
+    // Keyboard focus on a block out of view brings its column in.
+    const onFocusIn = (event: FocusEvent) => {
+      const column = event.target instanceof HTMLElement ? event.target.closest<HTMLElement>("[data-chart-column]") : null;
+      if (scroller.scrollLeft) scroller.scrollLeft = 0;
+      if (!column || moving.current) return;
+      const depth = Number(column.dataset.chartColumn);
+      const { first, last } = chartWindow(focus.current, count.current);
+      if (depth < first || depth > last) travel(focusOn(focus.current, count.current, depth), null);
     };
     scroller.addEventListener("scroll", onScroll);
-    scroller.addEventListener("wheel", onWheel, { passive: false });
-    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(layout);
+    content.addEventListener("focusin", onFocusIn);
+    // The sidebar's width decides the columns in the frame it changes.
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => { if (fit()) rest(); else reveal(); });
     observer?.observe(scroller);
     return () => {
       scroller.removeEventListener("scroll", onScroll);
-      scroller.removeEventListener("wheel", onWheel);
+      content.removeEventListener("focusin", onFocusIn);
+      stopSwipe();
       observer?.disconnect();
       cancelAnimationFrame(frame.current);
-      window.clearTimeout(settling.current);
-      window.clearTimeout(quiet);
-      frame.current = 0; travel.current += 1; moving.current = false;
+      frame.current = 0;
+      // A move cut short lands where it was going.
+      if (moving.current) rest();
     };
-  }, [box, layout, moveTo]);
+  }, [box, place, reveal, fit, rest, travel, setShift]);
 
   const open = useCallback((node: ChartNode) => {
-    if (node.kids?.length) { moveTo((node.depth + 1) * COLUMN_WIDTH, node); return; }
-    if (!opensInPlace(node)) return;
-    store.toggle(node.id);
-    if (store.has(node.id) || !extras.current.delete(node.id)) return;
-    applyExtras();
-    layout();
-  }, [moveTo, store, applyExtras, layout]);
-  const back = useCallback(() => { const scroller = box.current; if (scroller) moveTo(scroller.scrollLeft - COLUMN_WIDTH, null); }, [box, moveTo]);
+    if (node.kids?.length) { travel(focusOn(focus.current, count.current, node.depth + 1), node); return; }
+    if (!opensInPlace(node) || closing.current.has(node.id)) return;
+    if (!store.has(node.id)) { store.toggle(node.id); return; }
+    // Its details stay until the block has closed over them.
+    closing.current.add(node.id);
+    wanted.current.delete(node.id);
+    growTo(node.id, closedRoom(node), () => {
+      closing.current.delete(node.id);
+      extras.current.delete(node.id);
+      store.toggle(node.id);
+      applyExtras();
+      place(drawn.current);
+    });
+  }, [travel, store, growTo, applyExtras, place]);
+  /** One column back. False when the first column is already in view. */
+  const back = useCallback(() => {
+    const next = stepFocus(focus.current, count.current, -1);
+    if (next === null) return false;
+    travel(next, null);
+    return true;
+  }, [travel]);
+  useLayoutEffect(() => { if (!stepBack) return; stepBack.current = back; return () => { stepBack.current = null; }; }, [stepBack, back]);
 
   const names = [text("Topics", "话题"), text("Messages", "消息"), text("Steps", "步骤"), text("Inside a step", "步骤里面")];
-  const nodes: ChartNode[][] = Array.from({ length: LEVELS }, () => []);
-  for (const root of roots) if (root.kind === "topic") forEachNode(root.node, node => nodes[node.depth].push(node));
+  const nodes = nodesByDepth(roots);
   const block = (node: ChartNode) => <Block key={node.id} node={node} context={context} executionOf={executionOf} open={store.has(node.id)} onOpen={open} onBack={back} onMeasure={onMeasure} />;
   const others = roots.filter((root): root is Exclude<ChartRoot, { kind: "topic" }> => root.kind !== "topic");
 
   return <ActivityRowStoreReact.Provider value={store}><div ref={box as RefObject<HTMLDivElement>} className={styles.cols}>
     <div ref={inner} className={styles.inner}>
-      {names.map((name, depth) => <div key={name} className={styles.col} data-chart-column="1">
+      {names.map((name, depth) => <div key={name} className={styles.col} data-chart-column={depth}>
         <div className={styles.ch}><span>{name}</span>{depth > 0 ? <span className={styles.crumb} data-chart-crumb={depth} /> : null}</div>
         {depth < LEVELS - 1 ? nodes[depth].map(block) : nodes[LEVELS - 2].filter(node => node.kids).map(node => <div key={node.id} className={styles.cell} data-chart-cell={node.id}>{node.kids!.map(block)}</div>)}
         {others.map(root => {
@@ -427,7 +540,7 @@ export function AgentChart({ head, context, box, reportName, nextWake, onOpenNex
           </div>;
         })}
       </div>)}
-      {loaded && runs.length === 0 ? <div className={styles.empty} style={{ position: "absolute", top: HEADER_HEIGHT, left: 0, width: COLUMN_WIDTH }}>{failed ? text("Could not read the runs. Retrying automatically.", "读不到运行记录，正在自动重试。") : text("No runs yet.", "还没有运行记录。")}</div> : null}
+      {loaded && runs.length === 0 ? <div className={styles.empty} style={{ position: "absolute", top: HEADER_HEIGHT, left: 0, width: "var(--chart-col)" }}>{failed ? text("Could not read the runs. Retrying automatically.", "读不到运行记录，正在自动重试。") : text("No runs yet.", "还没有运行记录。")}</div> : null}
     </div>
   </div></ActivityRowStoreReact.Provider>;
 }

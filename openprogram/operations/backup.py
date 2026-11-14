@@ -44,6 +44,7 @@ INCLUDED: tuple[str, ...] = (
     "session_aliases.json",
     "config.json",  # main configuration
     "cli-config.json",
+    "keybindings.json",  # terminal UI key overrides
     "agents",  # per-agent definitions
     "agents.json",
     "programs_meta.json",
@@ -105,7 +106,8 @@ REGENERATED: tuple[str, ...] = (
     "migrations", "worktrees", "system-access-grant.json", "ssh", "source", "artifacts",
     # live process files and secrets that are issued again
     "web", "web.lock", "mcp_server_token", "browser-cdp-port", "browser-cdp.lock",
-    "worker.lock", "worker.log", "worker.pid", "worker.port", "worker-service.cmd",
+    "worker.lock", "worker.log", "worker.pid", "worker.port", "worker.stop",
+    "worker-service.cmd",
     ".restore.lock", ".restore-journal.d", ".restore-journal.json", ".write-test",
 )
 

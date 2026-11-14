@@ -4,7 +4,7 @@
 
 <dl class="pairs">
 <dt>Owner</dt><dd><code translate="no">authority_tier == "owner"</code> and <code translate="no">principal_id == owner_principal_id()</code>. Whether someone is watching is not part of it.</dd>
-<dt>Can approve</dt><dd><code translate="no">can_approve(req)</code>: owner, <code translate="no">speaker_kind == "owner"</code>, <code translate="no">interaction == "interactive"</code>, capability <code translate="no">approval.request</code></dd>
+<dt>Can approve</dt><dd><code translate="no">can_approve(req)</code>: owner, <code translate="no">speaker_kind == "owner"</code>, <code translate="no">interaction == "interactive"</code>, capability <code translate="no">approval.request</code>; or a foreground helper whose request carries <code translate="no">asks_through</code>, asked on its caller's card (<a href="../collaboration/agent-collaboration.html#permissions">agent collaboration</a>)</dd>
 <dt>Bypass permissions</dt><dd>The mode stored and sent as <code translate="no">bypass</code>; the default</dd>
 </dl>
 
@@ -27,8 +27,9 @@
 <tr><th scope="row">12. Everything else</th><td>ask: <code translate="no">MODE_APPROVAL</code></td></tr>
 </tbody>
 </table>
-<p class="note">Rules are empty by default and merge global, project and conversation (<code translate="no">permissions/rule.py</code>); <code translate="no">deny</code> beats <code translate="no">ask</code> beats <code translate="no">allow</code>, and source order matters only inside one behaviour.</p>
-<p>Every ask goes through <code translate="no">_ask_or_nobody</code>: if <code translate="no">can_approve(req)</code> is false the outcome is <code translate="no">deny</code> with <code translate="no">NO_ONE_TO_APPROVE</code>. No card is published for a turn that would be refused at execution; <code translate="no">APPROVAL_LOCAL_OWNER_REQUIRED</code> remains a defensive assertion at resume.</p>
+<p class="note">Rules are empty by default and merge global, project and the execution branch (<code translate="no">permissions/rule.py</code>); <code translate="no">deny</code> beats <code translate="no">ask</code> beats <code translate="no">allow</code>, and source order matters only inside one behaviour.</p>
+<p>Conversation branches share current files. Switching branches introduces no workspace-alignment permission gate; only an explicit Rewind requests file recovery.</p>
+<p>Every ask goes through <code translate="no">_ask_or_nobody</code>: if <code translate="no">can_approve(req)</code> is false the outcome is <code translate="no">deny</code> with <code translate="no">NO_ONE_TO_APPROVE</code>, or <code translate="no">HELPER_CANNOT_ASK</code> for a helper Agent started by another. No card is published for a turn that would be refused at execution; <code translate="no">APPROVAL_LOCAL_OWNER_REQUIRED</code> remains a defensive assertion at resume.</p>
 
 <details>
 <summary>The Decision value</summary>
@@ -56,7 +57,7 @@
 </tbody>
 </table>
 <p>Being in the wrapper, not the agent loop, it also covers Python-program inner tools and the MCP server.</p>
-<p>Whether a turn may use Pages is <code translate="no">surface_grant_applies(name, req, args)</code>, a separate question. <code translate="no">runtime_attach.py</code> captures the Page snapshot when the decision for <code translate="no">list_pages</code> is <code translate="no">allow</code> and <code translate="no">surface_grant_applies</code> holds, so a Program started under Bypass permissions still receives its Pages.</p>
+<p>Whether a turn may use Pages is <code translate="no">surface_grant_applies(name, req, args)</code>, a separate question. <code translate="no">runtime_attach.py</code> captures the Page snapshot when the decision for the browser target's <code translate="no">tabs</code> action is <code translate="no">allow</code> and <code translate="no">surface_grant_applies</code> holds, so a Program started under Bypass permissions still receives its Pages.</p>
 </details>
 
 <h2 id="modes">Modes</h2>
@@ -103,8 +104,10 @@
 <tr><th scope="row"><code translate="no">IDENTITY_OUTSIDE_TEXT</code></th><td>identity</td><td><code translate="no">this work came from text the owner did not write</code></td><td>Say what was wanted in the report or final message, so the owner can do it</td></tr>
 <tr><th scope="row"><code translate="no">IDENTITY_FRAMEWORK</code></th><td>identity</td><td><code translate="no">framework operations are the owner's</code></td><td>The owner must start this work</td></tr>
 <tr><th scope="row"><code translate="no">RULE_DENY</code></th><td>rule</td><td><code translate="no">your deny rule "&lt;rule&gt;" matches</code></td><td>Permission rules in global, project or conversation</td></tr>
+<tr><th scope="row"><code translate="no">HELPER_CANNOT_ASK</code></th><td>rule, mode or sandbox</td><td><code translate="no">this needs approval (&lt;rule or mode&gt;), and a sub-agent running in the background has no one to ask</code></td><td>The helper continues without that step and names in its final reply what it needed; the caller does it or asks</td></tr>
 <tr><th scope="row"><code translate="no">NO_ONE_TO_APPROVE</code></th><td>rule, mode or sandbox</td><td><code translate="no">this needs approval (&lt;rule or mode&gt;) and this &lt;source&gt; turn has no one to approve it</code></td><td>Depends on what wanted the approval. Hold outbound: put the full draft in the final message or report; the owner can untick the hold on the Agent's Always-on tab. Ask rule: the owner edits or removes the named rule. Leaving the sandbox: set the mode at the bottom to Bypass permissions, or turn the Sandbox switch off. Otherwise: set the mode at the bottom to Bypass permissions, or add the named allow rule</td></tr>
 <tr><th scope="row"><code translate="no">PLAN_MODE_DENY</code></th><td>mode</td><td><code translate="no">the conversation is in Plan mode, which only reads</code></td><td>The mode selector at the bottom of the message box</td></tr>
+<tr><th scope="row"><code translate="no">TOOL_UNAVAILABLE</code></th><td>setting</td><td><code translate="no">&lt;why this turn cannot use it&gt;</code>. Not an approval: a tool the conversation's tools array keeps for the epoch that this turn cannot use (no channel, nobody to answer, memory off, no Page). The section beside the message lists them; see the cache-prefix design</td><td>Carry on without it</td></tr>
 <tr><th scope="row"><code translate="no">APPROVAL_DENIED</code></th><td>mode or rule</td><td><code translate="no">you declined it</code>, plus the note if any</td><td>Ask again, or change the mode</td></tr>
 <tr><th scope="row"><code translate="no">AUTO_CLASSIFIER_*</code>, <code translate="no">AUTO_HISTORY_UNAVAILABLE</code></th><td>mode</td><td><code translate="no">Auto review &lt;blocked / could not run&gt;: &lt;reason&gt;</code></td><td>The mode selector, or an allow rule</td></tr>
 <tr><th scope="row"><code translate="no">SANDBOX_*</code> and sandbox policy</th><td>sandbox</td><td><code translate="no">Sandbox is on and &lt;path or network&gt; is outside it</code></td><td>The Sandbox switch for this conversation, or sandbox settings</td></tr>

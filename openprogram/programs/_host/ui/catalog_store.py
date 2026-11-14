@@ -9,6 +9,7 @@ import uuid
 
 from openprogram.state import paths, program_directory
 from openprogram.programs._host import sources as program_sources
+from openprogram.host._platform.filesystem import replace_file
 
 _lock = threading.Lock()
 
@@ -21,7 +22,7 @@ def _read() -> list[dict]:
     target = path()
     if not target.exists():
         return []
-    document = json.loads(target.read_text())
+    document = json.loads(target.read_text(encoding="utf-8"))
     if not isinstance(document, dict) or document.get('version') != 1:
         raise ValueError('invalid application catalog version')
     rows = document.get('applications')
@@ -43,8 +44,8 @@ def write(rows: list[dict]) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary = target.with_name(f'.{target.name}.{uuid.uuid4().hex}.tmp')
     try:
-        temporary.write_text(json.dumps({'version': 1, 'applications': rows}, indent=2))
-        os.replace(temporary, target)
+        temporary.write_text(json.dumps({'version': 1, 'applications': rows}, indent=2), encoding="utf-8")
+        replace_file(temporary, target)
     finally:
         temporary.unlink(missing_ok=True)
 

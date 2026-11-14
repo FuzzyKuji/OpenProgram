@@ -18,7 +18,7 @@ the always-on switch tells them apart:
   wakes, and with none scheduled the next comes later each time nothing
   happens (a job Agent with research off runs no check-in at those wakes). An Agent with no conversation
   never wakes, so an installed job Agent costs nothing until the user
-  starts a conversation with it. They work together through handoffs
+  starts a conversation with it. They work together through send_message
   between their conversations.
 
 The built-in ones are what the reference products call bot templates, and
@@ -50,9 +50,9 @@ _LANGUAGES = {"en", "zh"}
 _ALWAYS_ON_TOOLS = ["always_on_report", "always_on_schedule", "always_on_preference", "save_routine"]
 
 _HANDOFF_NOTE = (
-    "When a step belongs to another Agent, hand it to one of that Agent's "
-    "conversations with the handoff tool if you have it, naming the "
-    "conversation by its own title or id, not the Agent's name; when you "
+    "When a step belongs to another Agent, send it to that Agent with "
+    "send_message if you have it, naming the Agent or its conversation and "
+    "writing a self-contained brief; its answer comes back to you. When you "
     "cannot, name the Agent that should take it and stop there."
 )
 
@@ -99,7 +99,25 @@ _SPECIALISTS: tuple[dict[str, Any], ...] = (
         "id": "planner", "name": "Coordinator", "name_zh": "统筹规划",
         "description": "Plan dependent work, delegate bounded tasks and verify the combined result.",
         "description_zh": "规划任务依赖、委派明确的子任务，并核对整体结果。",
-        "tools": {"mode": "selected", "allowed": ["read", "glob", "grep", "list", "web_search", "agent", "list_agents", "send_message", "job_output"], "web_search": True},
+        "tools": {"mode": "selected", "allowed": ["read", "glob", "grep", "list", "web_search", "agent", "list_agents", "send_message", "read_conversation", "close_agent"], "web_search": True},
+    },
+    {
+        # The cheap read-only scout every light peer ships (Codex explorer,
+        # Claude Code Explore, OpenCode explore): reads, searches, reports.
+        "id": "explorer", "name": "Explorer", "name_zh": "探索",
+        "description": "Read-only scout: searches and reads the code, files and web, and reports what it found with paths. Changes nothing.",
+        "description_zh": "只读探查：搜索并阅读代码、文件和网页，带路径汇报发现，不做任何修改。",
+        "tools": {"mode": "selected", "allowed": _READ + _CODE_READ + ["web_search", "web_fetch", "read_conversation"], "web_search": True},
+        "prompt": (
+            "You are a read-only scout. Find what the brief asks for by searching and reading; "
+            "change nothing. Prefer glob and grep before reading whole files. Report what you "
+            "found in a few lines each, with file paths and line numbers, and say what you could "
+            "not find. Stop as soon as the question is answered."
+        ),
+        "prompt_zh": (
+            "你是只读探查员。按任务说明搜索和阅读来找答案，不做任何修改。先用 glob 和 grep，"
+            "再读整个文件。每条发现写几行，带文件路径和行号，并说明没找到什么。问题有答案就停。"
+        ),
     },
 )
 
@@ -149,8 +167,8 @@ _JOBS: tuple[dict[str, Any], ...] = (
         ),
         "tools": {"mode": "selected", "web_search": True,
                   "allowed": _READ + ["web_search", "web_fetch", "read_conversation", "open_work",
-                                      "list_agents", "agent", "send_message", "handoff", "remind",
-                                      "scheduler", "list_jobs", "job_output", "create_goal", "update_goal", "get_goal"] + _MEMORY + _PLAN},
+                                      "list_agents", "agent", "send_message", "remind",
+                                      "scheduler", "create_goal", "update_goal", "get_goal"] + _MEMORY + _PLAN},
         "memory": "read_write",
         "always_on": {"research": True, "wake_minutes": None},
     },
@@ -171,7 +189,7 @@ _JOBS: tuple[dict[str, Any], ...] = (
             first="Ask for the request to specify, or take the newest open request from the conversation.",
         ),
         "tools": {"mode": "selected", "web_search": True,
-                  "allowed": _READ + ["web_search", "web_fetch", "read_conversation", "write", "edit", "handoff"] + _MEMORY[:2] + _PLAN},
+                  "allowed": _READ + ["web_search", "web_fetch", "read_conversation", "write", "edit", "send_message"] + _MEMORY[:2] + _PLAN},
         "memory": "read_only",
         "always_on": {"research": False, "wake_minutes": None},
     },
@@ -193,7 +211,7 @@ _JOBS: tuple[dict[str, Any], ...] = (
             first="Take the bug report in this conversation and reproduce it.",
         ),
         "tools": {"mode": "selected", "web_search": False,
-                  "allowed": _READ + ["bash", "execute_code", "write", "edit", "worktree_create", "worktree_discard", "worktree_list", "handoff"] + _CODE_READ},
+                  "allowed": _READ + ["bash", "execute_code", "write", "edit", "worktree_create", "worktree_discard", "worktree_list", "send_message"] + _CODE_READ},
         "memory": "off",
         "always_on": {"research": False, "wake_minutes": None},
     },
@@ -216,7 +234,7 @@ _JOBS: tuple[dict[str, Any], ...] = (
         ),
         "tools": {"mode": "selected", "web_search": False,
                   "allowed": _READ + ["bash", "execute_code", "write", "edit", "apply_patch", "worktree_create", "worktree_merge",
-                                      "worktree_discard", "worktree_keep", "worktree_list", "handoff"] + _CODE_READ + _PLAN},
+                                      "worktree_discard", "worktree_keep", "worktree_list", "send_message"] + _CODE_READ + _PLAN},
         "memory": "off",
         "always_on": {"research": False, "wake_minutes": None},
     },
@@ -238,7 +256,7 @@ _JOBS: tuple[dict[str, Any], ...] = (
             first="Take the branch or summary handed to this conversation and verify it.",
         ),
         "tools": {"mode": "selected", "web_search": False,
-                  "allowed": _READ + ["bash", "execute_code", "worktree_list", "handoff"] + _CODE_READ},
+                  "allowed": _READ + ["bash", "execute_code", "worktree_list", "send_message"] + _CODE_READ},
         "memory": "off",
         "always_on": {"research": False, "wake_minutes": None},
     },
@@ -260,7 +278,7 @@ _JOBS: tuple[dict[str, Any], ...] = (
             first="Ask for the topics to follow, or take them from the standing goal, and write the first brief.",
         ),
         "tools": {"mode": "selected", "web_search": True,
-                  "allowed": ["web_search", "web_fetch", "pdf", "read", "write", "send_file", "remind", "handoff"] + _MEMORY},
+                  "allowed": ["web_search", "web_fetch", "pdf", "read", "write", "send_file", "remind", "send_message"] + _MEMORY},
         "memory": "read_write",
         "always_on": {"research": True, "wake_minutes": None},
     },
@@ -282,7 +300,7 @@ _JOBS: tuple[dict[str, Any], ...] = (
             first="Ask which inbox or connected service to read, then do the first pass.",
         ),
         "tools": {"mode": "selected", "web_search": False,
-                  "allowed": ["read", "write", "read_conversation", "remind", "handoff"] + _MEMORY + _PLAN},
+                  "allowed": ["read", "write", "read_conversation", "remind", "send_message"] + _MEMORY + _PLAN},
         "memory": "read_write",
         "always_on": {"research": True, "wake_minutes": None},
     },
@@ -304,7 +322,7 @@ _JOBS: tuple[dict[str, Any], ...] = (
             first="Ask for the profile (or read it from the files given) and the search criteria, then run the first scan.",
         ),
         "tools": {"mode": "selected", "web_search": True,
-                  "allowed": ["web_search", "web_fetch", "web_use", "computer_use_agent", "read", "pdf", "write", "send_file", "remind", "handoff"] + _MEMORY + _PLAN},
+                  "allowed": ["web_search", "web_fetch", "computer_use_agent", "read", "pdf", "write", "send_file", "remind", "send_message"] + _MEMORY + _PLAN},
         "memory": "read_write",
         "always_on": {"research": True, "wake_minutes": None},
     },
@@ -326,7 +344,7 @@ _JOBS: tuple[dict[str, Any], ...] = (
             first="Read the conversations finished since yesterday and update memory from them.",
         ),
         "tools": {"mode": "selected", "web_search": False,
-                  "allowed": _READ + ["read_conversation", "write", "edit", "handoff"] + _MEMORY},
+                  "allowed": _READ + ["read_conversation", "write", "edit", "send_message"] + _MEMORY},
         "memory": "read_write",
         "always_on": {"research": True, "wake_minutes": None},
     },
@@ -348,7 +366,7 @@ _JOBS: tuple[dict[str, Any], ...] = (
             first="Ask what to write and for whom, or take the brief handed to this conversation.",
         ),
         "tools": {"mode": "selected", "web_search": True,
-                  "allowed": _READ + ["write", "edit", "web_search", "web_fetch", "send_file", "canvas", "image_generate", "handoff"] + _MEMORY[:2]},
+                  "allowed": _READ + ["write", "edit", "web_search", "web_fetch", "send_file", "canvas", "image_generate", "send_message"] + _MEMORY[:2]},
         "memory": "read_only",
         "always_on": {"research": False, "wake_minutes": None},
     },
@@ -395,7 +413,10 @@ def builtin_configuration(agent_id: str, *, language: str = "en") -> dict[str, A
             "hold_outbound": False,
         })
     else:
-        # A fixed-parameter specialist: no prompt, nothing but the model.
+        # A fixed-parameter specialist: nothing but the model, and a short
+        # prompt when the job needs one (Explorer).
+        if "prompt" in entry:
+            patch["system_prompt"] = entry["prompt_zh" if zh else "prompt"]
         patch.update({
             "skills": {"allowed": [], "disabled": ["*"], "categories": []},
             "mcp": {"allowed": [], "disabled": ["*"], "required": []},
@@ -436,6 +457,8 @@ _KNOWN_FINGERPRINTS: dict[str, dict[str, str]] = {
         "1fc71e99b2dad53eadeb16c41772e4c239c94f7754f91107afbea209c8f2e5b2": "zh",
         "4fa80aba7f6c3274c5af811c0a11ef007da86ce0d8472301a47c2c95d3fb385d": "en",
         "ee9755c080360ca9ed495405421934bd4b8b23ec61e6467498b7aa8013470810": "zh",
+        "379ebf245121d1646bff30f043ca671976584aa8208ead5cb65c32a63f3b6b22": "en",
+        "bfe9764926b137ab840ff0d90fab9bfe636537f2362a755a9dfc1caa5e772007": "zh",
     },
     "butler": {
         "730a25ff3f9609eaeaf1ccacf614f44769f2ba7ac2ffdd8b751dcf69d3d17322": "en",
@@ -448,6 +471,8 @@ _KNOWN_FINGERPRINTS: dict[str, dict[str, str]] = {
         "a30fb8ed60dc22276f62effe3b860db011e8cb18f11d060340114fa34adbfdbd": "zh",
         "bad8aed405ee6c98bd21f5940df1cfd61fde3b51427de815a05cd27ce6229eaa": "en",
         "7c9158067c61893444522e2cef0e88e0017632ee3a21319a9d2fca780cb743a7": "zh",
+        "512013480e2b30cc7775b5b0468b1c26cd52e2ab28b6ca562075e045d43f6ed8": "en",
+        "66919294e8879da8d633358a77bf2863ff941255225e65193020185bfde34ef7": "zh",
     },
     "chief-of-staff": {
         "c777be9031e8e55f919275930fa4febd057407d2468fa9fd092e4d9a8bfc84e6": "en",
@@ -464,6 +489,8 @@ _KNOWN_FINGERPRINTS: dict[str, dict[str, str]] = {
         "d861ee1775393e8ba6499769490ff4d5f1933005d21055ff88c2a33761a9f9e9": "zh",
         "e11f11eb2aa9880504eaec2131c4f4126f97d625897e74716a95468b8c160203": "en",
         "ce1cf403c6e746d790f72ef58b9b9a8655509174e109d1e70666b4106eaf83b0": "zh",
+        "bd96520dbd1c7c98926c36bfdaeb9eeb11718dc2124eee4f5a04467a34e5f59b": "en",
+        "23752eed6245ea6feb78c6195daa7d9a6c14c477455d7256a2a705ec6215ca60": "zh",
     },
     "spec-writer": {
         "00b036c58d81fa45420d4fa4c3f5c2c8aca091ba3f8d909aad19990e21c204ad": "en",
@@ -476,6 +503,8 @@ _KNOWN_FINGERPRINTS: dict[str, dict[str, str]] = {
         "34758169e85327183e744ea25a065449337fd6d6caea888b182b1fda12e53a65": "zh",
         "1374636a64b64c1eb4f90eea062e1902f4a7f956f44d8090182cf83e2586d699": "en",
         "d7fa13098a2f2ab4a1aeb83b2d6606d52bb18c975c96d7f6d98a2e0281cf31b3": "zh",
+        "892ba517dda64936a4ba6102f73955f644a341ebcb365d56437c0b9008445fbc": "en",
+        "8b93be0ff4f93bafb028f7fcdc1f4b0ca0f7415d5ddd006d37425024fca17aaf": "zh",
     },
     "bug-reproducer": {
         "2287e48d3992973310530778e312ac7dc4357a4d794d224de0d796b7dcb5efd9": "en",
@@ -488,6 +517,8 @@ _KNOWN_FINGERPRINTS: dict[str, dict[str, str]] = {
         "26e1d54934189734326f04795e6cb9031b332236ccc67b186b95bff6010c11d7": "zh",
         "a8149c00f81e54017231eb6ed7500d70f4006b1dbbf6386ba72f6b885f41a5ae": "en",
         "7918dc325b2685ab89bbfc9c9df6568b1e8c6c2e7caae6941bf7d555048724d0": "zh",
+        "007e90f72310e8cdbaf792023125535f786293bf50b83a1f7752cbbe558a3e2b": "en",
+        "faee568f922501f93586cfee759da5c17d17f4f766ffcb933b1232b9c8758451": "zh",
     },
     "pr-producer": {
         "851b22a225bc8fd7d655e623770998ba459bfa272eb8d47f096c8489658e5755": "en",
@@ -500,6 +531,8 @@ _KNOWN_FINGERPRINTS: dict[str, dict[str, str]] = {
         "32e84f84119aea04f38b23921af4909b9e2da12dad9f39b637865aa4e8148a74": "zh",
         "39f170b2efb1328852e4647b8a1b86791d09e71df1ec9ba0119710c4d22ac34f": "en",
         "76b9787b2714f9591d0ef1b87b41139939b4ec6936d4a8556e613ff2b9bf27bb": "zh",
+        "a75bc746df244f8c8e0d1eae15b1810a508b22a4d7d3ad4635ba0df649c85890": "en",
+        "e1549d9d02bef243b4c32a1062622a66812d79297692ee80612d19a6d4894875": "zh",
     },
     "pr-verifier": {
         "bf493898cc69ef4c8cd7d1a5176ca27198cd7308fa865b0c2f2d972cbc353e6b": "en",
@@ -512,6 +545,8 @@ _KNOWN_FINGERPRINTS: dict[str, dict[str, str]] = {
         "297a64ee16e7a6ced62936844b24e038abda753c2029a06ce7d38ed1a5050160": "zh",
         "92dd25d14daef19835bb51f21cb1b11cbfe62a2c0e03af899d5fab93868266a7": "en",
         "9ab7067c1691bc731319e2cde340fddeb297a972767fd0953ff7aed62dcb318c": "zh",
+        "e345b7a9099af17c8e6aeed43a07a2d49c6ba85928ae6aaaf53319ed2aa6dd33": "en",
+        "ac37520db43346e819a07bdb1ea780b66d8a2466a6a92b632e47752647ee0587": "zh",
     },
     "research-desk": {
         "56477cad2109282956045802f72988a6e6cdf099e9a478c273de4687354e8a44": "en",
@@ -526,6 +561,8 @@ _KNOWN_FINGERPRINTS: dict[str, dict[str, str]] = {
         "89ce3a600cce5b3b8549e5e9682696db456d1c61962a9c195b4860f77ef7fea7": "zh",
         "7b94cc5a036d17f3f07504b186f9419b73961a41759c2a68ac92ef016c41196a": "en",
         "60ab5aab2bf82e469f379cb858fa622ec806cf8a3fe8e8e4e9a0489ebe6c0cb5": "zh",
+        "08d8dcf1bee521e246161e5787bb40da51377fc5b3cf142237d757bd303a5434": "en",
+        "37e038b28a71ebf4781cd6508306d7cfd17a9bb6b82c71076a3e1e241ad7dac1": "zh",
     },
     "inbox-triage": {
         "4a595c2f8f45fdb922a611152072f13ee9cb7e3bac338cbcf1f72430964dcf90": "en",
@@ -540,8 +577,12 @@ _KNOWN_FINGERPRINTS: dict[str, dict[str, str]] = {
         "31471b6619a134080a648b49d446688dd03ec658d3534ddd062edd06e3a622b3": "zh",
         "5bea6d64afde31afaa7f54c9a5824d7014bf05f05bca18377dc77d6259fe3674": "en",
         "2ffc685bdad6f36c25fcf91aeaa917017daf701108197c661a58262e3c86f095": "zh",
+        "8df25ec7cf8175ee534701c6ebe609a384e2bca8db49c2617b4dc05434ff20a9": "en",
+        "c4ac2b172491e34deaece79f27e40c7ce68bf73794265012bdbf77792589cc7a": "zh",
     },
     "career-scout": {
+        "3d1b962bdaa315ee4da5bd53d607c9330f2c24bff7c55b96e0745a49604d5720": "en",
+        "881e55e5dd381c76587556cf98d1a30f5b86a7b7234f149728317ec08da672ae": "zh",
         "3753e952d3fd74881e67e1116c9ad88edaa563f7ce5bd4d8fd27ef20ec2b4b51": "en",
         "141e44ce2d2988e9aae6232ebd0ff6719777bada1ea0443d74a579ed996f520e": "zh",
         "46db9c24611c4e4fc4f0a093cf9af878185ac848ef62d29d37f94d426f80267d": "en",
@@ -552,6 +593,8 @@ _KNOWN_FINGERPRINTS: dict[str, dict[str, str]] = {
         "84ec3ebc640d7655f1a0671839db852d6d025056264efb0c617f86402a1dfe89": "zh",
         "0cdf92737c7da2facc9ad91e38d8092330617d407338b79583357c3861db8a58": "en",
         "2cc2153615d1d8010b35628d76172c0c0da3e926dbdec79a0daedafa1b446126": "zh",
+        "e2270a8308ca18b505538f73de8d6e3d49a9919bc9245ab101da0d26292c8217": "en",
+        "a84b59ffffe8aa613a78e77d9039da0fa4c62693285e03bc1c67d9910afd88cf": "zh",
     },
     "knowledge-keeper": {
         "99547718bae35656e06d33227f2102593ea64128c269196d127cc1394edd6cea": "en",
@@ -566,6 +609,8 @@ _KNOWN_FINGERPRINTS: dict[str, dict[str, str]] = {
         "178b73159953b91a0c1e465fe395a4005f8f7a1ee710564b2109c88062e33b83": "zh",
         "5cbdeaff49f51ba206475cb857120dbf8fe0ae357187a0ce5cf4c51b194432d1": "en",
         "9d9e05d56e55546ffe0298463368252ab0cc30caa2ad450cb7d80946a1c5e6c3": "zh",
+        "482327bf76c780f0f5e9a84dd2af5e13c48a6d7eb24af7821deaee72fb76ffee": "en",
+        "fa0e4e5bcb202b7a600177679671a5f58d0fd08c0a893966884d49a0e26046a5": "zh",
     },
     "writer": {
         "ccf55a8ac24762e2ddf6603586181e998e6d574fe71f0e04a9aecd23bbd0a18d": "en",
@@ -578,6 +623,12 @@ _KNOWN_FINGERPRINTS: dict[str, dict[str, str]] = {
         "b2abdef38656488641760139853fcdaaeb5858d4cbc614a412e3899cd3c24de5": "zh",
         "2c64ffa3d650fd358073d917e555c716ecc3874a574f23eab350a011b20560bb": "en",
         "e84836e9d004f6b1a08588e1262035c222a35a64b617adfdf2c5dd349b3395b6": "zh",
+        "3ffebcfa23ee218043151c1355df3d8931169c05363ec9482c8655a94ed47f1b": "en",
+        "08deea396cc50d8c3dd8422ed5bc14ebc63731645cc56357152cf8abfdcc6ab8": "zh",
+    },
+    "explorer": {
+        "a7704a38c3bed81d82a2516c00fa5022aa6e64e0689bfc313ed6ea038df84724": "en",
+        "a28d156f7aefd733c204810022a16a054962ef06266ff7114f4ba24023a3c7db": "zh",
     },
 }
 

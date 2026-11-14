@@ -20,7 +20,7 @@
 <table class="stack fixed">
 <thead class="sr"><tr><th scope="col">Aspect</th><th scope="col">Rule</th></tr></thead>
 <tbody>
-<tr><th scope="row">Default</th><td>Standard. Saved per session and route/model. An unseen route starts at Standard, so a model change never enables a paid tier.</td></tr>
+<tr><th scope="row">Default</th><td>Standard. Saved per conversation branch, on each toggle and each send, and per route/model. An unseen route starts at Standard, so a model change never enables a paid tier.</td></tr>
 <tr><th scope="row">Off</th><td>Standard is sent explicitly, overriding an agent's priority default. Omitting the field would inherit it.</td></tr>
 <tr><th scope="row">Applies to</th><td>The next submitted turn. Queued messages keep their setting; a running request is unchanged.</td></tr>
 <tr><th scope="row">Authorization</th><td>Backend resolves for the actual turn provider and model, and again before dispatch. Another execution model resolves its own capability.</td></tr>

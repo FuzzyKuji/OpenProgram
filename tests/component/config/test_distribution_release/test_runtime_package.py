@@ -675,33 +675,6 @@ def test_python_import_troubleshooting_distinguishes_managed_and_source() -> Non
         assert "./scripts/install.sh" not in source
 
 
-def test_packaged_browser_install_does_not_modify_python_environment(
-    monkeypatch, capsys
-) -> None:
-    from openprogram.interfaces.cli.commands.browser import _cmd_browser_install
-
-    monkeypatch.setenv("OPENPROGRAM_IMMUTABLE_RUNTIME", "1")
-    monkeypatch.setattr(
-        "openprogram.interfaces.cli.commands.browser._pip_install",
-        lambda _spec: (_ for _ in ()).throw(AssertionError("pip invoked")),
-    )
-
-    assert _cmd_browser_install("playwright") == 1
-    output = capsys.readouterr().out.lower()
-    assert "complete release" in output
-    assert "source checkout" in output
-
-    help_output = subprocess.run(
-        [sys.executable, "-m", "openprogram", "browser", "install", "--help"],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.lower()
-    help_output = " ".join(help_output.split())
-    assert "source checkout only" in help_output
-    assert "packaged releases reject this command" in help_output
-
-
 def test_release_manifest_records_hashes(tmp_path: Path) -> None:
     import subprocess
 

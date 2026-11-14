@@ -17,7 +17,7 @@ What this catches that test_dispatcher_integration.py doesn't:
     used to import ``openprogram.programs.registry`` which doesn't exist)
   * tool_use / tool_result envelope shape (TUI/web depend on these)
   * approval gate consumes a typed durable wait outcome
-  * char-cap truncation and persist_full disk-write actually firing
+  * the weight cap bounding a result once and keeping the whole text
   * cancel_event surfacing into the tool's ``cancel`` kwarg
 """
 from __future__ import annotations
@@ -440,15 +440,15 @@ def test_tool_use_event_runs_tool_and_emits_result(
 
 
 # ---------------------------------------------------------------------------
-# Test 2: char cap truncates oversized tool output
+# Test 2: an oversized tool output is bounded for the model; the card shows
+# the head of the tool's own output and how long the whole is
 # ---------------------------------------------------------------------------
 
 def test_oversized_tool_result_is_truncated(
     tmp_db: SessionDB, captured, collector, fresh_registry,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    @function(name="bigprobe", description="Big",
-          max_result_chars=200, persist_full=False)
+    @function(name="bigprobe", description="Big", max_result_weight=200)
     def bigprobe() -> str:
         """Returns a huge string."""
         return "x" * 50_000
@@ -467,32 +467,213 @@ def test_oversized_tool_result_is_truncated(
                     if e["type"] == "chat_response"
                     and e["data"].get("event", {}).get("type") == "tool_result"]
     assert tool_results
-    text = tool_results[0]["data"]["event"]["result"]
-    # Truncation marker present
-    assert "elided" in text or "more)" in text  # _shorten or _cap marker
-    # At minimum the dispatcher's own _shorten cap kicks in (4000) so the
-    # envelope text is well under the original 50K
-    assert len(text) < 5000
+    event = tool_results[0]["data"]["event"]
+    # The card shows the head of the tool's own output, not the model's
+    # head/tail/note, and says how long the whole output is.
+    assert event["result"] == "x" * 4_000
+    assert event["full_output"]["total_chars"] == 50_000
+    assert event["full_output"]["shown_chars"] == 4_000
 
 
-# ---------------------------------------------------------------------------
-# Test 3: persist_full writes full result to disk
-# ---------------------------------------------------------------------------
+_ROWS = "\n".join(f"row {i:04d}: " + "alpha bravo charlie " * 3 for i in range(320))
 
-def test_persist_full_writes_file(
+
+
+def _session_results(db, session_id: str) -> list[Path]:
+    """Whole tool results kept in the conversation's own ``tool_results/``."""
+    directory = Path(db._session_dir(session_id)) / "tool_results"  # noqa: SLF001
+    return sorted(directory.glob("*.txt")) if directory.is_dir() else []
+
+
+@pytest.mark.parametrize("shape", ["under_cap", "two_blocks", "over_cap_one_line"])
+def test_next_turn_reads_a_tool_result_as_the_turn_that_ran_it_did(
+    tmp_db: SessionDB, captured, collector, fresh_registry,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, shape: str,
+) -> None:
+    # Every later request renders a tool result from what was stored. It
+    # must carry the same blocks and bytes the turn that ran the tool sent,
+    # on every provider: anything else hides content from the model and
+    # changes the request after that point, so the provider reads all of
+    # it again uncached.
+    from openprogram.models.providers.types import AgentToolResult
+    from openprogram.state.store.session.weight import weight
+    from openprogram.state.store.session.spill import DEFAULT_TOOL_OUTPUT_WEIGHT
+
+    results_dir = tmp_path / "results"
+    results_dir.mkdir()
+    monkeypatch.setattr("openprogram.programs._host.runtime._tool_results_dir",
+                        lambda: results_dir)
+    full = {
+        "under_cap": _ROWS,
+        "two_blocks": _ROWS,
+        "over_cap_one_line": '{"steps": [' + ", ".join(
+            f'{{"n": {i}, "note": "clicked the button"}}' for i in range(2_500)) + "]}",
+    }[shape]
+    assert 4_000 < len(full)
+
+    @function(name="readprobe", description="Read")
+    def readprobe():
+        """Returns a long file."""
+        if shape == "two_blocks":
+            # A file tool's text with the AGENTS.md it reached appended.
+            return AgentToolResult(content=[TextContent(text=full),
+                                            TextContent(text="\n\n# AGENTS.md\nrules")])
+        return full
+
+    monkeypatch.setattr(D, "_load_agent_profile", _stub_profile_with_tools(["readprobe"]))
+    seen: list[list] = []
+
+    def _recording(stream_fn):
+        async def _fn(model, context, options):
+            seen.append(list(context.messages))
+            async for event in stream_fn(model, context, options):
+                yield event
+        return _fn
+
+    def _results(messages) -> list:
+        return [[(c.type, getattr(c, "text", None)) for c in m.content]
+                for m in messages if getattr(m, "role", None) == "toolResult"]
+
+    turn_one = _recording(make_two_phase_stream("call_read", "readprobe", {}))
+    with patch.object(D, "_run_loop_blocking", _patched_run_loop(turn_one)):
+        first = D.process_user_turn(
+            _owner_turn(session_id="c1", user_text="read it", agent_id="main",
+                        source="tui", permission_mode="bypass"),
+            on_event=collector,
+        )
+    assert first.failed is False
+    in_turn = _results(seen[-1])
+    assert len(in_turn) == 1 and len(in_turn[0]) == 1
+    sent = in_turn[0][0][1]
+    if shape == "over_cap_one_line":
+        # Bounded once, when made, with the whole text kept in a file.
+        assert weight(sent) <= DEFAULT_TOOL_OUTPUT_WEIGHT < weight(full)
+        # In the conversation's directory, never the profile's shared one.
+        saved = _session_results(tmp_db, "c1")
+        assert list(results_dir.iterdir()) == []
+        assert len(saved) == 1 and saved[0].read_text() == full
+        assert str(saved[0]) in sent
+    else:
+        assert full in sent
+
+    async def _reply(model, context, options):
+        seen.append(list(context.messages))
+        yield EventStart(partial=_build_partial(""))
+        yield EventDone(reason="stop", message=_build_final_text("done"))
+
+    with patch.object(D, "_run_loop_blocking", _patched_run_loop(_reply)):
+        second = D.process_user_turn(
+            _owner_turn(session_id="c1", user_text="what was in it?", agent_id="main",
+                        source="tui", permission_mode="bypass"),
+            on_event=collector,
+        )
+    assert second.failed is False
+    assert _results(seen[-1]) == in_turn
+
+    # The client still gets a preview, and never the whole text.
+    frames = [e["data"]["event"] for e in captured
+              if e["type"] == "chat_response"
+              and e["data"].get("event", {}).get("type") == "tool_result"]
+    assert len(frames) == 1
+    assert frames[0]["result"].startswith(sent[:4000])
+    assert len(frames[0]["result"]) < 4_100
+    assert "stored_result" not in frames[0]
+
+    # The context estimate counts the result the requests carry, not the
+    # preview the reply's card keeps.
+    from openprogram.runtime.context import breakdown as breakdown_module
+    from openprogram.runtime.context import session_stats
+    counted: list = []
+
+    def _capture(**kwargs):
+        counted.append(kwargs["history"])
+        return {"messages": 0, "tools": []}
+
+    monkeypatch.setattr(breakdown_module, "compute_call_breakdown", _capture)
+    session_stats.compute_breakdown("c1")
+    assert _results(counted[-1]) == in_turn
+
+
+def test_a_small_window_model_reads_its_share_of_a_result_in_both_turns(
     tmp_db: SessionDB, captured, collector, fresh_registry,
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
-    # Redirect persist directory to tmp so we can inspect it. The
-    # real helper does mkdir(parents=True); replicate that so
-    # ``write_text`` doesn't blow up.
+    # A 32k-token local model: one result is bounded to 30% of its window,
+    # in weight, and the next turn reads the same bytes.
+    from openprogram.state.store.session.weight import weight
+
+    results_dir = tmp_path / "results"
+    results_dir.mkdir()
+    monkeypatch.setattr("openprogram.programs._host.runtime._tool_results_dir",
+                        lambda: results_dir)
+    small = _stub_model().model_copy(update={"context_window": 32_768})
+    monkeypatch.setattr(D, "_resolve_model", lambda profile, override=None: small)
+    full = _ROWS + "\n" + _ROWS
+    assert 9_830 < weight(full)
+
+    @function(name="readprobe", description="Read")
+    def readprobe():
+        """Returns a long file."""
+        return full
+
+    monkeypatch.setattr(D, "_load_agent_profile", _stub_profile_with_tools(["readprobe"]))
+    seen: list[list] = []
+
+    def _results(messages) -> list:
+        return [[getattr(c, "text", None) for c in m.content]
+                for m in messages if getattr(m, "role", None) == "toolResult"]
+
+    stream = make_two_phase_stream("call_read", "readprobe", {})
+
+    async def _turn_one(model, context, options):
+        seen.append(list(context.messages))
+        async for event in stream(model, context, options):
+            yield event
+
+    with patch.object(D, "_run_loop_blocking", _patched_run_loop(_turn_one)):
+        first = D.process_user_turn(
+            _owner_turn(session_id="c1", user_text="read it", agent_id="main",
+                        source="tui", permission_mode="bypass"),
+            on_event=collector,
+        )
+    assert first.failed is False
+    [[sent]] = _results(seen[-1])
+    assert weight(sent) <= 9_830
+    [saved] = _session_results(tmp_db, "c1")
+    assert list(results_dir.iterdir()) == []
+    assert saved.read_text() == full and str(saved) in sent
+
+    async def _reply(model, context, options):
+        seen.append(list(context.messages))
+        yield EventStart(partial=_build_partial(""))
+        yield EventDone(reason="stop", message=_build_final_text("done"))
+
+    with patch.object(D, "_run_loop_blocking", _patched_run_loop(_reply)):
+        second = D.process_user_turn(
+            _owner_turn(session_id="c1", user_text="what was in it?", agent_id="main",
+                        source="tui", permission_mode="bypass"),
+            on_event=collector,
+        )
+    assert second.failed is False
+    assert _results(seen[-1]) == [[sent]]
+
+
+# ---------------------------------------------------------------------------
+# Test 3: a bounded result's whole text is written to disk
+# ---------------------------------------------------------------------------
+
+def test_a_bounded_result_keeps_its_whole_text_on_disk(
+    tmp_db: SessionDB, captured, collector, fresh_registry,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    # A running conversation keeps the whole text in its own directory;
+    # the profile's shared directory (redirected here) stays empty.
     results_dir = tmp_path / "results"
     results_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr("openprogram.programs._host.runtime._tool_results_dir",
                         lambda: results_dir)
 
-    @function(name="persistprobe", description="Persist",
-          max_result_chars=200, persist_full=True)
+    @function(name="persistprobe", description="Persist", max_result_weight=200)
     def persistprobe() -> str:
         """Big payload."""
         return "Y" * 5_000
@@ -508,7 +689,8 @@ def test_persist_full_writes_file(
             on_event=collector,
         )
 
-    persisted = list((tmp_path / "results").glob("*.txt"))
+    assert list(results_dir.glob("*.txt")) == []
+    persisted = _session_results(tmp_db, "c1")
     assert len(persisted) == 1, f"expected 1 persisted file, got {persisted}"
     assert persisted[0].read_text() == "Y" * 5_000
 
@@ -774,16 +956,24 @@ def test_cancel_propagates_to_tool(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     saw_cancel = threading.Event()
+    finished = threading.Event()
     cancelled_by_caller = threading.Event()
 
     @function(name="slowprobe", description="Slow")
     async def slowprobe(cancel: asyncio.Event = None) -> str:
         """Long-running tool that polls cancel."""
-        for _ in range(100):
-            if cancel is not None and cancel.is_set():
-                saw_cancel.set()
-                return "cancelled"
-            await asyncio.sleep(0.02)
+        try:
+            for _ in range(100):
+                if cancel is not None and cancel.is_set():
+                    saw_cancel.set()
+                    return "cancelled"
+                await asyncio.sleep(0.02)
+        except asyncio.CancelledError:
+            # A stop cuts the running call at once (``run_control.wakeups``);
+            # a tool that polls its signal may see it first.
+            saw_cancel.set()
+            raise
+        finished.set()
         return "finished"
 
     monkeypatch.setattr(D, "_load_agent_profile",
@@ -809,6 +999,7 @@ def test_cancel_propagates_to_tool(
 
     assert cancelled_by_caller.is_set()
     assert saw_cancel.is_set(), "tool never observed cancel signal"
+    assert not finished.is_set()
 
 
 def test_agent_spawn_bypass_hard_constraint_is_installed_in_dispatcher(
@@ -857,12 +1048,13 @@ def test_discovered_schema_survives_next_chat_turn_but_not_other_session(
     monkeypatch.setattr(D, "_load_agent_profile", _stub_profile_with_tools(["tool_search", "weekly_probe"]))
     phase = {"discover": True}
     seen = []
+    refused = []
     from openprogram.programs._host import runtime as tool_runtime
-    original_loaded = tool_runtime._loaded_deferred.get()
-    original_frozen = tool_runtime._frozen_turn_tools.get()
+    original_loaded = tool_runtime._request_loaded.get()
 
     async def stream(model, context, options):
         seen.append({t.name for t in context.tools or []})
+        refused.append({t.name for t in context.tools or [] if getattr(t, "_unavailable", False)})
         if phase["discover"]:
             phase["discover"] = False
             message = _build_final_with_tool("discover", "tool_search", {"select": "select:weekly_probe"})
@@ -897,9 +1089,12 @@ def test_discovered_schema_survives_next_chat_turn_but_not_other_session(
     assert "weekly_probe" in seen[2]
     assert "weekly_probe" not in seen[3]
     assert "weekly_probe" not in seen[4]
-    assert "weekly_probe" not in seen[5]
-    assert tool_runtime._loaded_deferred.get() is original_loaded
-    assert tool_runtime._frozen_turn_tools.get() is original_frozen
+    assert not refused[1] and not refused[2]
+    # The branch that loaded it keeps it after the Agent drops the tool: the
+    # array does not shrink, and its calls are refused (``unavailable_tool``).
+    assert "weekly_probe" in seen[5]
+    assert refused[5] == {"weekly_probe"}
+    assert tool_runtime._request_loaded.get() is original_loaded
 
 
 def test_consumed_steer_keeps_ordered_boundary(tmp_db, monkeypatch, fresh_registry):
@@ -1013,7 +1208,7 @@ def test_full_result_artifacts_survive_reused_provider_ids(
     results_dir.mkdir()
     monkeypatch.setattr(R, "_tool_results_dir", lambda: results_dir)
 
-    @function(name="persistprobe", description="Persist", max_result_chars=2000, persist_full=True)
+    @function(name="persistprobe", description="Persist", max_result_weight=500)
     def persistprobe(value: str) -> str:
         return value * 5000
 
@@ -1030,19 +1225,25 @@ def test_full_result_artifacts_survive_reused_provider_ids(
             )
         assert result.failed is False
         if first_path is None:
-            first_path, = results_dir.glob("*.txt")
+            first_path, = _session_results(tmp_db, "artifact-A")
             assert first_path.read_text() == "A" * 5000
 
-    receipts = [e["data"]["event"]["result"] for e in captured
+    # The card shows the tool's own output; the model's text names the file.
+    receipts = [e["data"]["event"] for e in captured
                 if e["type"] == "chat_response"
                 and e["data"].get("event", {}).get("type") == "tool_result"]
     assert len(receipts) == 2
-    assert str(first_path) in receipts[0]
+    assert receipts[0]["result"] == "A" * 4_000 and receipts[0]["full_output"]["total_chars"] == 5_000
+    sent = [node.output for sid in {"artifact-A", "artifact-B"}
+            for node in tmp_db.get_nodes(sid) if node.metadata.get("tool_call_id")]
+    assert any(str(first_path) in text for text in sent)
     assert first_path.read_text() == "A" * 5000
-    paths = list(results_dir.glob("*.txt"))
+    assert list(results_dir.glob("*.txt")) == []
+    paths = _session_results(tmp_db, "artifact-A") + (
+        [] if same_session else _session_results(tmp_db, "artifact-B"))
     assert len(paths) == 2
     second_path, = [path for path in paths if path != first_path]
-    assert str(second_path) in receipts[1]
+    assert any(str(second_path) in text for text in sent)
     assert second_path.read_text() == "B" * 5000
 
 

@@ -44,6 +44,8 @@ def list_dir(path: str, show_hidden: bool = False) -> str:
     if _remote_fs is not None:
         from . import _remote
         return _remote.list_dir(_remote_fs, path, show_hidden)
+    from openprogram.state.worktree.path_resolve import resolve_path
+    path, _outside = resolve_path(path)
     if not os.path.isabs(path):
         return f"Error: path must be absolute, got {path!r}"
     from openprogram.host.sandbox import validate_read_path, read_denier

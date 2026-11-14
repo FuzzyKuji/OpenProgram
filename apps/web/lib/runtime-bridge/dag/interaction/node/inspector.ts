@@ -1,3 +1,4 @@
+import { adoptCheckedOutBranch, pendingBranchSettings } from "@/lib/agents/branch-settings";
 import { requestSessionLoad } from "@/lib/runtime-bridge/session/session-load";
 /**
  * Renderer: the node verbs (and the raw-JSON layer they open).
@@ -127,6 +128,7 @@ async function _checkoutTo(id: string): Promise<boolean> {
   const sid = runtimeState.currentSessionId;
   if (!sid) return false;
   try {
+    await pendingBranchSettings(sid);
     const r = await fetch("/api/chat/checkout", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -138,6 +140,7 @@ async function _checkoutTo(id: string): Promise<boolean> {
         { tone: "error" });
       return false;
     }
+    adoptCheckedOutBranch(sid, await r.json().catch(() => null));
   } catch {
     showToast(translateText("Checkout failed", "checkout 失败"),
       { tone: "error" });

@@ -1,7 +1,6 @@
 import { usePermissionSetting } from './repl/usePermissionSetting.js';
 import React, { useEffect, useState, useRef } from 'react';
 import { writeFileSync } from 'fs';
-import { join } from 'path';
 import { Box, Text, useApp, useInput } from '../runtime/index';
 import type { ScrollBoxHandle } from '../runtime/index';
 import { Shell, ModalHost, ToastHost } from '../ui/index.js';
@@ -21,6 +20,7 @@ import {
 } from '../commands/registry.js';
 import { loadHistory, appendHistory } from '../utils/history.js';
 import { copyToClipboard } from '../utils/clipboard.js';
+import { exportTarget } from '../utils/fileCompletions.js';
 import { useTheme } from '../theme/ThemeProvider.js';
 import { isThemeSetting } from '../theme/themes.js';
 import type {
@@ -45,9 +45,22 @@ import { ChannelActivityFeed } from '../components/ChannelActivityFeed.js';
 import type { SettingRow } from '../components/SettingsPanel.js';
 import type { JobRow } from '../ws/client.js';
 import { randomLocalId, renderModel } from './repl/helpers.js';
+import { stopForeground, type PendingSend, type StopState } from './repl/cancelExecution.js';
+import { compactionOperation } from './repl/wsHandlers/handleChatResponse.js';
 import { buildPickerNode } from './repl/pickerRouter.js';
 import { useWsEvents } from './repl/useWsEvents.js';
 import { makeAccountsClient } from '../utils/providerAccounts.js';
+import { KeybindingsProvider } from '../keybindings/KeybindingsContext.js';
+import { bindingMatches, loadBindings } from '../keybindings/resolve.js';
+import { ToolExpansionContext } from '../components/tools/ToolRow.js';
+import { enqueue, nextToSend, removeAt, takeAt, type QueuedMessage } from '../utils/messageQueue.js';
+import {
+  attachmentFromPath,
+  buildOutgoing,
+  mentionedAttachmentPaths,
+  nextAttachmentNumber,
+  type PendingAttachment,
+} from '../utils/attachments.js';
 import type { AccountsState, AddStarted } from '../utils/providerAccounts.js';
 
 export type { REPLProps } from './repl/types.js';
@@ -160,6 +173,14 @@ export const REPL: React.FC<REPLProps> = ({
   // Thinking effort cycle: off → minimal → low → medium → high → xhigh → off.
   const [thinkingEffort, setThinkingEffort] = useState<ThinkingEffort>('xhigh');
   const [connState, setConnState] = useState<ConnectionState>(client.getState());
+  // Keys from the action table plus <state dir>/keybindings.json.
+  const [keybindings] = useState(() => loadBindings());
+  // Messages typed while the turn runs; sent one per turn when it ends.
+  const [queued, setQueued] = useState<QueuedMessage[]>([]);
+  const queuedRef = useRef(queued);
+  queuedRef.current = queued;
+  // Tool output shown whole (the expand key) or folded.
+  const [toolsExpanded, setToolsExpanded] = useState(false);
   const agentSetRef = useRef(false);
   const transcriptScrollRef = useRef<ScrollBoxHandle | null>(null);
   // Theme switch: with hermes-ink every render is a full cell-grid
@@ -190,6 +211,11 @@ export const REPL: React.FC<REPLProps> = ({
     return () => clearInterval(t);
   }, [activity]);
 
+  useEffect(() => {
+    for (const warning of keybindings.warnings) pushSystem(warning);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [keybindings]);
+
   // Pull the worker's unified command registry (skill / user / project /
   // plugin / mcp layers) so completion, ctrl+K, and /help include them.
   useEffect(() => {
@@ -207,13 +233,19 @@ export const REPL: React.FC<REPLProps> = ({
 
   const executionIdRef = useRef<string | undefined>(undefined);
   const executionVersionRef = useRef<number | undefined>(undefined);
-  const stopStageRef = useRef<0 | 1 | 2>(0);
+  // The send the current turn started from: a stop names it until the ack
+  // names the execution.
+  const pendingSendRef = useRef<PendingSend | null>(null);
+  // The stop of the turn in progress: every press sends it again with the
+  // same command id; the next turn starts a new one.
+  const stopRef = useRef<StopState>({ commandId: null });
 
   const finishTurn = () => {
     setActivity(null);
-    stopStageRef.current = 0;  // reset three-stage stop for the next turn
+    stopRef.current = { commandId: null };
     executionIdRef.current = undefined;
     executionVersionRef.current = undefined;
+    pendingSendRef.current = null;
   };
 
 
@@ -249,22 +281,20 @@ export const REPL: React.FC<REPLProps> = ({
       client.send({ action: 'load_session', session_id: initialConversation });
     }
   }, [client, initialConversation]);
-  const cancelCurrentExecution = () => {
-    const executionId = executionIdRef.current || streaming?.executionId;
-    const expectedVersion = executionVersionRef.current;
-    if (executionId && typeof expectedVersion === 'number') {
-      client.send({
-        type: 'execution.command',
-        action: 'execution.cancel',
-        command_id: randomLocalId(),
-        execution_id: executionId,
-        expected_version: expectedVersion,
-      });
-      return true;
-    }
-    pushSystem('Cancel unavailable: no current execution version');
-    return false;
-  };
+  // Ctrl-C and Esc stop the branch's foreground operation on the first
+  // press: a turn that streams or has been sent, else a /compact.
+  const stopCurrent = () => stopForeground({
+    client,
+    running: Boolean(streaming) || pendingSendRef.current !== null,
+    executionId: executionIdRef.current || streaming?.executionId,
+    expectedVersion: executionVersionRef.current,
+    pendingSend: pendingSendRef.current,
+    sessionId: conversationId,
+    operationId: compactionOperation(conversationId),
+    state: stopRef.current,
+    pushSystem,
+    newCommandId: randomLocalId,
+  });
 
 
   // Double-press Ctrl+C to exit (Claude Code / Hermes pattern).
@@ -274,8 +304,6 @@ export const REPL: React.FC<REPLProps> = ({
   const [exitPending, setExitPending] = useState(false);
   const exitTimerRef = useRef<NodeJS.Timeout | null>(null);
   const lastCtrlCRef = useRef<number>(0);
-  // Cancel while a turn is streaming: 0 idle, 1 hinted, 2 cancel sent.
-  // Further presses repeat the same cancel operation.
 
   useEffect(() => () => {
     if (exitTimerRef.current) clearTimeout(exitTimerRef.current);
@@ -283,31 +311,8 @@ export const REPL: React.FC<REPLProps> = ({
 
   useInput((input, key) => {
     if (key.ctrl && input === 'c') {
-      // While a turn is streaming, Ctrl-C cancels the current execution.
-      // First press is a mistouch hint; later presses send the same
-      // cancel operation (no force mode).
-      if (streaming && conversationId) {
-        const stage = stopStageRef.current;
-        if (exitTimerRef.current) clearTimeout(exitTimerRef.current);
-        if (stage === 0) {
-          stopStageRef.current = 1;
-          setExitPending(true);
-          exitTimerRef.current = setTimeout(() => {
-            exitTimerRef.current = null;
-            stopStageRef.current = 0;
-            setExitPending(false);
-          }, 1500);
-        } else {
-          stopStageRef.current = 2;
-          if (cancelCurrentExecution()) pushSystem('Cancel execution');
-          exitTimerRef.current = setTimeout(() => {
-            exitTimerRef.current = null;
-            stopStageRef.current = 0;
-            setExitPending(false);
-          }, 5000);
-        }
-        return;
-      }
+      // Running: the first press stops it (Claude Code, Codex).
+      if (stopCurrent()) return;
       // Idle: double Ctrl-C exits the app (unchanged).
       const now = Date.now();
       const recent = now - lastCtrlCRef.current <= 800
@@ -330,7 +335,7 @@ export const REPL: React.FC<REPLProps> = ({
     }
     // shift+tab cycles the permission tiers in the picker's order. Skipped
     // while a picker owns the input (multi-ask uses shift+tab to go back).
-    if (key.shift && key.tab && !pickerKind) {
+    if (bindingMatches(keybindings, 'app.permissionCycle', input, key) && !pickerKind) {
       setPermissionMode((m) => {
         const i = PERMISSION_MODES.indexOf(m);
         return i < 0 ? 'bypass' : PERMISSION_MODES[(i + 1) % PERMISSION_MODES.length]!;
@@ -339,7 +344,11 @@ export const REPL: React.FC<REPLProps> = ({
     }
     // Ctrl+K — command palette over the slash registry (opencode's
     // command-palette). Only when nothing else is open / streaming.
-    if (key.ctrl && input === 'k' && !pickerKind && !streaming) {
+    if (bindingMatches(keybindings, 'app.toolsExpand', input, key)) {
+      setToolsExpanded((x) => !x);
+      return;
+    }
+    if (bindingMatches(keybindings, 'app.commandPalette', input, key) && !pickerKind && !streaming) {
       setPickerKind('commands');
       return;
     }
@@ -355,20 +364,41 @@ export const REPL: React.FC<REPLProps> = ({
     }
   });
 
-  const onSubmit = (text: string) => {
+  const onSubmit = (text: string, attachments: PendingAttachment[] = []) => {
     if (!text.trim()) return;
-    const sendChat = (chatText: string) => {
-      setCommitted((m) => [...m, { id: `u-${Date.now()}`, role: 'user', text: chatText }]);
+    const sendChat = (chatText: string, placed: PendingAttachment[] = []) => {
+      // `@path` to an image or PDF attaches it, like a pasted path.
+      let shown = chatText;
+      const files = [...placed];
+      for (const { token, path } of mentionedAttachmentPaths(chatText)) {
+        const made = attachmentFromPath(path, nextAttachmentNumber(files));
+        if ('error' in made) {
+          pushSystem(made.error);
+          continue;
+        }
+        files.push(made);
+        shown = shown.replace(token, made.label);
+      }
+      const outgoing = buildOutgoing(shown, files);
+      setCommitted((m) => [...m, { id: `u-${Date.now()}`, role: 'user', text: shown }]);
       if (!conversationTitle && committed.length === 0) {
         // Mirror server-side behaviour: first user message becomes the title.
         setConversationTitle(chatText.slice(0, 50) + (chatText.length > 50 ? '…' : ''));
       }
       startTurn('Thinking');
+      // A new conversation gets its id here, as a Web draft does, so the
+      // first turn can be stopped by its send before the ack names it.
+      const sessionId = conversationId ?? `local_${randomLocalId()}`;
+      if (!conversationId) setConversationId(sessionId);
+      const requestId = `${randomLocalId()}${randomLocalId()}`;
+      pendingSendRef.current = { sessionId, requestId };
       client.send({
         action: 'chat',
-        session_id: conversationId,
+        session_id: sessionId,
+        client_request_id: requestId,
         agent_id: agent,
-        text: chatText,
+        text: outgoing.text,
+        ...(outgoing.attachments.length ? { attachments: outgoing.attachments } : {}),
         thinking_effort: thinkingEffort,
         permission_mode: permissionForSubmit(),
       } as never);
@@ -466,7 +496,7 @@ export const REPL: React.FC<REPLProps> = ({
         copyToClipboard: copyToClipboard,
         exportTranscript: (filename) => {
           const fname = filename ?? `openprogram-${Date.now()}.md`;
-          const path = fname.startsWith('/') ? fname : join(process.cwd(), fname);
+          const path = exportTarget(fname);
           const lines: string[] = [
             `# OpenProgram session ${conversationId ?? '(unsaved)'}`,
             `agent: ${agent ?? '—'}`,
@@ -530,13 +560,20 @@ export const REPL: React.FC<REPLProps> = ({
         return;
       }
     }
-    sendChat(text);
+    sendChat(text, attachments);
   };
 
-  const onCancel = () => {
-    if (!conversationId) return;
-    if (cancelCurrentExecution()) pushSystem('Cancel execution');
-  };
+  // The branch is free again (the turn finished or was stopped): the
+  // oldest queued message becomes the next turn.
+  useEffect(() => {
+    if (activity || pickerKind || !queued.length) return;
+    const [next, rest] = nextToSend(queuedRef.current);
+    setQueued(rest);
+    if (next) onSubmit(next.text, next.attachments);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activity, pickerKind, queued.length]);
+
+  const onCancel = () => { stopCurrent(); };
 
   const elapsed = activity ? (Date.now() - activity.startedAt) / 1000 : undefined;
   void tick; // depend on tick so elapsed re-renders every second
@@ -575,9 +612,12 @@ export const REPL: React.FC<REPLProps> = ({
     setAccountPendingAdd, setAccountLogin,
     onSubmit,
     sessionAliasesRef,
+    keybindings,
   });
 
   return (
+    <KeybindingsProvider bindings={keybindings}>
+    <ToolExpansionContext.Provider value={toolsExpanded}>
     <Shell mouseTracking={altScreen && !screenReader} mode={altScreen && !screenReader ? 'alt' : 'inline'}>
       <TranscriptViewport stickyBottom scrollRef={transcriptScrollRef}>
         <Messages
@@ -614,6 +654,15 @@ export const REPL: React.FC<REPLProps> = ({
           onSubmit={onSubmit}
           busy={!!activity}
           onCancel={onCancel}
+          queued={queued}
+          onQueue={(text, files) => setQueued((q) => enqueue(q, text, files))}
+          onTakeQueued={(index) => {
+            const [row, rest] = takeAt(queuedRef.current, index);
+            setQueued(rest);
+            return row;
+          }}
+          onRemoveQueued={(index) => setQueued((q) => removeAt(q, index))}
+          onAttachError={pushSystem}
           history={history}
           initialDraft={promptDraft}
           onDraftApplied={() => setPromptDraft(undefined)}
@@ -652,5 +701,7 @@ export const REPL: React.FC<REPLProps> = ({
           exitPending={exitPending}
         />
     </Shell>
+    </ToolExpansionContext.Provider>
+    </KeybindingsProvider>
   );
 };

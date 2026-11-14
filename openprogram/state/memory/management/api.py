@@ -39,9 +39,17 @@ def organize_topics(
     """Reorganize Topic files. ``touched`` limits the pass to those files.
 
     Passing None organizes every Topic file, which is the end-of-build pass.
+
+    Files written outside OpenProgram are left off the list: the organizer
+    reads them but never rewrites them (see ``ownership``).
     """
+    from . import ownership
+
     config = config or load_memory_config()
     root = Path(memory_dir) / "topics"
+    outside = {
+        f"topics/{relative}" for relative in ownership.outside_paths(Path(memory_dir))
+    }
     if touched is None:
         paths = sorted(
             path.relative_to(memory_dir).as_posix()
@@ -53,6 +61,10 @@ def organize_topics(
             for path in touched
             if Path(path).as_posix().startswith("topics/")
         })
+    paths = [
+        path for path in paths
+        if not ownership.contains(outside, path)
+    ]
     if not paths:
         return []
     return _run_agent(

@@ -13,6 +13,7 @@ from pathlib import Path
 from openprogram.host.security.identity_header import normalize_identity_header_part
 
 from ..workspace_layout import runtime_dir
+from openprogram.host._platform.filesystem import replace_file
 
 
 @dataclass(frozen=True)
@@ -104,7 +105,7 @@ class RuntimeStateStore:
             # intentionally emulated there.
             if os.name != "nt":
                 os.chmod(temporary, 0o644)
-            os.replace(temporary, self.path)
+            replace_file(temporary, self.path)
         except BaseException:
             Path(temporary).unlink(missing_ok=True)
             raise
@@ -119,7 +120,7 @@ class RuntimeStateStore:
                 cwd=self.memory_dir,
                 check=True,
                 capture_output=True,
-                text=True,
+                text=True, encoding="utf-8", errors="replace",
             )
         except subprocess.CalledProcessError:
             return None
@@ -141,7 +142,7 @@ class RuntimeStateStore:
             cwd=self.memory_dir,
             check=True,
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
         )
         changed = subprocess.run(
             ["git", "diff", "--cached", "--quiet"],
@@ -154,10 +155,10 @@ class RuntimeStateStore:
             cwd=self.memory_dir,
             check=True,
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
         )
         return subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], cwd=self.memory_dir, text=True
+            ["git", "rev-parse", "HEAD"], cwd=self.memory_dir, text=True, encoding="utf-8", errors="replace"
         ).strip()
 
 

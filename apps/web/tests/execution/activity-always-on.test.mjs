@@ -15,7 +15,8 @@ test("the overview lists no separate Always-on group", () => {
 test("the checked-out main agent's row carries the always-on line", () => {
   assert.match(panel, /const always = alwaysOn && scope\.active \? alwaysStatus\(\) : null;/);
   assert.match(panel, /extra=\{always && <Status/);
-  assert.match(panel, /showMain \|\| alwaysOn \? scopes\.map\(scopeRow\)/);
+  // The conversation's own agent is always listed, so its row is always there to carry the line.
+  assert.match(panel, /section\("agents", [^\n]*scopes\.map\(scopeRow\)/);
 });
 
 test("the agent page opens the always-on row from the chart's next wake", () => {

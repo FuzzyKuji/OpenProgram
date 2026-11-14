@@ -68,7 +68,8 @@ class CancellationOperations:
         if dispatch is None or not dispatch.delivered:
             # In particular, owner_not_local is not a delivery confirmation.
             return False
-        cancel_event.set()
+        from openprogram.runtime.execution.run_control.wakeups import set_and_fire
+        set_and_fire(cancel_event)
         return True
 
 

@@ -40,9 +40,11 @@ class SessionMemoryIndex:
     meta: dict = field(default_factory=dict)
     next_seq: int = 0
     # What a transcript view compares: ``token`` changes when the index is
-    # rebuilt, ``edge_version`` when an existing node is reparented.
+    # rebuilt, ``shape_version`` when a stored node changes in a way the view
+    # keeps instead of reading fresh: an existing node is reparented, or a
+    # compaction summary's metadata is patched (its rows are drawn from it).
     token: object = field(default_factory=object)
-    edge_version: int = 0
+    shape_version: int = 0
     # Every seq currently held by a node. Guards against handing out a
     # seq an abandoned node already owns (see ``append``); a set instead
     # of scanning nodes_by_seq keeps append O(1) on long sessions.
@@ -96,6 +98,12 @@ class SessionMemoryIndex:
         with self._lock:
             self.meta.update(fields)
 
+    def metadata_patched(self, node: Call) -> None:
+        """Count a metadata patch to a compaction summary as a change of shape."""
+        if isinstance(node.metadata, dict) and node.metadata.get("covers_ids") is not None:
+            with self._lock:
+                self.shape_version += 1
+
     def reindex_edges(
         self,
         node_id: str,
@@ -112,7 +120,7 @@ class SessionMemoryIndex:
             def _move(index, old: Optional[str], new: Optional[str]) -> None:
                 if old == new:
                     return
-                self.edge_version += 1
+                self.shape_version += 1
                 if old:
                     siblings = index.get(old, [])
                     if node_id in siblings:
@@ -130,24 +138,6 @@ class SessionMemoryIndex:
                 node.predecessor or None,
             )
             _move(self.children_by_caller, old_caller, node.caller or None)
-
-    def update_branch_entry(self, head_msg_id: str, mutate) -> dict:
-        """Merge one branch's ``meta["branches"]`` entry and return it.
-
-        ``mutate(entry)`` gets the current entry and sets only the keys
-        it owns. Read, merge and write happen inside the lock, so a
-        writer that sets the name cannot drop a key another thread wrote
-        in between — the Stage-2 auto-namer runs on a background thread
-        and would otherwise write back a branches dict it read before
-        ``archive_agent`` set ``archived`` (agent-collaboration.md §2.6).
-        """
-        with self._lock:
-            branches = dict(self.meta.get("branches") or {})
-            entry = dict(branches.get(head_msg_id) or {})
-            mutate(entry)
-            branches[head_msg_id] = entry
-            self.meta["branches"] = branches
-            return dict(entry)
 
     # Queries
 

@@ -386,5 +386,9 @@ def test_chat_turn_resolves_the_search_switch_against_the_model(
     _profile, resolved, *_rest, contract = loop_runner.resolve_agent_runtime(request)
 
     assert request._provider_web_search is expected_flag
-    assert ("web_search" in {t.name for t in resolved}) is has_local
-    assert ("web_search" in {t["name"] for t in contract["tools"]}) is has_local
+    # The conversation's own turn keeps one tools array: the local tool
+    # stays listed whichever side searches, and while the provider runs the
+    # search its calls are refused, so the Search switch never rewrites it.
+    (local,) = [t for t in resolved if t.name == "web_search"]
+    assert "web_search" in {t["name"] for t in contract["tools"]}
+    assert (getattr(local, "_unavailable_reason", None) is None) is has_local

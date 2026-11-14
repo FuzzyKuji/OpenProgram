@@ -1,7 +1,7 @@
 """Data types and validation shared by Topic Markdown modules."""
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 
 
@@ -24,6 +24,9 @@ class EvidenceAnnotation:
     source_refs: tuple[str, ...]
     source_links: tuple[str, ...]
     source_labels: tuple[str, ...] = ()
+    # Which run of citations in the paragraph this one belongs to: a
+    # paragraph can make several claims, each cited where it ends.
+    claim: int = 1
 
 
 @dataclass(frozen=True)
@@ -39,6 +42,36 @@ class MemoryUnit:
     source_labels: tuple[str, ...] = ()
     evidence: tuple[EvidenceAnnotation, ...] = ()
     relation_targets: tuple[str, ...] = ()
+    # A paragraph with no ``^id`` of its own (or whose ID an earlier file
+    # already holds) is read under an ID derived from its path and text.
+    # That ID is never written back and is not a link target.
+    derived_id: bool = False
+    # The first line of the paragraph, 1-based; where it sits, not what
+    # it says, so it takes no part in comparing units.
+    line: int = field(default=0, compare=False)
+    # Whether its file was written outside OpenProgram (``installed.json``
+    # records it ``outside``): read and recalled, never rewritten.
+    outside: bool = field(default=False, compare=False)
+
+    @property
+    def named(self) -> bool:
+        """A block the Runtime can name and cite: its own ID and a source.
+
+        The one admission rule for everything built from the tree: the
+        indexes, recent events, the timeline and relations. Prose read
+        under a derived ID, or citing nothing, is read but not admitted.
+        """
+        return not self.derived_id and bool(self.source_refs)
+
+    @property
+    def origin(self) -> str:
+        """Where the paragraph came from, as a reader judges how far to
+        trust it: ``cited`` (it cites the chat messages it rests on),
+        ``outside`` (another tool wrote its file) or ``person`` (a person
+        added it to one of memory's own files without a citation)."""
+        if self.outside:
+            return "outside"
+        return "cited" if self.source_refs else "person"
 
 
 def is_valid_temporal_value(value: str) -> bool:

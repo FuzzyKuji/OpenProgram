@@ -27,6 +27,9 @@ _DEFAULT_TIMEOUT_MS = 30_000
         "  timeout: max wait time in ms (default 30000, max 600000)."
     ),
     toolset=["core"],
+    # read_conversation(execution id) took its place for the model;
+    # kept registered for programs and old transcripts.
+    expose=False,
 )
 def job_output(
     job_id: str,

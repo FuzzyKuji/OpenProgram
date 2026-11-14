@@ -8,6 +8,9 @@ from pathlib import Path
 import subprocess
 from xml.sax.saxutils import escape
 
+from openprogram.host._platform.process_ownership import no_window_creation_flags
+from openprogram.host._platform.processes import console_text
+
 
 def _task(label: str) -> str:
     return "OpenProgram\\" + label
@@ -37,13 +40,17 @@ def submit_controller(label: str, argv: list[str], env: dict[str, str], log: Pat
     definition = log.with_name("controller-task.xml")
     definition.write_text(_definition(argv, env, log), encoding="utf-16")
     for arguments in (["/Create", "/TN", _task(label), "/XML", str(definition), "/F"], ["/Run", "/TN", _task(label)]):
-        result = subprocess.run(["schtasks", *arguments], capture_output=True, text=True, timeout=30)
+        # Bytes, not text: schtasks answers in the code page of its own console.
+        result = subprocess.run(["schtasks", *arguments], capture_output=True, timeout=30,
+                                creationflags=no_window_creation_flags())
         if result.returncode != 0:
-            raise ControllerLaunchError(f"schtasks failed: {(result.stderr or result.stdout).strip()[:500]}")
+            message = console_text(result.stderr).strip() or console_text(result.stdout).strip()
+            raise ControllerLaunchError(f"schtasks failed: {message[:500]}")
 
 
 def retire_controller(label: str) -> None:
-    subprocess.run(["schtasks", "/Delete", "/TN", _task(label), "/F"], capture_output=True, text=True, timeout=30)
+    subprocess.run(["schtasks", "/Delete", "/TN", _task(label), "/F"], capture_output=True, timeout=30,
+                   creationflags=no_window_creation_flags())
 
 
 __all__ = ["retire_controller", "submit_controller"]

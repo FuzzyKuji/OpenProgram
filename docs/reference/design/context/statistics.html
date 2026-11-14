@@ -18,7 +18,7 @@
 <tr><th scope="row">System prompt</th><td>Latest complete recorded system prompt</td><td>Full value first, then Skills, resident Memory and the deferred catalog are subtracted</td></tr>
 <tr><th scope="row">Skills, Memory</th><td>Indexes and resident blocks injected into the system prompt</td><td>Components of the system prompt; never added to the total again</td></tr>
 <tr><th scope="row">System tools, MCP tools</th><td>Provider schemas of the tool set frozen for the turn</td><td><code translate="no">_mcp_server</code> decides which of the two</td></tr>
-<tr><th scope="row">Deferred tools</th><td>Tool-name catalog in the system prompt</td><td>The names actually sent, not full descriptions or schemas</td></tr>
+<tr><th scope="row">Deferred tools</th><td>Tool-name catalog: beside the user message on a conversation's own turn, inside the prompt of a call that has its own</td><td>The names actually sent, not full descriptions or schemas</td></tr>
 <tr><th scope="row">Other context (estimated)</th><td><code translate="no">provider total - classified estimate</code></td><td>Non-persisted images, provider wrapping overhead, temporary surface prompts. Shown, never hidden</td></tr>
 </tbody>
 </table>
@@ -38,6 +38,7 @@ free = max(0, window - displayed_used)</code></pre>
 <li>A model switch applies its context window at once and replaces the old measurement with a fresh estimate; the next completed request supplies a new measurement.</li>
 <li>App and Web read the same <code translate="no">/api/sessions/{id}/context</code> and do not estimate on their own.</li>
 </ul>
+<p class="note">Not yet adjusted: <code translate="no">session_stats.py</code> still subtracts the catalog from the system prompt row, which a conversation's own turn no longer carries there since the catalog moved beside the message (<a href="../function/deferred-tools.html#catalog">Deferred tools</a>).</p>
 
 <details>
 <summary>Source map</summary>

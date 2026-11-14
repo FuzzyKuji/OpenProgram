@@ -36,9 +36,18 @@ class ReplyDelivery:
         """A piece of reply text from the stream."""
         self._streamer.feed(delta)
 
-    def flush(self) -> None:
-        """A tool call starts: send what was written before it."""
-        self._streamer.flush()
+    def flush(self, *, response_ended: bool = True) -> None:
+        """A tool call starts: send what was written before it.
+
+        ``response_ended`` is false for a tool the provider runs itself:
+        the same response goes on after it."""
+        self._streamer.flush(response_ended=response_ended)
+
+    def restart(self) -> None:
+        """The response being streamed is void and is sent again from its
+        start: its unsent text is dropped, and the text already sent is
+        not sent a second time when the new response says it again."""
+        self._streamer.restart()
 
     def close(self) -> list[Any]:
         """Send the queued paragraphs and stop; the failures so far."""

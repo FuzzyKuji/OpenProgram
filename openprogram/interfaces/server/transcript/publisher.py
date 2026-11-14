@@ -23,6 +23,7 @@ from typing import Any, Callable
 from openprogram.state.store.session import session_log
 
 from . import turn_index
+from .navigation import SINGLE
 from .rows import project_rows
 from .status import is_open_status
 from .turn_index import SUB_AGENT_KEY, TranscriptView, _fold_parent, get_sub_agent_view, get_view, next_revision
@@ -38,6 +39,8 @@ _HEAD_WAIT_SECONDS = 2.0
 _HEAD_WALK_LIMIT = 4096
 _STRUCTURE_KEYS = {"rewound", "structural"}
 _DERIVED_FIELDS = ("order", "steeringReplyId", "continuedBy", "continues")
+# A version arrow's fields, in the order ``TranscriptView.navigation`` keeps them.
+_NAVIGATION_FIELDS = ("siblingIndex", "siblingTotal", "prevSiblingId", "nextSiblingId")
 _ITEM_LISTS = ("attachCards", "runtimeChildren", "callRoots")
 # Text arrives by text frames; lists arrive as items; the rest is a field patch.
 _NOT_PATCHED = {"id", "content", "thinking", "blocks", *_ITEM_LISTS, *_DERIVED_FIELDS}
@@ -73,6 +76,7 @@ class _Sent:
     items: dict[str, dict[str, int]] = field(default_factory=dict)
     derived: dict[str, tuple] = field(default_factory=dict)
     order: dict[str, list[str]] = field(default_factory=dict)
+    navigation: dict[str, tuple] | None = None
 
 
 def _dumps(value: Any) -> str:
@@ -175,6 +179,21 @@ class TranscriptPublisher:
                 self._release_locked(ws, closed)
         if closed is not None:
             self._send(ws, _dumps({"type": "view_closed", "data": {"session_id": _view_session(closed), "view": closed}}))
+
+    def read_view(self, view_key: str, view: TranscriptView) -> None:
+        """Note the version arrows a holder is about to read.
+
+        Arrow patches are counted from the oldest read no step has answered,
+        so a later read that already shows a moved arrow does not hide the
+        move from a holder that read before it. A view's arrows never change
+        in place, so these are the ones the read's rows carry.
+        """
+        with self._lock:
+            if view_key not in self._holders:
+                return
+            sent = self._sent.setdefault(view_key, _Sent())
+            if sent.navigation is None:
+                sent.navigation = dict(view.navigation)
 
     def close_view(self, ws: Any, view: str) -> None:
         with self._lock:
@@ -345,12 +364,18 @@ class TranscriptPublisher:
         view = turn_index.cached_view(view_key)
         if view is None:
             return False
+        with self._lock:
+            sent = self._sent.setdefault(view_key, _Sent())
+            if sent.navigation is None:
+                # No holder has read yet; its read can only be newer than this.
+                sent.navigation = dict(view.navigation)
         rows = {row["id"]: row for row in db.transcript_rows(session_id, list(dirty.rows))}
         branches = dirty.head_moved or any(change.deleted for change in dirty.rows.values()) or any(
             row.get("function") == "attach" for row in rows.values())
         stale = self._stale_reason(db, session_id, view, dirty, rows)
         if stale is not None:
             head = (db.get_session(session_id) or {}).get("head_id")
+            sent.navigation = None  # the holders read again; the first of those reads is noted
             self._send_changes(view, view_key, [{"kind": "window_stale", "head_id": head, "reason": stale}])
             return branches
         targets = self._targets(db, session_id, view, view_key, dirty, rows)
@@ -359,6 +384,7 @@ class TranscriptPublisher:
             with view.lock:
                 changes = self._changes(db, view, view_key, targets, rows) if targets else []
                 changes += self._tree_changes(db, session_id, view, view_key, dirty.trees)
+                changes += self._navigation_changes(sent, view)
                 self._send_changes(view, view_key, changes)
         return branches
 
@@ -370,7 +396,8 @@ class TranscriptPublisher:
             if change.deleted:
                 return "structure"
             row = rows.get(row_id)
-            if change.keys & _STRUCTURE_KEYS or (row is not None and change.put and row.get("covers_ids") is not None):
+            # A summary's rows are drawn from it, on its insert and on every patch.
+            if change.keys & _STRUCTURE_KEYS or (row is not None and row.get("covers_ids") is not None):
                 return "structure"
             if "predecessor" in change.keys and not change.put and row_id in view.positions and row_id not in last_turn:
                 return "structure"
@@ -611,6 +638,25 @@ class TranscriptPublisher:
             out.append({"kind": "row_patch", "turnId": turn_id, "rowId": row["id"], "fields": fields})
         return out
 
+    @staticmethod
+    def _navigation_changes(sent: _Sent, view: TranscriptView) -> list[dict]:
+        """Version arrows that lead somewhere new.
+
+        A row written on a branch this view does not draw (a turn running on
+        another branch) becomes the leaf an arrow of a drawn row leads to.
+        No drawn row changed, so the arrow is patched on its own.
+        """
+        before, sent.navigation = sent.navigation or {}, dict(view.navigation)
+        out: list[dict] = []
+        for row_id in {**before, **view.navigation}:
+            old, new = before.get(row_id, SINGLE), view.navigation.get(row_id, SINGLE)
+            position = view.positions.get(row_id)
+            if old == new or position is None:
+                continue
+            fields = {name: value for name, was, value in zip(_NAVIGATION_FIELDS, old, new) if was != value}
+            out.append({"kind": "row_patch", "turnId": view.turns[position].id, "rowId": row_id, "fields": fields})
+        return out
+
     def _tree_changes(
         self, db: Any, session_id: str, view: TranscriptView, view_key: str,
         trees: dict[tuple[str, str], tuple[dict, str | None]],
@@ -715,6 +761,11 @@ def notice_tree(session_id: str, msg_id: str, tree: dict, function: str | None) 
     """A live tree from the Server's fan-out: the input for function-run cards."""
     if _publisher is not None:
         _publisher.notice_tree(session_id, msg_id, tree, function)
+
+
+def read_view(view_key: str, view: TranscriptView) -> None:
+    if _publisher is not None:
+        _publisher.read_view(view_key, view)
 
 
 def close_view(ws: Any, view: str) -> None:

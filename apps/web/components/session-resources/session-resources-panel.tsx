@@ -134,10 +134,9 @@ function SessionResourceList({ sessionId, active }: { sessionId: string | null; 
   };
   const viewedBranch = backend.currentBranchId;
   const pref = sessionId ? getPreviewPreference(sessionId, viewedBranch) : null;
-  // Webpage, Application and Terminal are always listed; until the
-  // session's resources are read they stay folded and show no count.
+  // A group, header included, is listed only when it has something in it.
   const loaded = backend.loaded;
-  const groups = groupSessionResources(rows, viewedBranch, sessionId ? DEFAULT_GROUPS : []).map(group => ({
+  const groups = groupSessionResources(rows, viewedBranch, sessionId ? DEFAULT_GROUPS : []).filter(group => group.rows.length > 0).map(group => ({
     ...group, title: names[group.key] || text("Other resources", "其他资源"),
   }));
   const icons = { terminal: TerminalSquare, web: Globe, docker: Box, vm: Monitor, remote: Server, desktop: Monitor };
@@ -208,6 +207,7 @@ function SessionResourceList({ sessionId, active }: { sessionId: string | null; 
     </p>}
     <div className={`${styles.list} flex-1 overflow-y-auto min-h-0`}>
       {!sessionId && <p className={styles.empty}>{text("Select a session to view its resources.", "选择会话以查看其资源。")}</p>}
+      {sessionId && loaded && groups.length === 0 && <p className={styles.empty}>{text("No pages, applications or terminals in this conversation.", "这个会话还没有网页、应用或终端。")}</p>}
       {groups.map(group => {
         const open = loaded && collapsed[group.key] !== true;
         const toggleGroup = () => {

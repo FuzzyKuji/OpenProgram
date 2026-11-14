@@ -98,9 +98,19 @@ def build_parser(sub: argparse._SubParsersAction) -> None:
     p_logout.add_argument("--yes", action="store_true", help="Skip confirmation")
 
     # status
-    p_status = auth_sub.add_parser("status", help="Check a provider's current credential")
-    p_status.add_argument("provider", help="Provider id to check")
+    p_status = auth_sub.add_parser(
+        "status",
+        help="Every connected provider's health, quota and 30-day spend; "
+             "with PROVIDER, that provider's current credential",
+    )
+    p_status.add_argument("provider", nargs="?", default=None,
+                          help="Provider id to check one credential (omit for every provider)")
     p_status.add_argument("--account", default=DEFAULT_ACCOUNT_NAME, help="Account to check")
+    p_status.add_argument("--refresh", action="store_true",
+                          help="Read each provider's quota endpoint now instead of using values "
+                               "under ten minutes old")
+    p_status.add_argument("--json", action="store_true",
+                          help="Output the same JSON as GET /api/providers/status")
 
     # use — pick which account (account) a provider runs on
     p_use = auth_sub.add_parser("use", help="Set which account (account) a provider runs on")

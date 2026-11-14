@@ -11,7 +11,14 @@ installLoader({
     "next/link": "import { createElement } from 'react'; export default ({ href, children, prefetch, ...props }) => createElement('a', { href, ...props }, children);",
   },
   replace: {
-    "/components/memory/document.tsx": "import { createElement as h } from 'react'; export const MemoryDocument = ({ title, meta, url }) => h('article', { 'data-document': url }, title, ' ', (meta ?? []).join(' '));",
+    "/components/memory/document.tsx": [
+      "import { createElement as h } from 'react';",
+      "export const MemoryDocument = ({ title, meta, url, onSaved, onDelete, onRemovedChange }) => h('article', { 'data-document': url }, title, ' ', (meta ?? []).join(' '),",
+      "  onSaved && h('button', { type: 'button', 'data-stub': 'saved', onClick: onSaved }, 'saved'),",
+      "  onRemovedChange && h('button', { type: 'button', 'data-stub': 'removed', onClick: onRemovedChange }, 'removed'),",
+      "  onDelete && h('button', { type: 'button', 'data-stub': 'delete', onClick: () => onDelete() }, 'delete'),",
+      "  onDelete && h('button', { type: 'button', 'data-stub': 'delete-removed', onClick: () => onDelete({ removed: true }) }, 'delete removed'));",
+    ].join("\n"),
     "/components/ui/confirm-dialog.tsx": "export const confirmAction = async () => true;",
     "/lib/format-utils/toast.ts": "export const showToast = () => {};",
     "/components/ui/toggle-group.tsx": [
@@ -40,8 +47,8 @@ function memoryFetch(overrides = {}) {
     "/api/memory/core": () => reply({ injected_content: "", injected_tokens: 0, budget_tokens: 2000, injection_enabled: true }),
     ...overrides,
   };
-  globalThis.fetch = async (url) => {
-    urls.push(url);
+  globalThis.fetch = async (url, init) => {
+    urls.push(init?.method && init.method !== "GET" ? `${init.method} ${url}` : url);
     const path = url.split("?")[0];
     const route = routes[path] ?? Object.entries(routes).find(([prefix]) => path.startsWith(`${prefix}/`))?.[1];
     if (!route) throw new Error(`unexpected fetch ${url}`);
@@ -78,6 +85,84 @@ test("a failed background write is announced with its reason, and a healthy writ
   const banner = view.container.querySelector('[role="alert"]');
   assert.match(banner.textContent, /Conversations are not reaching memory: the writer model timed out; retrying on its own/);
   assert.match(banner.textContent, /nothing written yet · 3 turns waiting/);
+  await view.unmount();
+});
+
+test("Topic files that are not text are named in one row", async () => {
+  memoryFetch({
+    "/api/memory/status": () => reply({ writer: { last_outcome: "success", last_success_at: null, last_failure: null, not_text: ["topics/career/a.md", "topics/career/b.md", "topics/career/c.md", "topics/career/d.md"] } }),
+  });
+  const view = await renderPage();
+  const rows = [...view.container.querySelectorAll('[role="alert"]')];
+  assert.equal(rows.length, 1);
+  assert.match(rows[0].textContent, /4 topic files are not text and stay out of memory/);
+  assert.match(rows[0].textContent, /career\/a\.md, career\/b\.md, career\/c\.md and 1 more/);
+  await view.unmount();
+});
+
+test("writing paused for every conversation says why in its own row", async () => {
+  memoryFetch({
+    "/api/memory/status": () => reply({ writer: { last_outcome: "success", last_success_at: null, last_failure: null, paused: { scope: "credential", reason_code: "MODEL_AUTHENTICATION", reason: "401" } } }),
+  });
+  const view = await renderPage();
+  const rows = [...view.container.querySelectorAll('[role="alert"]')];
+  assert.equal(rows.length, 1);
+  assert.match(rows[0].textContent, /Writing paused: the writer model's sign-in is no longer valid/);
+  await view.unmount();
+});
+
+test("the not-text row follows a save or delete of a topic in the editor", async () => {
+  for (const action of ["saved", "delete"]) {
+    let unreadable = ["topics/career/a.md"];
+    memoryFetch({
+      "/api/memory/status": () => reply({ writer: { last_outcome: "success", last_success_at: null, last_failure: null, not_text: unreadable } }),
+      "/api/memory/topics": () => reply([{ path: "career/a.md", title: "Applications", type: "", size: 1, mtime: 0 }]),
+    });
+    const view = await renderPage();
+    assert.match(view.container.querySelector('[role="alert"]').textContent, /career\/a\.md/);
+    await view.act(async () => { railButton(view, "Applications").click(); await settle(); });
+
+    // The person replaces (or deletes) the file; it is text again.
+    unreadable = [];
+    const control = view.container.querySelector(`[data-stub="${action}"]`);
+    assert.ok(control, `the page hears when a ${action} lands`);
+    await view.act(async () => { control.click(); await settle(); await settle(); });
+
+    assert.equal(view.container.querySelector('[role="alert"]'), null, action);
+    await view.unmount();
+  }
+});
+
+test("a save that removes a title-only topic, or brings it back, refreshes the topic list", async () => {
+  let pages = [{ path: "career/a.md", title: "Applications", type: "", size: 1, mtime: 0 }];
+  const urls = memoryFetch({ "/api/memory/topics": () => reply(pages) });
+  const view = await renderPage();
+  await view.act(async () => { railButton(view, "Applications").click(); await settle(); });
+  const listed = () => urls.filter((url) => url.split("?")[0] === "/api/memory/topics").length;
+  const before = listed();
+
+  // The server removed the file; the editor stays open on what was typed.
+  pages = [];
+  await view.act(async () => { view.container.querySelector('[data-stub="removed"]').click(); await settle(); });
+
+  assert.equal(listed(), before + 1);
+  assert.equal(railButton(view, "Applications"), undefined);
+  assert.ok(view.container.querySelector("[data-document]"));
+  await view.unmount();
+});
+
+test("deleting a topic its save already removed closes it without asking the server", async () => {
+  let pages = [{ path: "career/a.md", title: "Applications", type: "", size: 1, mtime: 0 }];
+  const urls = memoryFetch({ "/api/memory/topics": () => reply(pages) });
+  const view = await renderPage();
+  await view.act(async () => { railButton(view, "Applications").click(); await settle(); });
+  pages = [];
+
+  // The file is already gone; a DELETE would answer 404 and leave the editor open.
+  await view.act(async () => { view.container.querySelector('[data-stub="delete-removed"]').click(); await settle(); });
+
+  assert.deepEqual(urls.filter((url) => url.startsWith("DELETE ")), []);
+  assert.equal(view.container.querySelector("[data-document]"), null);
   await view.unmount();
 });
 

@@ -18,6 +18,7 @@ from openprogram.models.providers.types import (
     UserMessage,
 )
 from openprogram.models.providers.utils.event_stream import EventStream
+from openprogram.models.providers.utils.overflow import is_context_overflow
 from openprogram.runtime.agent.loop.types import (
     AgentContext,
     AgentEvent,
@@ -41,7 +42,12 @@ from openprogram.runtime.agent.loop.guards import (
 from openprogram.runtime.agent.loop.message_context import _durable_message
 from openprogram.runtime.agent.loop.streaming import _stream_assistant_response
 from openprogram.runtime.agent.loop.tool_dispatch import _execute_tool_calls
+from openprogram.runtime.agent.loop.progress_note import QuietStretch
 from openprogram.runtime.agent.loop.tool_loop_guard import ToolLoopGuard
+
+
+#: Compactions one turn may run to recover from a context overflow.
+OVERFLOW_COMPACTIONS_PER_TURN = 2
 
 
 async def _run_loop(current_context, new_messages, config, cancel_event, ev_stream, stream_fn):
@@ -191,15 +197,37 @@ async def _run_loop_with_recovery(
     iteration_cap = iteration_cap_for(config.max_iterations)
     inner_iterations = 0
 
+    # Overflow recovery (context/compaction.html, "Reactive"): the request
+    # that overflowed is sent again once after a compaction, never the turn.
+    # One compaction per request, two per turn, so a compaction that does not
+    # help cannot loop (Codex's "retry once per model step").
+    overflow_compactions = 0
+    retrying_after_overflow = False
+    mid_turn_compacted = False
+
+    async def recover_from_overflow() -> bool:
+        """Compact and replace the loop's messages; whether to send again."""
+        nonlocal overflow_compactions, retrying_after_overflow
+        if (config.compact_turn is None or structured_plan is not None
+                or retrying_after_overflow
+                or overflow_compactions >= OVERFLOW_COMPACTIONS_PER_TURN):
+            return False
+        overflow_compactions += 1
+        replaced = await config.compact_turn(list(current_context.messages), "reactive")
+        if cancel_event is not None and cancel_event.is_set():
+            raise ExecInterrupt("cancelled")
+        if replaced is None:
+            return False
+        current_context.messages = replaced
+        retrying_after_overflow = True
+        return True
+
     while True:
-        # Pin initial membership. Explicit tool_search discoveries extend
-        # this set for the next provider request without rebuilding tools.
-        from openprogram.programs import freeze_turn_tools
-        freeze_turn_tools(list(current_context.tools or []))
         has_more_tool_calls = True
         steering_after_tools: list[AgentMessage] | None = None
         repeat_failures: dict[str, int] = {}
         tool_loop = ToolLoopGuard()
+        quiet = QuietStretch()
         incomplete_responses = 0
 
         while has_more_tool_calls or len(pending_messages) > 0:
@@ -340,6 +368,38 @@ async def _run_loop_with_recovery(
                 if await schedule_structured_repair(error, candidate):
                     continue
                 raise
+            except Exception as error:
+                from openprogram.runtime.context.compaction.reactive import is_overflow_error
+                if not is_overflow_error(error):
+                    raise
+                failed = AssistantMessage(
+                    content=[], api=config.model.api, provider=config.model.provider,
+                    model=config.model.id, stop_reason="error", error_message=str(error),
+                    timestamp=int(time.time() * 1000),
+                )
+                last = current_context.messages[-1] if current_context.messages else None
+                if isinstance(last, AssistantMessage) and not any(last is m for m in new_messages):
+                    # What the failed response streamed before it failed.
+                    current_context.messages.pop()
+                if not await recover_from_overflow():
+                    raise
+                await finish_provider_response(failed)
+                has_more_tool_calls = True
+                continue
+
+            if (not steered_response and message.stop_reason == "error"
+                    and is_context_overflow(message)):
+                # The overflowed response is not part of the turn: it leaves
+                # the messages before the compaction rebuilds them.
+                if current_context.messages and current_context.messages[-1] is message:
+                    current_context.messages.pop()
+                if await recover_from_overflow():
+                    await finish_provider_response(message)
+                    has_more_tool_calls = True
+                    continue
+                current_context.messages.append(message)
+            elif not steered_response and message.stop_reason != "error":
+                retrying_after_overflow = False
 
             if not steered_response and (message.stop_reason in ("error", "aborted") or (
                 structured_plan is not None and message.stop_reason == "length"
@@ -573,6 +633,9 @@ async def _run_loop_with_recovery(
                     repeat_failures,
                     config.safe_point_hook,
                     round_id=f"turn:{inner_iterations}",
+                    context_window=getattr(config.model, "context_window", None),
+                    tool_output_weight=getattr(config.model, "tool_output_weight", None),
+                    history=current_context.messages,
                 )
                 tool_results.extend(execution["tool_results"])
                 steering_after_tools = execution.get("steering_messages")
@@ -601,6 +664,23 @@ async def _run_loop_with_recovery(
                 pending_messages = []
                 if config.get_steering_messages:
                     pending_messages = await config.get_steering_messages()
+
+            if (config.compact_turn is not None and tool_results and not mid_turn_compacted
+                    and structured_plan is None):
+                # A step boundary: every result of this step is in. When the
+                # next request would pass the automatic threshold, the turn's
+                # history is compacted for good now, once per turn, instead of
+                # being summarised again on every request (Codex's MidTurn).
+                replaced = await config.compact_turn(list(current_context.messages), "mid_turn")
+                if replaced is not None:
+                    current_context.messages = replaced
+                    mid_turn_compacted = True
+
+            if pending_messages:
+                quiet.reset()
+            elif config.progress_notes and tool_results and (note := quiet.observe(message)):
+                # For this turn only: it goes to the model after the results and is not kept.
+                current_context.messages.append(UserMessage(content=note, timestamp=int(time.time() * 1000)))
 
             # Anything the user says mid-turn is progress; otherwise a round
             # that repeats the last ones exactly ends the turn with a notice.

@@ -70,16 +70,52 @@ def _attach_cancellable_producer(stream, coroutine, cancel_event):
     if cancel_event is None:
         return
 
-    async def watch_cancel():
-        # The signal is part of request option snapshots; do not attach an
-        # asyncio Future to it (deep-copying a pending Event is invalid).
-        while not cancel_event.is_set():
-            await asyncio.sleep(0.05)
+    from openprogram.runtime.execution.run_control import wakeups
+
+    def cut() -> None:
         if not producer.done():
             producer.cancel()
-            done, _ = await asyncio.wait({producer}, timeout=1.0)
-            if not done:
-                producer.cancel()
 
-    watcher = asyncio.create_task(watch_cancel())
-    producer.add_done_callback(lambda _: watcher.cancel())
+    async def finish_cut() -> None:
+        # A producer that ignored its first cancel gets a second one.
+        done, _ = await asyncio.wait({producer}, timeout=1.0)
+        if not done:
+            producer.cancel()
+
+    def on_stop() -> None:
+        if producer.done():
+            return
+        cut()
+        asyncio.ensure_future(finish_cut())
+
+    # The signal is part of request option snapshots, so nothing is attached
+    # to it (deep-copying a pending Event is invalid): the producer's cut is
+    # registered beside it and runs when it is fired (``run_control.wakeups``).
+    handle = wakeups.register(cancel_event, on_stop, loop=asyncio.get_running_loop())
+
+    async def backstop() -> None:
+        # Only for code that sets the signal without firing it.
+        while not cancel_event.is_set():
+            await asyncio.sleep(_STOP_BACKSTOP_S)
+        on_stop()
+
+    watcher = asyncio.create_task(backstop())
+    if cancel_event.is_set():
+        on_stop()
+
+    def done(task):
+        wakeups.unregister(handle)
+        watcher.cancel()
+        ended = getattr(stream, "_result_event", None)
+        if task.cancelled() and ended is not None and not ended.is_set():
+            # Cut before its body ran (a stop that came before the loop's
+            # first step): its own handler never ended the stream, and the
+            # reader would wait on it for good. Nothing ran, so nothing is new.
+            stream.end([])
+
+    producer.add_done_callback(done)
+
+
+#: A stop cuts the producer when it is fired; this check catches only code
+#: that sets the signal without firing it.
+_STOP_BACKSTOP_S = 0.5

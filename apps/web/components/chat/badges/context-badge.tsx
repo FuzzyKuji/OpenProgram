@@ -35,6 +35,7 @@ import {
   warmDraftContextBreakdown,
   writeContextBreakdownCache,
 } from "@/lib/chat/context-breakdown-cache";
+import { isCompacting } from "@/lib/chat/run/run-operation";
 
 interface ContextBadgeProps {
   /** Active conversation id. The component is keyed on this so a
@@ -87,7 +88,7 @@ export function ContextBadge({ sessionId }: ContextBadgeProps) {
   const ringBasis = useSessionStore((s) => (sid ? s.tokens[sid]?.basis : undefined));
   const ringWindow = useSessionStore((s) => (sid ? s.contextWindow[sid] : undefined));
   const compacting = useSessionStore((s) =>
-    Boolean(sid && s.compactionUi[sid]?.running),
+    Boolean(sid && isCompacting(s.runningTasks[sid])),
   );
 
   // Paint from the ring the moment this session is focused. GET /context

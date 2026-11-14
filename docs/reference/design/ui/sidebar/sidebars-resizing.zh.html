@@ -6,7 +6,7 @@
 <thead><tr><th scope="col">状态</th><th scope="col">宽度</th><th scope="col">行为</th></tr></thead>
 <tbody>
 <tr><th scope="row">左侧展开</th><td>180–480px，窗口宽于 900px 时不超过窗口的 30%</td><td>从右边缘拖动；到极限停止。窗口变窄只限制显示，不改存下的宽度，窗口放大后宽度恢复</td></tr>
-<tr><th scope="row">右侧展开</th><td>240–720px，窗口宽于 900px 时不超过窗口的 45%</td><td>从左边缘拖动；到极限停止。窗口变窄只限制显示，不改存下的宽度，窗口放大后宽度恢复</td></tr>
+<tr><th scope="row">右侧展开</th><td>240–800px，窗口宽于 900px 时不超过窗口的 50%</td><td>从左边缘拖动；到极限停止。窗口变窄只限制显示，不改存下的宽度，窗口放大后宽度恢复</td></tr>
 <tr><th scope="row">折叠</th><td>62px：8px 边距内的 46px 卡片</td><td>两侧相同的 200ms 宽度动画</td></tr>
 <tr><th scope="row">再次展开</th><td>折叠前的有效宽度</td><td>相同动画；保留最近调整的宽度</td></tr>
 </tbody>
@@ -19,7 +19,8 @@
 <tbody>
 <tr><th scope="row">手柄</th><td><code translate="no">.rail-resize-handle</code>，分隔线两侧约 8px 可点击，不影响布局宽度。外壳允许它溢出，内部内容仍裁切。</td></tr>
 <tr><th scope="row">拖动</th><td>只有主键触发；手柄上禁用触摸平移和文字选择。悬停时出现和分屏分隔线相同的短条，位于两张卡片之间 8px 缝隙的正中；拖动时变实，宽度停在默认值上时变成主题色。</td></tr>
-<tr><th scope="row">回到默认</th><td>两侧相同：双击拖动条，或焦点在拖动条上时按 Enter，用 280ms 缓出回到 288px；宽度像拖动一样逐帧变化，侧栏里面的内容跟着边缘一起动。拖到 288px 附近 8px 内会贴上去。处于默认宽度时不保存。</td></tr>
+<tr><th scope="row">回到默认</th><td>两侧相同：双击拖动条，或焦点在拖动条上时按 Enter，用 280ms 缓出回到 288px；宽度像拖动一样逐帧变化，侧栏里面的内容跟着边缘一起动。处于默认宽度时不保存。</td></tr>
+<tr><th scope="row">吸附</th><td>拖到吸附点 8px 内会停在上面，拖动条变蓝。左侧栏只有 288px 一个吸附点。右侧栏是 288、544、800px，正好放下一、二、三列完整的<a href="../chat/activity-panel.zh.html#agent-chart">运行记录时间图</a>。</td></tr>
 <tr><th scope="row">结束拖动</th><td>松开、指针取消或窗口失焦。窗口级结束事件作为被捕获手柄事件的补充；移动事件发现按键已松开也会结束。每次都恢复折叠动画。</td></tr>
 </tbody>
 </table>

@@ -41,7 +41,7 @@ _COLUMNS = [
     "cost_cache_read", "cost_cache_write", "cost_source", "token_source",
     "schema_version", "job_id", "budget_scope_id", "reservation_id",
     "request_id", "goal_id", "goal_revision", "goal_session_id", "execution_id", "tokens_known",
-    "first_token_ms", "first_text_ms",
+    "first_token_ms", "first_text_ms", "prefix_hash", "break_at", "break_cause", "expected",
 ]
 
 _BOOTSTRAP_BUSY_TIMEOUT_MS = 2_000
@@ -84,6 +84,10 @@ CREATE TABLE IF NOT EXISTS usage_events (
     ,tokens_known INTEGER NOT NULL DEFAULT 1
     ,first_token_ms INTEGER
     ,first_text_ms INTEGER
+    ,prefix_hash TEXT
+    ,break_at INTEGER
+    ,break_cause TEXT
+    ,expected TEXT
 );
 CREATE INDEX IF NOT EXISTS ix_usage_ts       ON usage_events(ts);
 CREATE INDEX IF NOT EXISTS ix_usage_model_ts ON usage_events(model_id, ts);
@@ -91,9 +95,25 @@ CREATE INDEX IF NOT EXISTS ix_usage_session  ON usage_events(session_id);
 CREATE INDEX IF NOT EXISTS ix_usage_kind_ts  ON usage_events(call_kind, ts);
 CREATE INDEX IF NOT EXISTS ix_usage_job     ON usage_events(job_id);
 CREATE INDEX IF NOT EXISTS ix_usage_goal ON usage_events(goal_session_id, goal_id);
+CREATE INDEX IF NOT EXISTS ix_usage_execution ON usage_events(execution_id);
 CREATE UNIQUE INDEX IF NOT EXISTS ix_usage_request ON usage_events(request_id) WHERE request_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS ix_usage_reservation ON usage_events(reservation_id);
 CREATE INDEX IF NOT EXISTS ix_usage_budget_scope ON usage_events(budget_scope_id);
+
+-- The last answered request on each prompt-cache lane (session, kind of
+-- call, label, agent, branch), as models/usage/prefix_fingerprint.py
+-- fingerprints it: the next request on the lane is compared with it, across
+-- Worker restarts. ``family`` is the lane without its branch.
+CREATE TABLE IF NOT EXISTS prefix_baselines (
+    lane TEXT PRIMARY KEY,
+    family TEXT,
+    session_id TEXT,
+    ts REAL NOT NULL,
+    fingerprint_json TEXT NOT NULL,
+    cache_read INTEGER,
+    expected TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_prefix_baselines_session ON prefix_baselines(session_id);
 
 CREATE TABLE IF NOT EXISTS usage_requests (
     request_id TEXT PRIMARY KEY,
@@ -139,6 +159,49 @@ CREATE TABLE IF NOT EXISTS probe_events (
     error TEXT
 );
 CREATE INDEX IF NOT EXISTS ix_probe_events_ts ON probe_events(ts);
+
+-- The latest value of each quota limit a provider reported, per provider,
+-- key (credential id; '' for a key with no stored credential) and limit.
+-- Written by models/usage/quota.py from response headers, the Codex
+-- WebSocket frame and the read-only quota endpoints. Never usage.
+CREATE TABLE IF NOT EXISTS quota_snapshots (
+    provider TEXT NOT NULL,
+    account TEXT NOT NULL,
+    limit_key TEXT NOT NULL,
+    label TEXT NOT NULL,
+    unit TEXT NOT NULL,
+    used REAL, lim REAL, remaining REAL, used_fraction REAL,
+    window_minutes INTEGER, resets_at REAL,
+    source TEXT NOT NULL,
+    status TEXT NOT NULL,
+    fetched_at REAL NOT NULL,
+    PRIMARY KEY (provider, account, limit_key)
+);
+-- At most one row per limit per QUOTA_SAMPLE_EVERY_S, kept QUOTA_SAMPLES_KEPT_S:
+-- the balance history and a limit's line on a usage chart.
+CREATE TABLE IF NOT EXISTS quota_samples (
+    provider TEXT NOT NULL,
+    account TEXT NOT NULL,
+    limit_key TEXT NOT NULL,
+    ts REAL NOT NULL,
+    remaining REAL,
+    used_fraction REAL
+);
+CREATE INDEX IF NOT EXISTS ix_quota_samples ON quota_samples(provider, account, limit_key, ts);
+-- The last read of each key's quota endpoint, whatever it answered, so every
+-- process (Worker, CLI) follows one read policy: when it was read, the
+-- failure of that read (NULL when it answered with values), the HTTP status,
+-- a 429 hold, and when a failed call last asked for a read.
+CREATE TABLE IF NOT EXISTS quota_reads (
+    provider TEXT NOT NULL,
+    account TEXT NOT NULL,
+    read_at REAL,
+    status INTEGER,
+    error TEXT,
+    held_until REAL,
+    failure_read_at REAL,
+    PRIMARY KEY (provider, account)
+);
 """
 
 # group_by token → SQL expression. ``day``/``hour`` are time buckets.
@@ -194,6 +257,15 @@ class AggregateRow:
 
 # How long probe_events rows are kept.
 PROBE_EVENTS_KEPT_S = 30 * 24 * 3600
+# One quota sample per limit at most this often; samples older than the
+# second figure are dropped as new ones come.
+QUOTA_SAMPLE_EVERY_S = 15 * 60
+QUOTA_SAMPLES_KEPT_S = 90 * 24 * 3600
+_QUOTA_FIELDS = (
+    "provider", "account", "limit_key", "label", "unit", "used", "lim", "remaining",
+    "used_fraction", "window_minutes", "resets_at", "source", "status", "fetched_at",
+)
+_QUOTA_READ_FIELDS = ("read_at", "status", "error", "held_until", "failure_read_at")
 
 
 class UsageLedger:
@@ -367,15 +439,18 @@ class UsageLedger:
             }
             columns = {name: "TEXT" for name in (
                 "job_id", "budget_scope_id", "reservation_id", "request_id", "goal_id",
-                "goal_session_id", "execution_id")}
+                "goal_session_id", "execution_id", "prefix_hash", "break_cause", "expected")}
             columns.update(goal_revision="INTEGER", tokens_known="INTEGER NOT NULL DEFAULT 1",
-                           first_token_ms="INTEGER", first_text_ms="INTEGER")
+                           first_token_ms="INTEGER", first_text_ms="INTEGER", break_at="INTEGER")
             for name, definition in columns.items():
                 if existing and name not in existing:
                     conn.execute(f"ALTER TABLE usage_events ADD COLUMN {name} {definition}")
             request_columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(usage_requests)")}
             if request_columns and "observed_json" not in request_columns:
                 conn.execute("ALTER TABLE usage_requests ADD COLUMN observed_json TEXT")
+            baseline_columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(prefix_baselines)")}
+            if baseline_columns and "family" not in baseline_columns:
+                conn.execute("ALTER TABLE prefix_baselines ADD COLUMN family TEXT")
             conn.commit()
         except Exception:
             conn.rollback()
@@ -615,22 +690,34 @@ class UsageLedger:
 
     # read
 
-    def calls(self, *, since: float, call_kinds: Iterable[str]) -> list[dict]:
-        """Every call of ``call_kinds`` since ``since`` whose tokens are known,
-        oldest first: when, which conversation, which model, and its tokens."""
+    def calls(self, *, call_kinds: Iterable[str], since: Optional[float] = None,
+              execution_ids: Optional[Iterable[str]] = None) -> list[dict]:
+        """Every call of ``call_kinds`` whose tokens are known, oldest first:
+        when, which conversation and execution, which model, and its tokens.
+        ``since`` keeps the calls from then on; ``execution_ids`` those made
+        in one of these executions."""
         kinds = tuple(call_kinds)
         if not kinds:
             return []
-        marks = ", ".join("?" for _ in kinds)
+        where = [f"tokens_known = 1 AND call_kind IN ({', '.join('?' for _ in kinds)})"]
+        params: list = list(kinds)
+        if since is not None:
+            where.append("ts >= ?")
+            params.append(since)
+        if execution_ids is not None:
+            ids = tuple(execution_ids)
+            if not ids:
+                return []
+            where.append(f"execution_id IN ({', '.join('?' for _ in ids)})")
+            params.extend(ids)
         with self._lock:
             conn = self._connect()
             rows = conn.execute(
-                "SELECT ts, session_id, parent_session_id, call_kind, provider, api, "
-                "model_id, input_tokens, output_tokens, cache_read_tokens, "
+                "SELECT ts, session_id, parent_session_id, execution_id, call_kind, provider, "
+                "api, model_id, input_tokens, output_tokens, cache_read_tokens, "
                 "cache_write_tokens FROM usage_events "
-                f"WHERE ts >= ? AND tokens_known = 1 AND call_kind IN ({marks}) "
-                "ORDER BY ts",
-                (since, *kinds),
+                f"WHERE {' AND '.join(where)} ORDER BY ts",
+                params,
             ).fetchall()
         return [dict(r) for r in rows]
 
@@ -662,12 +749,19 @@ class UsageLedger:
         until: Optional[float] = None,
         group_by: Optional[list[str]] = None,
         filters: Optional[dict] = None,
+        execution_ids: Optional[Iterable[str]] = None,
     ) -> list[AggregateRow]:
         """Aggregate events. ``group_by`` is a list of field names from
         ``_GROUP_EXPR`` (``day``/``hour`` are time buckets). ``filters`` maps
-        an equality column to a value. Unknown group_by tokens are ignored."""
+        an equality column to a value; ``execution_ids`` keeps the events of
+        those executions (none at all for an empty set). Unknown group_by
+        tokens are ignored."""
         group_by = [g for g in (group_by or []) if g in _GROUP_EXPR]
         where, params = [], []
+        if execution_ids is not None:
+            ids = tuple(execution_ids)
+            where.append(f"execution_id IN ({', '.join('?' for _ in ids)})" if ids else "0")
+            params.extend(ids)
         if since is not None:
             where.append("ts >= ?")
             params.append(since)
@@ -798,6 +892,151 @@ class UsageLedger:
                 "SELECT ts, provider, kind, method, url, status, elapsed_ms, error "
                 f"FROM probe_events WHERE {where} ORDER BY ts DESC LIMIT ?",
                 (*args, limit),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def put_quota_rows(self, rows: list[dict]) -> None:
+        """Replace the stored value of each quota limit in ``rows`` and sample it.
+
+        Each row carries the ``quota_snapshots`` columns. A limit gets a
+        ``quota_samples`` row when its last one is older than
+        :data:`QUOTA_SAMPLE_EVERY_S`.
+        """
+        if not rows:
+            return
+        columns = ", ".join(_QUOTA_FIELDS)
+        marks = ", ".join("?" for _ in _QUOTA_FIELDS)
+        with self._lock:
+            conn = self._connect()
+            now = max(float(row["fetched_at"]) for row in rows)
+            conn.execute("DELETE FROM quota_samples WHERE ts < ?", (now - QUOTA_SAMPLES_KEPT_S,))
+            for row in rows:
+                conn.execute(
+                    f"INSERT OR REPLACE INTO quota_snapshots ({columns}) VALUES ({marks})",
+                    tuple(row.get(name) for name in _QUOTA_FIELDS),
+                )
+                last = conn.execute(
+                    "SELECT MAX(ts) FROM quota_samples WHERE provider = ? AND account = ? AND limit_key = ?",
+                    (row["provider"], row["account"], row["limit_key"]),
+                ).fetchone()[0]
+                if last is None or float(row["fetched_at"]) - float(last) >= QUOTA_SAMPLE_EVERY_S:
+                    conn.execute(
+                        "INSERT INTO quota_samples (provider, account, limit_key, ts, remaining, used_fraction) "
+                        "VALUES (?, ?, ?, ?, ?, ?)",
+                        (row["provider"], row["account"], row["limit_key"], row["fetched_at"],
+                         row.get("remaining"), row.get("used_fraction")),
+                    )
+            conn.commit()
+
+    def drop_quota_rows(self, provider: str, account: str, limit_keys: Iterable[str]) -> None:
+        """Forget stored limits a newer report of the same source no longer carries."""
+        keys = tuple(limit_keys)
+        if not keys:
+            return
+        with self._lock:
+            conn = self._connect()
+            conn.execute(
+                f"DELETE FROM quota_snapshots WHERE provider = ? AND account = ? "
+                f"AND limit_key IN ({', '.join('?' for _ in keys)})",
+                (provider, account, *keys),
+            )
+            conn.commit()
+
+    def quota_rows(self, provider: Optional[str] = None) -> list[dict]:
+        """The stored quota limits, of one provider or all."""
+        where, args = ("WHERE provider = ?", (provider,)) if provider else ("", ())
+        with self._lock:
+            conn = self._connect()
+            rows = conn.execute(
+                f"SELECT {', '.join(_QUOTA_FIELDS)} FROM quota_snapshots {where} "
+                "ORDER BY provider, account, limit_key",
+                args,
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def put_quota_read(self, provider: str, account: str, **fields: Any) -> None:
+        """Merge ``fields`` (``quota_reads`` columns) into one key's read record."""
+        names = [name for name in _QUOTA_READ_FIELDS if name in fields]
+        if not names:
+            return
+        with self._lock:
+            conn = self._connect()
+            conn.execute(
+                "INSERT OR IGNORE INTO quota_reads (provider, account) VALUES (?, ?)", (provider, account),
+            )
+            conn.execute(
+                f"UPDATE quota_reads SET {', '.join(f'{n} = ?' for n in names)} "
+                "WHERE provider = ? AND account = ?",
+                (*(fields[n] for n in names), provider, account),
+            )
+            conn.commit()
+
+    def quota_reads(self, provider: str, account: Optional[str] = None) -> list[dict]:
+        """The read records of a provider's keys (or of one key)."""
+        where, args = "provider = ?", [provider]
+        if account is not None:
+            where += " AND account = ?"
+            args.append(account)
+        with self._lock:
+            conn = self._connect()
+            rows = conn.execute(
+                f"SELECT provider, account, {', '.join(_QUOTA_READ_FIELDS)} FROM quota_reads "
+                f"WHERE {where} ORDER BY account",
+                tuple(args),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def quota_samples(
+        self, *, provider: str, since: float, account: Optional[str] = None,
+    ) -> list[dict]:
+        """A provider's quota samples since ``since``, oldest first."""
+        where, args = "provider = ? AND ts >= ?", [provider, since]
+        if account is not None:
+            where += " AND account = ?"
+            args.append(account)
+        with self._lock:
+            conn = self._connect()
+            rows = conn.execute(
+                "SELECT provider, account, limit_key, ts, remaining, used_fraction "
+                f"FROM quota_samples WHERE {where} ORDER BY ts",
+                tuple(args),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def provider_days(self, *, since: float, until: Optional[float] = None) -> list[dict]:
+        """Spend and tokens per provider and UTC day since ``since``.
+
+        Tokens are summed from their parts (input, output, cache read, cache
+        write), not from ``total_tokens``: rows written before the recorder
+        counted cached tokens in the total left them out of it.
+        """
+        where, args = "ts >= ?", [since]
+        if until is not None:
+            where += " AND ts < ?"
+            args.append(until)
+        with self._lock:
+            conn = self._connect()
+            rows = conn.execute(
+                "SELECT provider, CAST(ts / 86400 AS INTEGER) AS day, COUNT(*) AS calls, "
+                "SUM(input_tokens) AS input_tokens, SUM(output_tokens) AS output_tokens, "
+                "SUM(cache_read_tokens) AS cache_read_tokens, "
+                "SUM(cache_write_tokens) AS cache_write_tokens, SUM(cost_total) AS cost, "
+                "SUM(CASE WHEN COALESCE(cost_source, 'unknown') = 'unknown' THEN 1 ELSE 0 END) "
+                "AS unpriced_calls "
+                f"FROM usage_events WHERE {where} GROUP BY provider, day ORDER BY provider, day",
+                tuple(args),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def provider_models(self, *, since: float) -> list[dict]:
+        """Calls per provider and model since ``since``, most used first."""
+        with self._lock:
+            conn = self._connect()
+            rows = conn.execute(
+                "SELECT provider, model_id, COUNT(*) AS calls, MAX(ts) AS last_ts "
+                "FROM usage_events WHERE ts >= ? GROUP BY provider, model_id "
+                "ORDER BY calls DESC, last_ts DESC",
+                (since,),
             ).fetchall()
         return [dict(r) for r in rows]
 

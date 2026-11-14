@@ -114,7 +114,7 @@ PATCH /api/agents/general
 <tr><th scope="row"><code translate="no">agent()</code>、<code translate="no">llm()</code></th><td>带所选配置的执行节点；不创建保存的 Agent</td><td>同一 DAG 存储，单独过滤模型视图</td></tr>
 <tr><th scope="row">不带 <code translate="no">to</code> 的 <code translate="no">agent</code> 工具</th><td>持久的子任务或分支</td><td><code translate="no">start_from=clean/inherit/exact-node</code></td></tr>
 <tr><th scope="row">带 <code translate="no">to</code> 的 <code translate="no">agent</code> 工具</th><td>目标分支的下一轮</td><td>目标 Agent 不变；冲突的 <code translate="no">agent_id</code> 被拒绝</td></tr>
-<tr><th scope="row">聊天、CLI、调度器</th><td>现有会话和作业类型，同一解析器</td><td>计划任务每次触发时解析 Agent ID；恢复保留快照</td></tr>
+<tr><th scope="row">聊天、CLI、调度器</th><td>现有会话和作业类型，同一解析器</td><td>计划任务每次触发时解析 Agent ID，并写到该任务的分支上；恢复保留快照</td></tr>
 </tbody>
 </table>
 <ul>
@@ -338,3 +338,40 @@ classify = _example_agent.classify</pre>
 <dt>目标</dt><dd>Schema 2 迁移、事务化多文件生命周期、Python <code translate="no">AgentConfig</code>、各入口解析一致、共享空间目录、生效预览、内嵌试用、可移植导入导出、自动 Agent/模型选择。</dd>
 </dl>
 <p class="next"><a href="../../../../capabilities/agents.zh.html">配置 Agent</a></p>
+
+<h2 id="branch-settings">配置属于会话分支</h2>
+<p>会话共享项目和工作目录。每个分支各自保存 Agent、模型及服务商、思考强度、工具意图、搜索开关、权限模式及规则、Plan、沙箱覆盖和服务等级。</p>
+<p>新分支复制来源分支的配置一次，此后各改各的。切换分支恢复目标配置，包括空覆盖；Rewind、Undo 和 Redo 保留它们。计划任务的分支在首次运行时复制选中分支的配置并取任务的 Agent；之后每次运行沿用这份记录，并重新取任务的 Agent。</p>
+<p>分支引用保存配置；会话顶层字段镜像选中分支。切换时来源配置保存、目标配置恢复，与消息位置一次提交。旧会话以现有配置初始化一次分支，不重建缺失的历史。</p>
+<p>执行接纳时，从这一轮的分支冻结 Agent、模型、思考强度、高速、工具意图、沙箱，以及权限模式和规则。所属分支取下列第一个：</p>
+<ol>
+<li>请求点名的分支；</li>
+<li>为这次运行的消息预留的记录（计划运行的）；</li>
+<li>存活的同会话父任务的分支；</li>
+<li>这一轮起点消息上的记录；</li>
+<li>选中分支。</li>
+</ol>
+<p>聊天、计划、后台或无界面的一轮落在未选中的分支上时，运行那个分支的 Agent 和权限。Job 保留给定的配置，同会话子任务继承父任务，试用 Agent 保留快照。</p>
+<table class="stack">
+<thead><tr><th scope="col">变更</th><th scope="col">写到</th></tr></thead>
+<tbody>
+<tr><th scope="row">输入框控件、选模型、切换 Agent、权限、沙箱</th><td>请求点名的分支，即窗格显示的分支，不论别处选中了哪个。不带分支时写选中分支，由旧客户端的 <code translate="no">expected_branch_id</code> 守护。</td></tr>
+<tr><th scope="row">发送消息</th><td>消息所在分支：思考强度、网页搜索、高速、沙箱；分支还没有带版本的权限时也写输入框的模式。从不写 Agent。</td></tr>
+<tr><th scope="row"><code translate="no">/skill</code> 消息</th><td>不写。它的 allowed-tools 列表只收窄这一轮。</td></tr>
+<tr><th scope="row">一轮中的“本会话内允许”</th><td>这一轮所在的分支。</td></tr>
+<tr><th scope="row"><code translate="no">null</code>，或思考强度菜单的默认项</th><td>回到继承：由项目、Agent 或全局的值决定。</td></tr>
+<tr><th scope="row">读写没有记录的分支</th><td>以 <code translate="no">branch_gone</code> 回复，并带上选中分支。输入框读取会话显示的分支，把改动应用到它上面。</td></tr>
+</tbody>
+</table>
+<p>未获焦点的窗格在它的分支或该分支的 Agent 变化时重新读取模型设置。在未选中的分支上选模型或切换 Agent，不动正在运行的 runtime，也不广播，其他窗格和侧边栏仍显示选中分支的模型；窗格从回复里取模型及其控件。</p>
+<p>每次读取模型设置都带上窗格的分支，所以任何广播之后，停在未选中分支上的窗格读回的是该分支的模型，而不是选中分支的。广播不指明是哪个对话，所以没有 chip 直接采用它带的模型：每个 chip 保持原样，直到自己的读取返回。</p>
+<p>这次读取还带上该分支已存的思考强度和联网搜索开关。窗格采用它们，除非自己还有写入在途，所以从别的窗口或 API 改的设置不用刷新就到达已打开的窗格。</p>
+<h3 id="branch-settings-status">实现状态</h3>
+<table class="stack">
+<thead><tr><th scope="col">尚未实现</th><th scope="col">现状</th></tr></thead>
+<tbody>
+<tr><th scope="row">同一会话的两个分支并排显示</th><td>窗格显示选中分支。服务端已能让每个分支同时跑一轮，各用自己分支的设置（<a href="../execution/control.zh.html#branch-run-slots">两个分支同时运行</a>）。</td></tr>
+<tr><th scope="row">ACP 的轮次取分支的 Agent</th><td>ACP 服务器发送自己的 Agent，在应用里切换过 Agent 的分支从 ACP 运行时仍用服务器的 Agent。</td></tr>
+<tr><th scope="row">调度进程按分支的沙箱策略</th><td>运行请求带着所在分支的沙箱设置；调度进程安装的是选中分支的策略。</td></tr>
+</tbody>
+</table>

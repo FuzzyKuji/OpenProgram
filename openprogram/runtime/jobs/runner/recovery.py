@@ -219,6 +219,7 @@ class RecoveryOperations:
                 pass
         self._recover_deferred_resumes()
         self._recover_deferred_inboxes()
+        self._recover_pending_notices()
         try:
             from openprogram.operations.self_update.delivery.delivery import deliver_pending
             deliver_pending()
@@ -331,6 +332,15 @@ class RecoveryOperations:
         for job_id, session_id in deferred:
             job = shared._store_load(session_id, job_id)
             intent = job.deferred_inbox if job is not None else None
+            if not isinstance(intent, dict) and job is not None:
+                try:
+                    if self._complete_accepted_handoff(job):
+                        continue
+                except Exception:
+                    shared._log.exception(
+                        "failed to finish the accepted hand-off of job %s", job_id,
+                    )
+                    continue
             if not isinstance(intent, dict):
                 self._governor.request_stop(
                     job_id, "error.deferred_inbox_intent_missing",
@@ -349,11 +359,55 @@ class RecoveryOperations:
                         self._update_attach_card(updated)
                 continue
             try:
-                inbox.enqueue(session_id, **intent)
+                # Idempotent by Job id: an entry that survived is kept as is.
+                inbox.enqueue(session_id, **intent, dedup=False)
             except Exception:
                 shared._log.exception(
                     "failed to recover deferred inbox for job %s", job_id,
                 )
+
+
+    def _complete_accepted_handoff(self, job: shared.Job) -> bool:
+        """Finish a spawn held for its attach card whose submitter is gone.
+
+        The spawn was admitted held, to become dispatchable once its card is
+        written. When the submitting process died in between, write the card
+        if it is missing and publish the Job, so the request still runs and
+        its result reaches the parent. False when the Job is not such a spawn.
+        """
+        from openprogram.runtime.jobs import handoff
+
+        if not job.attach_pointer_id or not job.admission_id:
+            return False
+        if handoff.accept_in_progress(job):
+            return True
+        if not handoff.ensure_attach_placeholder(job):
+            return True  # the next pass tries again
+        if self._governor.publish_accepted_job(job.id, admission_id=job.admission_id):
+            self._broadcast_job_status(job)
+            self._dispatch_wake.set()
+        return True
+
+
+    def _recover_pending_notices(self) -> None:
+        """Queue the parent's notice for a Job whose terminal writer died first."""
+        from openprogram.runtime.jobs import handoff
+
+        try:
+            jobs = self.list_jobs()
+        except Exception:
+            shared._log.exception("failed to list jobs with unsent notices")
+            return
+        for job in jobs:
+            if (
+                job.notice_pending
+                and shared.is_terminal(job.status)
+                and not handoff.process_alive(job.notice_pending)
+            ):
+                try:
+                    self._update_attach_card(job, error_text=job.error)
+                except Exception:
+                    shared._log.exception("failed to replay the notice of job %s", job.id)
 
 
     def _reconcile_loop(self) -> None:

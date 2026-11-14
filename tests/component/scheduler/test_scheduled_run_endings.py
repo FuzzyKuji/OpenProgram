@@ -176,7 +176,7 @@ def _child_run(monkeypatch, world, result, execution):
             "job_authority": {"principal_id": "owner", "authority_tier": "owner"}}
     monkeypatch.setattr(production_driver, "CanonicalAgentAdapter", Adapter)
     monkeypatch.setattr(worker, "_verify_execution_spec", lambda value: (value, None))
-    monkeypatch.setattr(worker, "_conversation_settings", lambda _session_id: ("ask", None))
+    monkeypatch.setattr(worker, "_conversation_settings", lambda _session_id, _branch_id=None: ("ask", None))
     monkeypatch.setattr(worker._sandbox, "resolve_policy", lambda **_arguments: None)
     monkeypatch.setattr(worker._sandbox, "install_policy_snapshot", lambda _snapshot: None)
     monkeypatch.setattr(rule, "load_merged_rules", lambda _session_id: None)
@@ -334,6 +334,32 @@ def test_a_run_the_user_stopped_is_no_news_and_no_failure(world, tmp_path, resul
     assert _runs(status_only=True) == [task_runs.FAILED, task_runs.FAILED] and world.reported == []
     # The two failures before it still count toward the notice.
     assert task_runs.record("t1", task_runs.FAILED, "broke") == task_runs.FAILURE_NOTICE
+
+
+def test_a_run_that_ended_closes_the_pages_it_opened(world, monkeypatch):
+    from openprogram.programs._host import services
+    closed = []
+    browser = SimpleNamespace(tabs=SimpleNamespace(close_run_tabs_soon=closed.append))
+    monkeypatch.setattr(services, "lookup", lambda name: browser if name == "browser" else None)
+    run_finish.finish(run_finish.conclude(SESSION, TASK, "run-1", _reply(""), COMPLETED))
+    assert closed == ["run-1"]
+    # An ending kept on disk for a Worker that had gone closes them too.
+    closed.clear()
+    run_finish._finish(dict(run_finish.conclude(SESSION, TASK, "run-2", _reply(""), COMPLETED)))
+    assert closed == ["run-2"]
+
+
+def test_any_execution_that_ends_has_its_run_pages_closed(monkeypatch):
+    """Stopped by the user, failed or cut off: the terminal settlement closes what the run opened."""
+    from openprogram.programs._host import services
+    from openprogram.programs.tools.planning.goal import chat
+    from openprogram.runtime.conversation import execution_hooks
+    closed = []
+    browser = SimpleNamespace(tabs=SimpleNamespace(close_run_tabs_soon=closed.append))
+    monkeypatch.setattr(services, "lookup", lambda name: browser if name == "browser" else None)
+    monkeypatch.setattr(chat, "after_terminal", lambda executions, execution: None)
+    execution_hooks._settle_terminal(None, SimpleNamespace(execution_id="exec_9", status=ExecutionStatus.CANCELLED))
+    assert closed == ["exec_9"]
 
 
 @pytest.mark.parametrize("status", [ExecutionStatus.FAILED, ExecutionStatus.INTERRUPTED])
@@ -861,7 +887,7 @@ def _start(world, monkeypatch, adapter):
     spec = {"session_id": SESSION, "agent_id": "main", "prompt": "check",
             "job_authority": {"principal_id": "owner", "authority_tier": "owner"}}
     monkeypatch.setattr(worker, "_verify_execution_spec", lambda value: (value, None))
-    monkeypatch.setattr(worker, "_conversation_settings", lambda _session: ("ask", None))
+    monkeypatch.setattr(worker, "_conversation_settings", lambda _session, _branch_id=None: ("ask", None))
     monkeypatch.setattr(worker._sandbox, "resolve_policy", lambda **_keywords: None)
     monkeypatch.setattr(worker._sandbox, "install_policy_snapshot", lambda _snapshot: None)
     monkeypatch.setattr(rule, "load_merged_rules", lambda _session: [])
@@ -1215,6 +1241,32 @@ def test_a_paused_run_past_its_limit_ends_with_its_reason(world, tmp_path, monke
     assert _runs() == [(task_runs.FAILED, time_limits.SCHEDULED_RUN_STOPPED)]
 
 
+def test_a_paused_run_stopped_by_something_else_first_is_not_finished_again(world, tmp_path, monkeypatch):
+    """Listed past its limit, then stopped elsewhere before the limit's stop:
+    the limit's stop answers already_terminal and reports nothing."""
+    import contextlib
+
+    from openprogram.runtime.execution.control import ProjectionRecoveryRequired
+
+    driver, active, store = _ran_turn(tmp_path, speaker=SCHEDULER)
+    paused = _lose_owner(driver, active, store)
+    _limits_see(driver, store, monkeypatch)
+    # A Stop from the page, under its own command id. This world has no
+    # reply row for the stopped turn to project into, which is not the point.
+    with contextlib.suppress(ProjectionRecoveryRequired):
+        asyncio.run(driver.control_service.request_cancel(
+            command_id="page-stop", execution_id=paused.execution_id,
+            actor={"source": "web"}, reason_code="cancel.user",
+        ))
+    assert store.get_execution(paused.execution_id).status is ExecutionStatus.CANCELLED
+    finished = []
+    monkeypatch.setattr(run_finish, "finish_resumed", lambda *args: finished.append(args))
+
+    time_limits._stop(store, paused)
+
+    assert finished == []
+
+
 def test_a_check_in_has_the_shorter_limit(world, tmp_path, monkeypatch):
     driver, active, store = _ran_turn(tmp_path, scheduled_task=None, speaker=CHECK_IN)
     _limits_see(driver, store, monkeypatch)
@@ -1237,6 +1289,112 @@ def test_a_run_in_its_own_live_process_keeps_its_own_clock(world, tmp_path, monk
     monkeypatch.setattr(process_owner, "owned_by_another_process", lambda _lease: True)
     monkeypatch.setattr(process_owner, "process_owner_may_be_alive", lambda _lease: True)
     assert time_limits.stop_overdue(_past_limit(store, active.execution_id, time_limits.SCHEDULED_RUN_LIMIT_S)) == []
+
+
+@pytest.mark.parametrize("alive", [True, False])
+def test_a_run_whose_own_process_exited_ends_at_the_next_tick(world, tmp_path, monkeypatch, alive):
+    """Killed with its process, well inside its limit: it ends as a failed run, its
+    pages close, and nothing is left paused for a restart to continue."""
+    from openprogram.runtime.execution import process_owner
+    from openprogram.state.store.session import session_log
+
+    driver, active, store = _ran_turn(tmp_path, speaker=SCHEDULER)
+    _limits_see(driver, store, monkeypatch)
+    closed = []
+    monkeypatch.setattr(run_finish, "close_run_tabs", lambda execution_id, **_: closed.append(execution_id))
+    monkeypatch.setattr(session_log, "is_main_writer", lambda: True)
+    monkeypatch.setattr(process_owner, "owned_by_another_process", lambda _lease: True)
+    monkeypatch.setattr(process_owner, "process_owner_may_be_alive", lambda _lease: alive)
+    ended = time_limits.stop_overdue(store.get_execution(active.execution_id).created_at + 60)
+    current = store.get_execution(active.execution_id)
+    if alive:
+        assert ended == [] and current.status is ExecutionStatus.RUNNING and closed == []
+        return
+    assert ended == [active.execution_id]
+    assert current.status is ExecutionStatus.INTERRUPTED and current.reason_code == "owner_lost"
+    assert not restart._has_open_intent(store, current)
+    assert closed == [active.execution_id]
+    assert _runs() == [(task_runs.FAILED, "the run was interrupted and could not continue")]
+
+
+def _commands_of(store, active, tmp_path, monkeypatch):
+    """Three live commands: one the run waits on, one it left in the background
+    and one of another run; ``control`` records what each is sent."""
+    from openprogram.host import processes
+
+    records = processes.ProcessStore(tmp_path / "processes.db")
+    monkeypatch.setattr(processes, "ProcessStore", lambda: records)
+    session_id = store.get_execution(active.execution_id).session_id
+
+    def running(execution_id, *, background=False):
+        record = records.create(session_id=session_id, execution_id=execution_id, tool_call_id="call",
+                                command="sleep 120", cwd=str(tmp_path), backend_id="local")
+        return records.update(record["id"], status="running", heartbeat=time.time(), background=background)["id"]
+
+    ids = SimpleNamespace(waited_on=running(active.execution_id),
+                          left_running=running(active.execution_id, background=True),
+                          other_run=running("exec_other"), sent=[], records=records)
+    monkeypatch.setattr(processes, "control",
+                        lambda _store, process_id, kind, *_a, **_k: ids.sent.append((process_id, kind)))
+    return ids
+
+
+def _only_the_waited_on_command_stopped(commands):
+    assert commands.sent == [(commands.waited_on, "stop")]
+    assert commands.records.get(commands.waited_on)["reported"] is True
+    assert {commands.records.get(commands.left_running)["reported"],
+            commands.records.get(commands.other_run)["reported"]} == {False}
+
+
+def test_a_run_whose_own_process_exited_stops_the_command_it_was_waiting_on(world, tmp_path, monkeypatch):
+    """A command runs under a supervisor of its own and outlives the killed process:
+    the one the run was waiting on stops with the ending, one it had left in the
+    background goes on, and another run's command is not touched."""
+    from openprogram.runtime.execution import process_owner
+    from openprogram.state.store.session import session_log
+
+    driver, active, store = _ran_turn(tmp_path, speaker=SCHEDULER)
+    _limits_see(driver, store, monkeypatch)
+    monkeypatch.setattr(run_finish, "close_run_tabs", lambda execution_id, **_: None)
+    monkeypatch.setattr(session_log, "is_main_writer", lambda: True)
+    monkeypatch.setattr(process_owner, "owned_by_another_process", lambda _lease: True)
+    monkeypatch.setattr(process_owner, "process_owner_may_be_alive", lambda _lease: False)
+    commands = _commands_of(store, active, tmp_path, monkeypatch)
+
+    assert time_limits.end_runs_of_exited_processes() == [active.execution_id]
+    _only_the_waited_on_command_stopped(commands)
+
+
+def test_a_run_stopped_by_the_user_whose_process_then_died_ends_stopped(world, tmp_path, monkeypatch):
+    from openprogram.runtime.execution import process_owner
+    from openprogram.state.store.session import session_log
+
+    driver, active, store = _ran_turn(tmp_path, speaker=SCHEDULER)
+    _limits_see(driver, store, monkeypatch)
+    _cancel(driver, active, store)
+    closed = []
+    monkeypatch.setattr(run_finish, "close_run_tabs", lambda execution_id, **_: closed.append(execution_id))
+    monkeypatch.setattr(session_log, "is_main_writer", lambda: True)
+    monkeypatch.setattr(process_owner, "owned_by_another_process", lambda _lease: True)
+    monkeypatch.setattr(process_owner, "process_owner_may_be_alive", lambda _lease: False)
+    assert time_limits.end_runs_of_exited_processes() == [active.execution_id]
+    assert store.get_execution(active.execution_id).status is ExecutionStatus.CANCELLED
+    assert closed == [active.execution_id] and _runs() == []
+
+
+def test_a_worker_that_is_stopping_leaves_an_exited_run_to_the_next_one(world, tmp_path, monkeypatch):
+    from openprogram.runtime.conversation import run_control
+    from openprogram.runtime.execution import process_owner
+    from openprogram.state.store.session import session_log
+
+    driver, active, store = _ran_turn(tmp_path, speaker=SCHEDULER)
+    _limits_see(driver, store, monkeypatch)
+    monkeypatch.setattr(session_log, "is_main_writer", lambda: True)
+    monkeypatch.setattr(run_control, "is_worker_stopping", lambda: True)
+    monkeypatch.setattr(process_owner, "owned_by_another_process", lambda _lease: True)
+    monkeypatch.setattr(process_owner, "process_owner_may_be_alive", lambda _lease: False)
+    assert time_limits.end_runs_of_exited_processes() == []
+    assert store.get_execution(active.execution_id).status is ExecutionStatus.RUNNING
 
 
 def test_a_sub_agent_shares_the_clock_of_the_run_it_works_for(world, tmp_path, monkeypatch):
@@ -1380,6 +1538,20 @@ def test_a_process_that_ignores_its_stop_is_killed(world, tmp_path, monkeypatch)
     assert killed == [4242]
     assert store.get_execution(active.execution_id).status is ExecutionStatus.CANCELLED
     assert _runs() == [(task_runs.FAILED, time_limits.SCHEDULED_RUN_STOPPED)]
+
+
+def test_a_run_ended_without_its_stop_stops_the_command_it_was_waiting_on(world, tmp_path, monkeypatch):
+    """Force-ended, a stuck run's waited-on command stops with it; a command it
+    left in the background and another run's command go on."""
+    driver, active, store = _ran_turn(tmp_path, speaker=SCHEDULER)
+    stopped_at = _stuck_past_its_limit(driver, active, store, monkeypatch)
+    commands = _commands_of(store, active, tmp_path, monkeypatch)
+    time_limits.stop_overdue(stopped_at + time_limits.STOP_GRACE_S - 1)
+    assert commands.sent == []
+
+    time_limits.stop_overdue(stopped_at + time_limits.STOP_GRACE_S)
+    assert store.get_execution(active.execution_id).status is ExecutionStatus.CANCELLED
+    _only_the_waited_on_command_stopped(commands)
 
 
 def test_a_stop_someone_asked_for_is_never_forced(world, tmp_path, monkeypatch):
@@ -1560,3 +1732,36 @@ def test_a_scheduled_run_is_told_the_preferences_of_the_agent_running_it(world, 
     monkeypatch.setattr(store, "load_preferences", lambda agent_id: [{"id": "p", "text": f"Rule of {agent_id}"}])
     run = _child_run(monkeypatch, world, _handoff(), PAUSED)
     assert "- Rule of main" in run.request.run_note
+
+
+def test_a_report_reaches_a_conversation_the_task_started(tmp_path, monkeypatch):
+    """A task set outside any chat runs in its own conversation, where nobody spoke
+    first: its run is the only branch and there is no head. The report starts the
+    conversation's main line at ROOT instead of being refused for a missing predecessor."""
+    from openprogram.runtime.conversation.always_on import runtime as always_on, store as reports
+
+    root = tmp_path / "sessions"
+    db, run_process = SessionDB(root), SessionDB(root)
+    monkeypatch.setattr(always_on, "_db", lambda: db)
+    monkeypatch.setattr(task_branch, "_db", lambda: run_process)
+    run_process.create_session("cron-t1", "main")
+    placement = task_branch.prepare("cron-t1", TASK, run_process)
+    assert placement.parent is None
+    # What the run's own process writes: ROOT, then the run beside the main line.
+    run_process.append_message("cron-t1", {"id": "ROOT", "role": "user", "content": "", "display": "root"},
+                               advance_head=False)
+    run_process.append_message("cron-t1", {"id": placement.msg_id, "role": "user", "content": "check",
+                                           "predecessor": "ROOT"}, advance_head=False)
+    run_process.append_message("cron-t1", {"id": f"{placement.msg_id}_reply", "role": "assistant",
+                                           "content": "In stock", "predecessor": placement.msg_id},
+                               advance_head=False)
+    assert (db.get_session("cron-t1") or {}).get("head_id") is None
+    row = {"id": "r1", "task_id": "t1", "title": "VPS stock", "body": "In stock", "kind": "finding"}
+
+    message_id = always_on.post_report_message("cron-t1", "main", row)
+
+    assert message_id == reports.report_message_id(row)
+    assert db.get_session("cron-t1")["head_id"] == message_id
+    assert [message["id"] for message in db.get_branch("cron-t1")] == [message_id]
+    # The task's branch is untouched and still where its next run goes.
+    assert task_branch.bound_tip("cron-t1", "t1", run_process) is not None

@@ -496,8 +496,9 @@ export function handleSlash(line: string, ctx: SlashContext): boolean {
         return true;
       }
       if (args[0] === 'delete') {
+        // The outcome (or the refusal) arrives as branch_deleted.
         ctx.client.send({ action: 'delete_branch', session_id: sid });
-        ctx.pushSystem('Deleted current branch.');
+        ctx.pushSystem('Deleting the current branch…');
         return true;
       }
       ctx.client.send({ action: 'list_branches', session_id: sid });

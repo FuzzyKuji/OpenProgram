@@ -287,6 +287,10 @@
     "en": "Single-port architecture",
     "zh": "单端口架构"
   },
+  "reference/design/cli/headless-print.html": {
+    "en": "Headless print runs",
+    "zh": "无头 print 运行"
+  },
   "reference/design/cli/slash-commands-references.html": {
     "en": "Command comparison",
     "zh": "命令对比"
@@ -454,10 +458,6 @@
   "reference/design/integrations/skills-and-plugins.html": {
     "en": "Skills and plugins",
     "zh": "技能与插件"
-  },
-  "reference/design/integrations/web-use.html": {
-    "en": "Web automation",
-    "zh": "网页自动化"
   },
   "reference/design/integrations/computer-and-browser-use.html": {
     "en": "Computer and browser use",

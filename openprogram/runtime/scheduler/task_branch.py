@@ -34,6 +34,8 @@ class Placement:
     msg_id: str
     parent: Optional[str]
     tip: Optional[str]
+    #: The task's branch record; the run resolves its settings from it.
+    branch_id: Optional[str] = None
 
 
 def _db() -> Any:
@@ -107,9 +109,15 @@ def last_result(session_id: str, tip: str | None, db: Any = None) -> str:
     return ""
 
 
-def prepare(session_id: str, task: dict[str, Any], db: Any = None) -> Placement:
+def prepare(session_id: str, task: dict[str, Any], db: Any = None, *,
+            agent_id: str | None = None) -> Placement:
     """Pick where this run goes and move the task's entry onto its message,
-    so a run cut off halfway is still the branch's newest node."""
+    so a run cut off halfway is still the branch's newest node.
+
+    The branch also has its own settings record (``reserve_task_branch``):
+    the first run copies the selected branch's settings with the task's
+    Agent, and the run is admitted with that record's Agent, model and
+    permission whatever branch the user has selected."""
     db = db or _db()
     tip = bound_tip(session_id, str(task["id"]), db)
     session = db.get_session(session_id) or {}
@@ -122,7 +130,14 @@ def prepare(session_id: str, task: dict[str, Any], db: Any = None) -> Placement:
         if key in existing:
             fields[key] = existing[key]
     db.set_branch_name(session_id, msg_id, name, **fields)
-    return Placement(msg_id=msg_id, parent=parent, tip=tip)
+    reserve = getattr(db, "reserve_task_branch", None)
+    branch_id = None
+    if reserve is not None:
+        branch_id = reserve(session_id, task_id=str(task["id"]), msg_id=msg_id,
+                agent_id=agent_id or (task.get("execution") or {}).get("agent_id") or task.get("agent_id"),
+                label=db.get_branch_meta(session_id, msg_id) or name or None)
+    return Placement(msg_id=msg_id, parent=parent, tip=tip,
+                     branch_id=branch_id if isinstance(branch_id, str) else None)
 
 
 def _preference_note(agent_id: str | None) -> str:

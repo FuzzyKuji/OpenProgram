@@ -37,6 +37,13 @@ export interface DesktopBridge {
   /** A JPEG of a region of this page (CSS px): a small one for overview
    *  thumbnails, or the display resolution with `full`. */
   captureRegion?(rect: { x: number; y: number; width: number; height: number }, options?: { full?: boolean }): Promise<string | null>;
+  /** Video of one pane of this page. Absent in shells older than this build. */
+  paneRecording?: {
+    arm(): Promise<boolean>;
+    open(id: string, filePath: string): Promise<boolean>;
+    write(id: string, chunk: ArrayBuffer): Promise<boolean>;
+    close(id: string, discard?: boolean): Promise<{ path: string; bytes: number } | null>;
+  };
   webTab: DesktopWebTabApi;
   tabTransfer: DesktopTabTransferApi;
   /** Keeps reporting the cursor (page CSS px) while a right or middle button

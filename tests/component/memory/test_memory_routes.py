@@ -917,7 +917,8 @@ def test_checkpoint_deadline_and_deleted_source_visibility(client, memory, monke
 
 
 @pytest.mark.parametrize("autosave", [False, True])
-def test_topic_route_rejects_uncited_section_without_committed_mutation(client, memory, autosave):
+def test_topic_route_rejects_dangling_link_without_committed_mutation(client, memory, autosave):
+    # A person's uncited paragraph is kept; a link to no block is not.
     from openprogram.state.memory.store import _ensure_git_history
     from openprogram.state.memory.management.transaction import workspace_revision
 
@@ -929,7 +930,7 @@ def test_topic_route_rejects_uncited_section_without_committed_mutation(client, 
     revision = workspace_revision(memory)
     head = subprocess.check_output(["git", "-C", str(memory), "rev-parse", "HEAD"])
     response = client.put("/api/memory/topics/note.md", json={
-        "content": NOTE + "\n## Unsupported section\n\nUncited substantive prose.\n",
+        "content": NOTE + "\n## Broken section\n\nSee [nothing](note.md#^deadbeef).\n",
         "base_content": NOTE, "autosave": autosave,
     })
     assert response.status_code == 400, response.text
@@ -970,9 +971,9 @@ def test_invalid_restore_does_not_commit_pre_restore_dirty_state(client, memory)
     from openprogram.state.memory.runtime.state import RuntimeStateStore
     from openprogram.state.memory.management.transaction import workspace_revision
 
-    invalid = NOTE + "\n## Unsupported section\n\nUncited substantive prose.\n"
+    invalid = NOTE + "\n## Broken section\n\nSee [nothing](note.md#^deadbeef).\n"
     (memory / "topics/note.md").write_text(invalid)
-    old_revision = RuntimeStateStore(memory).git_commit("owned unsupported historical version")
+    old_revision = RuntimeStateStore(memory).git_commit("owned broken historical version")
     dirty = NOTE.replace("A fact worth keeping.", "A current dirty fact.")
     (memory / "topics/note.md").write_text(dirty)
     before = {p.relative_to(memory): p.read_bytes() for p in memory.rglob("*") if p.is_file() and ".git" not in p.relative_to(memory).parts}

@@ -45,6 +45,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Optional
+from openprogram.host._platform.filesystem import replace_file
 
 
 DEFAULT_PROJECT_ID = "default"
@@ -532,14 +533,8 @@ def _registry_transaction():
                 _reg_state.depth = 0
 
 
-def _read_registry() -> dict[str, dict]:
-    """Read the registry; never report an unreadable one as empty.
-
-    An empty result is written back by the next change, which would erase
-    every project and session binding. A read error therefore raises, and
-    a file that is not a JSON object is moved aside for recovery first.
-    """
-    p = _registry_path()
+def _load_registry_file(p: Path) -> Optional[dict]:
+    """Parse the registry file; ``None`` when it is not a JSON object."""
     try:
         text = p.read_text(encoding="utf-8")
     except FileNotFoundError:
@@ -550,12 +545,29 @@ def _read_registry() -> dict[str, dict]:
         data = json.loads(text)
     except json.JSONDecodeError:
         data = None
-    if isinstance(data, dict):
+    return data if isinstance(data, dict) else None
+
+
+def _read_registry() -> dict[str, dict]:
+    """Read the registry; never report an unreadable one as empty.
+
+    An empty result is written back by the next change, which would erase
+    every project and session binding. A read error therefore raises, and
+    a file that is not a JSON object is moved aside for recovery first.
+    """
+    p = _registry_path()
+    data = _load_registry_file(p)
+    if data is not None:
         return data
     with _registry_transaction():
+        # Read again under the lock: the file seen above may already have
+        # been replaced by a writer, and a good registry is never set aside.
+        data = _load_registry_file(p)
+        if data is not None:
+            return data
         kept = p.with_name(f"{p.name}.unreadable-{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}")
         try:
-            p.replace(kept)
+            replace_file(p, kept)
         except FileNotFoundError:
             pass
         except OSError as exc:
@@ -565,8 +577,55 @@ def _read_registry() -> dict[str, dict]:
     return {}
 
 
+# One parsed registry per published file, for lookups that change nothing.
+_snapshot_lock = threading.Lock()
+_snapshot: Optional[tuple[Path, tuple, int, dict]] = None
+# A file changed again within this long of being read can keep the same
+# size and timestamp on a file system with coarse timestamps, so a file
+# that young is read again instead of trusted.
+_SNAPSHOT_SETTLE_NS = 1_000_000_000
+
+
+def _file_identity(stat: os.stat_result) -> tuple:
+    return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns)
+
+
+def _registry_snapshot() -> dict[str, dict]:
+    """The registry as last published, for a lookup that changes nothing.
+
+    Every writer publishes the whole file by rename, so the path always
+    names one complete registry and a reader needs neither the thread lock
+    nor the cross-process file lock: it sees the state before a concurrent
+    change or the state after it. The parsed file is kept until a different
+    file is published. The result is shared; callers must not modify it.
+    """
+    global _snapshot
+    p = _registry_path()
+    try:
+        identity = _file_identity(os.stat(p))
+    except FileNotFoundError:
+        return {}
+    except OSError as exc:
+        raise ProjectStoreError(f"cannot read project registry {p}: {exc}") from exc
+    held = _snapshot
+    if (held is not None and held[0] == p and held[1] == identity
+            and identity[3] + _SNAPSHOT_SETTLE_NS < held[2]):
+        return held[3]
+    # The identity is taken before the read. If a writer publishes in
+    # between, the newer content is kept under the older identity, which the
+    # next lookup no longer finds on disk and so reads again.
+    read_at = time.time_ns()
+    data = _load_registry_file(p)
+    if data is None:
+        return _read_registry()
+    with _snapshot_lock:
+        _snapshot = (p, identity, read_at, data)
+    return data
+
+
 def _write_registry(reg: dict[str, dict]) -> None:
     """Publish the whole registry by rename so a reader never sees half of it."""
+    global _snapshot
     p = _registry_path()
     fd, temporary = tempfile.mkstemp(prefix=f".{p.name}.", suffix=".tmp", dir=p.parent)
     try:
@@ -574,9 +633,11 @@ def _write_registry(reg: dict[str, dict]) -> None:
             output.write(json.dumps(reg, indent=2, ensure_ascii=False, default=str))
             output.flush()
             os.fsync(output.fileno())
-        os.replace(temporary, p)
+        replace_file(temporary, p)
     finally:
         Path(temporary).unlink(missing_ok=True)
+        with _snapshot_lock:
+            _snapshot = None
 
 
 def _new_project_id() -> str:
@@ -612,14 +673,12 @@ def ensure_footprint_ignored(project_path: str | Path) -> None:
 
 
 def list_projects() -> list[Project]:
-    with _registry_transaction():
-        return [Project.from_dict(d) for d in _read_registry().values()]
+    return [Project.from_dict(d) for d in _registry_snapshot().values()]
 
 
 def get_project(project_id: str) -> Optional[Project]:
-    with _registry_transaction():
-        d = _read_registry().get(project_id)
-        return Project.from_dict(d) if d else None
+    d = _registry_snapshot().get(project_id)
+    return Project.from_dict(d) if d else None
 
 
 def _upsert(project: Project, *, capture_identity: bool = False, replace_identity: bool = False) -> Project:
@@ -1071,10 +1130,9 @@ def prune_sessions(alive_ids: set[str]) -> int:
 
 def project_for_session(session_id: str) -> Optional[Project]:
     """Reverse lookup: which project owns this session, if any."""
-    with _registry_transaction():
-        for d in _read_registry().values():
-            if session_id in (d.get("session_ids") or []):
-                return Project.from_dict(d)
+    for d in _registry_snapshot().values():
+        if session_id in (d.get("session_ids") or []):
+            return Project.from_dict(d)
     return None
 
 

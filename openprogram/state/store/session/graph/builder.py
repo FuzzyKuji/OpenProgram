@@ -81,13 +81,19 @@ def build_session_graph(
                  or (n.metadata or {}).get("display") == "root"]
         hidden_ids = {
             n.id for n in nodes
-            if (n.metadata or {}).get("execution_control")
+            if (n.metadata or {}).get("execution_control") or (
+                (n.metadata or {}).get("speaker_kind") == "runtime"
+                and (n.metadata or {}).get("speaker_id") == "runtime/always_on"
+                and not (n.metadata or {}).get("always_on_report")
+            )
         }
         changed = True
         while changed:
             before = len(hidden_ids)
             hidden_ids.update(
-                n.id for n in nodes if n.caller in hidden_ids
+                n.id for n in nodes
+                if (n.caller in hidden_ids or (n.predecessor in hidden_ids and n.role != "user"))
+                and not (n.metadata or {}).get("always_on_report")
             )
             changed = len(hidden_ids) != before
         nodes = [n for n in nodes if n.id not in hidden_ids]
@@ -127,11 +133,11 @@ def build_session_graph(
     # a DAG, so ids are the only faithful record; the graph adds the
     # caller subtrees hanging off those turns (a covered turn folds
     # with its calls) and does no seq arithmetic at all.
-    # Compaction is a ROLLING summary: each new summary absorbs the
-    # previous one's text (context/engine.py chains previous_summary)
-    # and ``extra_meta._last_summary_id`` points at the only one the
-    # next request carries. Superseded summaries are inert relics —
-    # they keep their rows but must not fold anything, or two capsules
+    # Each branch reads its own summary (context/nodes.py
+    # ``active_summary_for_chain``): a summary folds its range when it is
+    # the one in effect on some branch's chain; one no branch reads any more
+    # (absorbed by a later summary of the same chain, or retracted by a
+    # rewind) is an inert relic that folds nothing, or two capsules would
     # fight over the same range.
     covers_ids: dict[str, list[str]] = {}
     superseded: set[str] = set()
@@ -157,20 +163,9 @@ def build_session_graph(
             covered = sorted(keep, key=lambda i: seq_of[i])
             if covered:
                 covers_ids[n.id] = covered
-        if len(covers_ids) > 1:
-            active = ""
-            try:
-                extra = (db.get_session(session_id) or {}).get(
-                    "extra_meta") or {}
-                active = extra.get("_last_summary_id") or ""
-            except Exception:
-                # Older data has no stamp; the newest summary is chosen below.
-                _log.debug("session %s: summary stamp unavailable", session_id, exc_info=True)
-            if active not in covers_ids:
-                # No stamp (older data): the newest summary is the one
-                # the rolling chain ends on.
-                active = max(covers_ids, key=lambda i: seq_of[i])
-            superseded = set(covers_ids) - {active}
+        if covers_ids:
+            in_effect = _summaries_in_effect(db, session_id, nodes)
+            superseded = set(covers_ids) - in_effect
             for sid_old in superseded:
                 covers_ids.pop(sid_old, None)
 
@@ -336,3 +331,31 @@ def build_session_graph(
                 n["caller"] = rid
 
     return annotate_graph(graph, head_id, include_layout=include_layout)
+
+
+def _summaries_in_effect(db, session_id: str, nodes: list) -> set[str]:
+    """The summaries some branch of the conversation reads: for each branch
+    tip, the one ``active_summary_for_chain`` picks for its chain."""
+    from openprogram.state.store.session.summaries import active_summary_for_chain, summary_covers_ids
+
+    try:
+        retracted = (db.get_session(session_id) or {}).get("rewind_hidden_nodes") or ()
+    except Exception:
+        retracted = ()
+    by_id = {n.id: n for n in nodes}
+    successors = {n.predecessor for n in nodes if n.predecessor}
+    tips = [n for n in nodes if n.id not in successors and not n.caller
+            and summary_covers_ids(n) is None]
+    in_effect: set[str] = set()
+    for tip in tips:
+        chain: list[str] = []
+        seen: set[str] = set()
+        cur = tip.id
+        while cur and cur in by_id and cur not in seen:
+            seen.add(cur)
+            chain.append(cur)
+            cur = by_id[cur].predecessor
+        summary = active_summary_for_chain(nodes, chain, retracted)
+        if summary is not None:
+            in_effect.add(summary.id)
+    return in_effect

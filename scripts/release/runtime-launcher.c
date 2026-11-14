@@ -34,8 +34,12 @@
 #define _CRT_SECURE_NO_WARNINGS
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <shellapi.h>
 #include <io.h>
 #include <process.h>
+#if defined(_MSC_VER)
+#pragma comment(lib, "shell32")
+#endif
 #else
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE 1
@@ -117,6 +121,21 @@ static int join(char *out, size_t size, const char *format, ...) {
     va_end(arguments);
     return written >= 0 && (size_t)written < size;
 }
+
+/*
+ * Every Python this starts on Windows runs in UTF-8 mode. Without it, text
+ * read or written with no encoding named follows the system code page, so the
+ * same code behaves differently on a Chinese and an English Windows. -I makes
+ * Python ignore PYTHONUTF8, which is why this is an argument. macOS and Linux
+ * already use UTF-8.
+ */
+#if defined(_WIN32)
+#define UTF8_MODE "-X", "utf8",
+#define UTF8_MODE_COUNT 2
+#else
+#define UTF8_MODE
+#define UTF8_MODE_COUNT 0
+#endif
 
 /* ---- platform layer ---------------------------------------------------- */
 
@@ -303,6 +322,7 @@ static int spawn_wait(char *const arguments[]) {
     STARTUPINFOW startup;
     PROCESS_INFORMATION process;
     DWORD code = EXIT_START;
+    DWORD flags = 0;
     command[0] = L'\0';
     for (index = 0; arguments[index]; index++) {
         wchar_t *wide = NULL;
@@ -338,7 +358,21 @@ static int spawn_wait(char *const arguments[]) {
     }
     memset(&startup, 0, sizeof(startup));
     startup.cb = sizeof(startup);
-    if (!CreateProcessW(NULL, command, NULL, NULL, TRUE, 0, NULL, NULL, &startup, &process)) return EXIT_START;
+    /*
+     * The App starts the worker detached, so this process has no console. A
+     * console program started from here would then get a visible console of
+     * its own and write there, not to the log this process was handed. Without
+     * a console the child gets none either, and the standard handles are
+     * passed on by name because they are no longer inherited implicitly.
+     */
+    if (GetConsoleCP() == 0) {
+        flags |= CREATE_NO_WINDOW;
+        startup.dwFlags |= STARTF_USESTDHANDLES;
+        startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+        startup.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+        startup.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+    }
+    if (!CreateProcessW(NULL, command, NULL, NULL, TRUE, flags, NULL, NULL, &startup, &process)) return EXIT_START;
     WaitForSingleObject(process.hProcess, INFINITE);
     GetExitCodeProcess(process.hProcess, &code);
     CloseHandle(process.hProcess);
@@ -352,6 +386,30 @@ static int executable_path(char *out, size_t size) {
     if (length == 0 || length >= 32768) return -1;
     to_utf8(wide, out, size);
     return 0;
+}
+
+/*
+ * main() receives the command line in the ANSI code page, which cannot hold
+ * every path: a user name outside it arrives as question marks. Everything
+ * here is UTF-8, so the arguments are read again from the wide command line.
+ */
+static char **utf8_arguments(int *count) {
+    wchar_t **wide = CommandLineToArgvW(GetCommandLineW(), count);
+    char **out;
+    int index;
+    if (!wide) return NULL;
+    out = (char **)calloc((size_t)*count + 1, sizeof(char *));
+    for (index = 0; out && index < *count; index++) {
+        int needed = WideCharToMultiByte(CP_UTF8, 0, wide[index], -1, NULL, 0, NULL, NULL);
+        out[index] = needed > 0 ? (char *)malloc((size_t)needed) : NULL;
+        if (!out[index]) {
+            out = NULL;
+            break;
+        }
+        WideCharToMultiByte(CP_UTF8, 0, wide[index], -1, out[index], needed, NULL, NULL);
+    }
+    LocalFree(wide);
+    return out;
 }
 
 #else /* POSIX */
@@ -802,7 +860,7 @@ static int load_or_repair_pointer(const char *root, Pointer *pointer) {
     }
     if (find_any_base(root, python, sizeof(python)) == 0
         && join(tool, sizeof(tool), "%s/bootstrap/versions.py", root) && exists(tool)) {
-        char *arguments[] = {python, "-I", "-B", tool, "--root", (char *)root, "rebuild-pointer", NULL};
+        char *arguments[] = {python, "-I", "-B", UTF8_MODE tool, "--root", (char *)root, "rebuild-pointer", NULL};
         if (spawn_wait(arguments) == 0 && load_pointer_file(path, pointer) == 0) return 0;
     }
     return -1;
@@ -982,7 +1040,7 @@ static int run_capture(const char *root, const char *version, const char *base) 
         || !join(tool, sizeof(tool), "%s/bootstrap/restore_version.py", root)
         || !exists(python) || !exists(tool)) return -1;
     {
-        char *arguments[] = {python, "-I", "-B", tool, "--root", (char *)root, (char *)version, NULL};
+        char *arguments[] = {python, "-I", "-B", UTF8_MODE tool, "--root", (char *)root, (char *)version, NULL};
         return spawn_wait(arguments) == 0 ? 0 : -1;
     }
 }
@@ -1078,10 +1136,14 @@ static int follow_developer(const char *path, int argc, char **argv) {
     }
     free(json);
     set_python_path(checkout);
-    arguments = (char **)calloc((size_t)argc + 2, sizeof(char *));
-    if (!arguments) return EXIT_START;
-    arguments[0] = python;
-    for (index = 0; index < argc; index++) arguments[index + 1] = argv[index];
+    {
+        char *options[] = {UTF8_MODE NULL};
+        arguments = (char **)calloc((size_t)argc + 2 + UTF8_MODE_COUNT, sizeof(char *));
+        if (!arguments) return EXIT_START;
+        arguments[0] = python;
+        for (index = 0; index < UTF8_MODE_COUNT; index++) arguments[index + 1] = options[index];
+        for (index = 0; index < argc; index++) arguments[index + 1 + UTF8_MODE_COUNT] = argv[index];
+    }
     return run_process(arguments);
 }
 
@@ -1157,14 +1219,18 @@ static int start_version(const char *root, const char *version, const char *base
 #else
     if (!join(venv_python, sizeof(venv_python), "%s/versions/%s/venv/bin/python", root, version)) return EXIT_START;
 #endif
-    arguments = (char **)calloc((size_t)argc + 4, sizeof(char *));
-    if (!arguments) return EXIT_START;
-    arguments[0] = venv_python;
-    arguments[1] = "-I";
-    arguments[2] = "-B";
-    for (index = 0; index < argc; index++) arguments[index + 3] = argv[index];
+    {
+        char *options[] = {"-I", "-B", UTF8_MODE NULL};
+        int count = 2 + UTF8_MODE_COUNT;
+        arguments = (char **)calloc((size_t)argc + (size_t)count + 2, sizeof(char *));
+        if (!arguments) return EXIT_START;
+        arguments[0] = venv_python;
+        for (index = 0; index < count; index++) arguments[index + 1] = options[index];
+        for (index = 0; index < argc; index++) arguments[index + 1 + count] = argv[index];
+        argc += 1 + count;
+    }
 #if defined(OPENPROGRAM_EMBED_PYTHON)
-    return run_embedded(root, base, venv_python, argc + 3, arguments);
+    return run_embedded(root, base, venv_python, argc, arguments);
 #else
     (void)base;
     return run_process(arguments);
@@ -1201,6 +1267,16 @@ int main(int argc, char **argv) {
     char root[OP_PATH], path[OP_PATH], why[OP_PATH];
     int rest = 1, round, guard_moved = 0;
     Pointer pointer;
+#if defined(_WIN32)
+    int wide_count = 0;
+    char **wide_arguments = utf8_arguments(&wide_count);
+    if (!wide_arguments) {
+        warn("the command line cannot be read");
+        return EXIT_START;
+    }
+    argc = wide_count;
+    argv = wide_arguments;
+#endif
     if (argc >= 3 && strcmp(argv[1], "--root") == 0) {
         if (!join(root, sizeof(root), "%s", argv[2])) return EXIT_USAGE;
         rest = 3;

@@ -26,6 +26,8 @@ _DESCRIPTION = (
     "- By default reads up to 2000 lines from the top. Use `offset` and `limit` "
     "to page through larger files.\n"
     "- Individual lines longer than 2000 characters are truncated with an ellipsis.\n"
+    "- A range too long for one result stops at the last whole line that fits "
+    "and gives the offset to continue from.\n"
     "- PDF files are read as extracted text, one `[page N]` block per page. "
     "For PDFs `offset` and `limit` are PAGES (1-based; default: first "
     f"{PDF_PAGES_DEFAULT} pages).\n"
@@ -80,8 +82,15 @@ def _read_pdf(file_path: str, offset: int, limit: int) -> str:
         return (f"# {file_path} (PDF, {total} pages)\n"
                 f"(empty range: offset {offset} is past the last page)")
 
+    from openprogram.state.store.session.weight import quarters
+
     chunks: list[str] = []
     chars = 0
+    used_q = 0
+    # The page's text with its header and note, the numbers at their widest,
+    # within one read's weight (``_page_quarters``).
+    max_q = _page_quarters() - quarters(
+        _pdf_header(file_path, total, total, total) + "\n" + _pdf_note(total))
     truncated_at: int | None = None
     any_text = False
     for i in range(start, end):
@@ -97,12 +106,18 @@ def _read_pdf(file_path: str, offset: int, limit: int) -> str:
             text = ""
         if text:
             any_text = True
-        chunks.append(f"[page {i + 1}]\n{text}" if text
-                      else f"[page {i + 1}]\n(no text on this page)")
-        chars += len(chunks[-1])
-        if chars > PDF_MAX_CHARS:
-            truncated_at = i + 1
+        chunk = (f"[page {i + 1}]\n{text}" if text
+                 else f"[page {i + 1}]\n(no text on this page)")
+        # A page that would take the text past one read's length starts
+        # the next read instead; the first page is kept whatever its size.
+        joined = len(chunk) + (2 if chunks else 0)
+        joined_q = quarters(chunk) + (8 if chunks else 0)
+        if chunks and (chars + joined > PDF_MAX_CHARS or used_q + joined_q > max_q):
+            truncated_at = i
             break
+        chunks.append(chunk)
+        chars += joined
+        used_q += joined_q
 
     if not any_text:
         return (f"Error: {file_path}: PDF 无文本层 — pages {start + 1}-{end} "
@@ -110,14 +125,19 @@ def _read_pdf(file_path: str, offset: int, limit: int) -> str:
                 "image PDF; OCR is required to read it).")
 
     shown_end = truncated_at or end
-    header = (f"# {file_path} (PDF, pages {start + 1}-{shown_end} of {total}; "
-              "offset/limit are pages)")
     body = "\n\n".join(chunks)
     if truncated_at is not None:
-        body += (f"\n\n…[truncated at page {truncated_at}: output exceeded "
-                 f"{PDF_MAX_CHARS} chars — use offset={truncated_at + 1} "
-                 "to continue]")
-    return header + "\n" + body
+        body += _pdf_note(truncated_at)
+    return _pdf_header(file_path, start + 1, shown_end, total) + "\n" + body
+
+
+def _pdf_header(file_path: str, first: int, last: int, total: int) -> str:
+    return f"# {file_path} (PDF, pages {first}-{last} of {total}; offset/limit are pages)"
+
+
+def _pdf_note(truncated_at: int) -> str:
+    return (f"\n\n…[truncated at page {truncated_at}: output exceeded "
+            f"one read's length — use offset={truncated_at + 1} to continue]")
 
 
 def _mark_read_baseline(file_path: str) -> None:
@@ -219,24 +239,74 @@ def execute(file_path: str,
 
     _mark_read_baseline(file_path)
 
+    return numbered_page(
+        [line.rstrip("\n") for line in lines], offset, limit,
+        shown=file_path, path=file_path, warning=outside_warning)
+
+
+def _page_quarters() -> int:
+    """How much one read's text may weigh, in quarters (``state.store.session.weight``):
+    a page ends before the agent loop's bound (``spill.result_cap``,
+    smaller on a model with a small window) would cut it. Guides and
+    AGENTS.md files are sent beside the result, not in it, so they take
+    nothing from the page."""
+    from openprogram.state.store.session import spill
+    return spill.result_cap() * 4
+
+
+def _continue_note(shown_end: int, end: int, total: int, path: str) -> str:
+    return (f"\n\n…[page ends at line {shown_end} of {total}: lines {shown_end + 1}-{end} "
+            f"are not shown, to keep one read within its length — use "
+            f'offset={shown_end + 1} to continue: read("{path}", offset={shown_end + 1}, '
+            f"limit={end - shown_end})]")
+
+
+def numbered_page(lines: list[str], offset: int, limit: int, *, shown: str,
+                  path: str, warning: str | None = None) -> str:
+    """Lines ``offset``..``offset+limit-1`` in ``cat -n`` form, as one page.
+
+    The page is contiguous from ``offset``: when the asked range is longer
+    than one read may be, it ends on the last whole line that fits and says
+    the offset to continue from, so the model reads on from there rather
+    than receiving a head and tail with the middle cut out. The header and
+    that note are counted in the page's length, and on a page too short
+    for a line of ``MAX_LINE_LENGTH`` a line is cut to what fits.
+    """
+    from openprogram.state.store.session.weight import quarters
+
     total = len(lines)
     start = max(1, offset) - 1
     end = min(total, start + max(1, limit))
-    selected = lines[start:end]
-
-    out_lines = []
-    for i, line in enumerate(selected, start=start + 1):
-        text = line.rstrip("\n")
-        if len(text) > MAX_LINE_LENGTH:
-            text = text[:MAX_LINE_LENGTH] + "…[truncated]"
-        out_lines.append(f"{i:>6}\t{text}")
-
-    header = f"# {file_path} (lines {start + 1}-{end} of {total})"
-    if outside_warning:
-        header = f"{outside_warning}\n{header}"
-    if not out_lines:
+    # The longest header and note this range can have, numbers at their widest.
+    fixed = (quarters(f"# {shown} (lines {total}-{total} of {total})\n")
+             + (quarters(warning) + 1 if warning else 0)
+             + quarters(_continue_note(total, total, total, path)))
+    budget = _page_quarters() - fixed
+    # A line is cut to what fits however dense its script (4 quarters a
+    # character at most).
+    line_cap = max(80, min(MAX_LINE_LENGTH, (budget - quarters(f"{total:>6}\t…[truncated]")) // 4))
+    rows: list[str] = []
+    used = 0
+    for i in range(start, end):
+        text = lines[i]
+        if len(text) > line_cap:
+            text = text[:line_cap] + "…[truncated]"
+        row = f"{i + 1:>6}\t{text}"
+        weight = quarters(row) + 1
+        if rows and used + weight > budget:
+            break
+        rows.append(row)
+        used += weight
+    shown_end = start + len(rows) if rows else end
+    header = f"# {shown} (lines {start + 1}-{shown_end} of {total})"
+    if warning:
+        header = f"{warning}\n{header}"
+    if not rows:
         return header + "\n(empty range)"
-    return header + "\n" + "\n".join(out_lines)
+    body = header + "\n" + "\n".join(rows)
+    if shown_end < end:
+        body += _continue_note(shown_end, end, total, path)
+    return body
 
 
 # Workflows import ``execute`` as a normal Python function; model tool
@@ -245,8 +315,6 @@ read = function(
     name="read",
     accept_edits_safe=True,
     description=_DESCRIPTION,
-    max_result_chars=200_000,
-    persist_full=False,
     toolset=["core", "research"],
     path_params={"file_path": "read"},
 )(execute)

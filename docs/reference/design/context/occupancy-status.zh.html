@@ -40,8 +40,8 @@
 <thead class="sr"><tr><th scope="col">状态</th><th scope="col">显示</th></tr></thead>
 <tbody>
 <tr><th scope="row">正常</th><td>中性轨道，弧线按比例着色。没有建议边框或建议状态。点击打开面板</td></tr>
-<tr><th scope="row">压缩中</th><td>从 <code translate="no">compaction_started</code> 到结束或失败：圆环忙碌，面板按钮禁用</td></tr>
-<tr><th scope="row">压缩对话</th><td>面板行发送 <code translate="no">{action:"compact", session_id}</code>，与 <code translate="no">/compact</code> 同一 WebSocket 路径。无会话、压缩中或最近已压缩时禁用</td></tr>
+<tr><th scope="row">压缩中</th><td>分支正在运行的是 <code translate="no">compact</code> 操作，或处在压缩阶段的轮次时（<code translate="no">isCompacting</code>，从 <code translate="no">compaction_started</code> 到结束或失败）：圆环忙碌，面板按钮禁用</td></tr>
+<tr><th scope="row">压缩对话</th><td>面板行发送 <code translate="no">{action:"compact", session_id}</code>，与 <code translate="no">/compact</code> 同一 WebSocket 路径。无会话或压缩中时禁用。刚压缩完仍可点，服务端回答没有可压缩的内容</td></tr>
 </tbody>
 </table>
 
@@ -50,8 +50,8 @@
 <table class="stack fixed">
 <thead class="sr"><tr><th scope="col">事件</th><th scope="col">文案</th></tr></thead>
 <tbody>
-<tr><th scope="row">开始</th><td>正在压缩上下文…</td></tr>
-<tr><th scope="row">结束</th><td>上下文已压缩：盖住 N 条旧消息。对话事件位：此处压缩了上下文：盖住 N 条，本地估算 X → Y tokens</td></tr>
+<tr><th scope="row">开始</th><td>不加消息：运行条显示“正在压缩上下文…”</td></tr>
+<tr><th scope="row">结束</th><td>上下文已压缩：盖住 N 条旧消息。对话事件位：此处压缩了上下文：盖住 N 条，本地估算 X → Y tokens。只在含有整段被盖住消息的分支上显示；从这段中间分出的分支没有被压缩过</td></tr>
 <tr><th scope="row">失败</th><td>上下文压缩失败[：错误]</td></tr>
 <tr><th scope="row">结束且 <code translate="no">no_op</code></th><td>上下文保持不变，本次没有应用更小的摘要</td></tr>
 </tbody>

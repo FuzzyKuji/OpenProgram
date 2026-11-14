@@ -31,6 +31,7 @@ from openprogram.operations.self_update.delivery.activation import COMPONENTS, c
 from . import layout as paths
 from . import store
 from .layout import Layout
+from openprogram.host._platform import filesystem
 
 GIB = 1024 ** 3
 NEW_BASE_BYTES = 2 * GIB
@@ -57,6 +58,7 @@ _PASSED_THROUGH = (
     "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
     "http_proxy", "https_proxy", "all_proxy", "no_proxy",
     "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS", "UV_NATIVE_TLS",
+    "RUSTUP_HOME", "RUSTUP_TOOLCHAIN", "OPENSSL_DIR", "OPENSSL_STATIC", "MACOSX_DEPLOYMENT_TARGET",
 )
 
 
@@ -101,6 +103,11 @@ def _base_environment(layout: Layout) -> dict[str, str]:
         "GIT_CONFIG_NOSYSTEM": "1",
         "GIT_CONFIG_GLOBAL": os.devnull,
     })
+    # A dependency with no wheel for this machine is compiled; rustup keeps its
+    # toolchains under the real home, which the build's own HOME hides.
+    rustup = Path.home() / ".rustup"
+    if "RUSTUP_HOME" not in environment and rustup.is_dir():
+        environment["RUSTUP_HOME"] = str(rustup)
     return environment
 
 
@@ -316,6 +323,22 @@ def toolchain_id(package_lock: bytes) -> str:
     return hashlib.sha256(json.dumps(lock, sort_keys=True).encode("utf-8")).hexdigest()[:16]
 
 
+def _drop_junctions(root: Path) -> None:
+    """Remove the workspace links npm made on Windows.
+
+    There they are junctions holding the absolute path of the build's own
+    worktree, which is gone afterwards; nothing reads through them.
+    """
+    if os.name != "nt":
+        return
+    for current, directories, _names in os.walk(root):
+        for name in list(directories):
+            entry = os.path.join(current, name)
+            if os.path.isjunction(entry):
+                os.rmdir(entry)
+                directories.remove(name)
+
+
 def _ensure_toolchain(layout: Layout, worktree: Path, environment: dict[str, str]) -> Path:
     """``node_modules`` for this lock file, fetched the first time it is needed."""
     digest = toolchain_id(_read_bytes(worktree, "package-lock.json"))
@@ -342,6 +365,7 @@ def _ensure_toolchain(layout: Layout, worktree: Path, environment: dict[str, str
     if not (staging / "node_modules").is_dir():
         shutil.rmtree(staging, ignore_errors=True)
         raise BuildError("npm ci produced no node_modules")
+    _drop_junctions(staging)
     _move_directory(staging, toolchain)
     return toolchain
 
@@ -376,7 +400,7 @@ def _copy_desktop(worktree: Path, commit: str, staging: Path) -> None:
         raise BuildError("the commit has no apps/desktop/main*")
     with tempfile.TemporaryDirectory(dir=staging) as scratch:
         _extract_archive(worktree, commit, wanted, Path(scratch))
-        os.replace(Path(scratch) / "apps" / "desktop", staging / "desktop")
+        filesystem.replace_file(Path(scratch) / "apps" / "desktop", staging / "desktop")
 
 
 def _read_shell_compat(layout: Layout, worktree: Path) -> object:

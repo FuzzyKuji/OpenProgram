@@ -44,6 +44,17 @@ def test_the_fold_applies_puts_patches_deletes_and_meta(tmp_path: Path):
     assert SessionLog(tmp_path / "s").read_meta() == {"head_id": "a"}
 
 
+def test_large_stream_metadata_stays_small_and_replays_losslessly(tmp_path: Path):
+    root = tmp_path / "s"
+    log = SessionLog(root)
+    log.write_history(0, "assistant", "reply", _node("reply", 0))
+    extra = json.dumps({"blocks": [{"type": "tool", "result": "mail tree " * 6000}]})
+    log.patch_node("reply", {"output": "partial"}, {"extra": extra}, quiet=True)
+
+    assert log.main_path.stat().st_size < len(extra) // 10
+    assert SessionLog(root).list_history()[0]["metadata"]["extra"] == extra
+
+
 def test_meta_writes_record_only_what_changed(tmp_path: Path):
     log = SessionLog(tmp_path / "s")
     log.write_meta({"title": "t", "branches": {"x": 1}})

@@ -218,7 +218,7 @@ def _paged_display_cards(count: int, *, size: int = 600 * 1024) -> list[dict]:
     return [
         {
             "type": "tool",
-            "tool": "web_use",
+            "tool": "page_tool",
             "tool_call_id": f"call-{index}",
             "result": f"{index}:" + ("P" * size),
         }

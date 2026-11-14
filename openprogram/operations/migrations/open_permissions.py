@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 
 from openprogram.state.paths import get_state_dir
+from openprogram.host._platform.filesystem import replace_file
 
 _log = logging.getLogger(__name__)
 
@@ -86,7 +87,7 @@ def _release_agent_holds(agents: Path) -> None:
         data["hold_outbound"] = False
         temporary = path.with_name(path.name + ".tmp")
         temporary.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-        os.replace(temporary, path)
+        replace_file(temporary, path)
 
 
 def _was_old_default(meta: dict) -> bool:

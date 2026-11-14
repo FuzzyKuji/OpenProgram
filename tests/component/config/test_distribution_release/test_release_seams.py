@@ -100,7 +100,7 @@ def test_app_updater_looks_for_the_files_the_release_builds(platform, arch, opti
 
 def test_unsigned_names_come_from_the_release_steps():
     workflow = _read(".github/workflows/release.yml")
-    assert 'Rename-Item -NewName { $_.BaseName + "-unsigned.exe" }' in workflow
+    assert 'Rename-Item -LiteralPath $_.FullName -NewName ($_.BaseName + "-unsigned.exe")' in workflow
     assert "name = f'OpenProgram-{version}-mac-{options.arch}-unsigned'" in _read("scripts/release/ci-sign-macos.py")
     assert "name = f'OpenProgram-{version}-mac-{args.arch}'" in _read("scripts/release/sign-macos-release.py")
     assert "--arch ${{ matrix.builder_arch }}" in workflow

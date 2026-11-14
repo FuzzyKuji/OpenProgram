@@ -44,3 +44,52 @@ test('a delivered message names its sender', () => {
   assert.equal(old.body, 'do it');
   assert.equal(readReceipt('hello'), null);
 });
+
+// The same notice since every result comes back in an <agent> block
+// (runtime/jobs/agent_result.py render), with a stalled agent among them.
+const blocked = [
+  'Background agents you started have finished. This is an automated notice, not a message from the user.',
+  '',
+  'Agent "scout" finished (job s1).',
+  'Task: research X',
+  '<agent name="scout" id="s1" status="completed">',
+  '(its report is attached above)',
+  'usage: 41 s · 12 tool calls · 38k tokens · $0.021',
+  '</agent>',
+  '',
+  'Agent "frontend" finished (job r1).',
+  'Task: [message from p1:a1 (main conversation)] …',
+  'Reply from branch p2:hb:',
+  '<agent name="frontend" id="r1" status="completed">',
+  'Settings page done.',
+  '',
+  'Chat page left.',
+  'files: worktree /tmp/wt, 2 changed (a.py, b.py)',
+  'usage: 2 min · 3 tool calls · 9.1k tokens · cost unknown',
+  '</agent>',
+  'To continue with it, use send_message(to="p2:hb").',
+  '',
+  'Agent "slow" has had no activity for 10 minutes and is marked stalled; it is still running (job t1).',
+  'Task: index the repo',
+  '<agent name="slow" id="t1" status="stalled">',
+  '(no reply yet) Wait for it, steer it with send_message, or stop it with close_agent("t1").',
+  'usage: 12 min · 40 tool calls · 120k tokens · $0.300',
+  '</agent>',
+  '',
+  "Carry on with the user's request from here: tell the user what they found.",
+].join('\n');
+const blockedItems = readNotice([
+  { kind: 'report', name: 'scout', failed: false, status: 'completed', address: 'p1:h1', line: 'Agent "scout" finished (job s1).' },
+  { kind: 'reply', name: 'frontend', failed: false, status: 'completed', address: 'p2:hb', line: 'Agent "frontend" finished (job r1).' },
+  { kind: 'stalled', name: 'slow', failed: false, status: 'stalled', address: 'p1:h3', line: 'Agent "slow" has had no activity for 10 minutes and is marked stalled; it is still running (job t1).' },
+]);
+
+test('a stalled item draws a row and opens on its task', () => {
+  assert.deepEqual(blockedItems.map((it) => it.kind), ['report', 'reply', 'stalled']);
+  assert.equal(noticeDetail(blocked, blockedItems, 2), 'index the repo');
+});
+
+test('a row opens on the reply inside the result block, without its tags, files or usage', () => {
+  assert.equal(noticeDetail(blocked, blockedItems, 0), 'research X');
+  assert.equal(noticeDetail(blocked, blockedItems, 1), 'Settings page done.\n\nChat page left.');
+});

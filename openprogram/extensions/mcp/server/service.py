@@ -2,11 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import json
 import math
 import threading
-import urllib.error
-import urllib.request
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -18,9 +15,7 @@ import anyio
 from jsonschema import Draft202012Validator
 from mcp.shared.exceptions import McpError
 
-from openprogram.state.authority import decide_capability
 from openprogram.runtime.permissions.authority import (
-    mcp_web_control_authority,
     mcp_client_authority,
 )
 from openprogram.runtime.permissions import refusal
@@ -169,68 +164,6 @@ def _default_event_bus():
     return get_event_bus()
 
 
-def _default_web_use_dispatch(arguments, *, owner_id):
-    """Execute browser control inside the running worker process.
-
-    The stdio MCP server is a separate process.  Page bindings and the
-    renderer WebSocket registry live in the worker, so importing the browser
-    tool here would create an empty, unrelated registry.
-    """
-    payload = _worker_web_use_request(
-        "/api/web-use",
-        {"arguments": dict(arguments), "owner_id": owner_id},
-        timeout=120,
-    )
-    from openprogram.models.providers.types import AgentToolResult
-
-    return AgentToolResult.model_validate(payload["result"])
-
-
-def _default_web_use_release_owner(owner_id: str) -> None:
-    _worker_web_use_request(
-        "/api/web-use/release-owner",
-        {"owner_id": owner_id},
-        timeout=5,
-    )
-
-
-def _default_web_use_release_pages(owner_id: str, tokens: list[str]) -> None:
-    _worker_web_use_request(
-        "/api/web-use/release-pages",
-        {"owner_id": owner_id, "page_context_tokens": list(tokens)},
-        timeout=5,
-    )
-
-
-def _worker_web_use_request(
-    path: str, body: Mapping[str, Any], *, timeout: float,
-) -> dict[str, Any]:
-    from openprogram.host.security.backend_endpoint import resolve_backend_endpoint
-
-    endpoint = resolve_backend_endpoint()
-    request = urllib.request.Request(
-        endpoint.base_url + path,
-        data=json.dumps(dict(body)).encode("utf-8"),
-        method="POST",
-        headers={
-            "Accept": "application/json",
-            "Authorization": endpoint.authorization_header,
-            "Content-Type": "application/json",
-            "Host": endpoint.host,
-            "X-Forwarded-Proto": endpoint.scheme,
-        },
-    )
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-    try:
-        with opener.open(request, timeout=timeout) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-    except (OSError, ValueError, urllib.error.HTTPError) as exc:
-        raise RuntimeError("web_use_worker_unavailable") from exc
-    if not isinstance(payload, dict) or payload.get("ok") is not True:
-        raise RuntimeError("web_use_worker_failed")
-    return payload
-
-
 def _best_effort(
     callback: Callable[..., Any], *args: Any, **kwargs: Any,
 ) -> Any:
@@ -337,67 +270,6 @@ def _execution_error() -> AgentToolResult:
     )
 
 
-def _web_session_id(raw: Any, arguments: Mapping[str, Any]) -> str:
-    existing = arguments.get("web_session_id")
-    if isinstance(existing, str) and existing:
-        return existing
-    payload: Any = raw
-    if isinstance(raw, AgentToolResult):
-        details = raw.details
-        if isinstance(details, Mapping) and isinstance(details.get("json"), Mapping):
-            payload = details["json"]
-        else:
-            payload = None
-            for item in raw.content:
-                text = getattr(item, "text", None)
-                if not isinstance(text, str):
-                    continue
-                try:
-                    candidate = json.loads(text)
-                except (TypeError, ValueError):
-                    continue
-                if isinstance(candidate, Mapping):
-                    payload = candidate
-                    break
-    if not isinstance(payload, Mapping):
-        return ""
-    value = payload.get("web_session_id")
-    return value if isinstance(value, str) else ""
-
-
-def _web_page_context_tokens(raw: Any) -> list[str]:
-    payload: Any = raw
-    if isinstance(raw, AgentToolResult):
-        details = raw.details
-        if isinstance(details, Mapping) and isinstance(details.get("json"), Mapping):
-            payload = details["json"]
-        else:
-            payload = None
-            for item in raw.content:
-                text = getattr(item, "text", None)
-                if not isinstance(text, str):
-                    continue
-                try:
-                    candidate = json.loads(text)
-                except (TypeError, ValueError):
-                    continue
-                if isinstance(candidate, Mapping):
-                    payload = candidate
-                    break
-    if not isinstance(payload, Mapping):
-        return []
-    pages = payload.get("pages")
-    if not isinstance(pages, list):
-        return []
-    return list(dict.fromkeys(
-        token
-        for page in pages
-        if isinstance(page, Mapping)
-        for token in [page.get("page_context_token")]
-        if isinstance(token, str) and token
-    ))
-
-
 class MCPService:
     _process_session_lock = threading.RLock()
     _process_session_owners: dict[str, ActiveMCPRequest] = {}
@@ -419,9 +291,6 @@ class MCPService:
         cancel_execution: Callable[[str], Any] | None = None,
         question_registry_getter: Callable[[], Any] | None = None,
         event_bus_getter: Callable[[], Any] | None = None,
-        web_use_dispatch: Callable[..., Any] | None = None,
-        web_use_release_owner: Callable[[str], Any] | None = None,
-        web_use_release_pages: Callable[[str, list[str]], Any] | None = None,
     ) -> None:
         self.context = context
         self._session_db = session_db or default_db()
@@ -455,18 +324,6 @@ class MCPService:
         )
         self._event_bus = (event_bus_getter or _default_event_bus)()
         self._control_connection_id = uuid.uuid4().hex
-        self._web_use_owner_id = (
-            f"mcp:{self.context.client_id}:{self._control_connection_id}"
-        )
-        self._web_use_dispatch = (
-            web_use_dispatch or _default_web_use_dispatch
-        )
-        self._web_use_release_owner = (
-            web_use_release_owner or _default_web_use_release_owner
-        )
-        self._web_use_release_pages = (
-            web_use_release_pages or _default_web_use_release_pages
-        )
         self._active_lock = threading.RLock()
         self._active_by_request: dict[str, ActiveMCPRequest] = {}
         self._request_by_session: dict[str, str] = {}
@@ -730,10 +587,6 @@ class MCPService:
             self.cancel_request(request_id, reason="connection_closed")
             for request_id in request_ids
         ))
-        _best_effort(
-            self._web_use_release_owner,
-            self._web_use_owner_id,
-        )
 
     async def aclose(self) -> None:
         """Await canonical cancellation before releasing MCP-owned state."""
@@ -749,101 +602,6 @@ class MCPService:
             asyncio.run(self._finish_close(request_ids))
         else:
             raise RuntimeError("MCPService.close() requires await aclose()")
-
-    async def web_use_call(
-        self,
-        arguments: Mapping[str, Any],
-        *,
-        call_id: str,
-        cancel_event: asyncio.Event,
-    ) -> AgentToolResult:
-        """Run the narrow browser-control route owned by this MCP connection."""
-        authority = mcp_web_control_authority(self.context.authority)
-        decision = decide_capability(authority, "browser.control")
-        if not decision.allowed:
-            return refusal.tool_result(refusal.mcp_browser_unavailable(decision.reason_code))
-        if cancel_event.is_set():
-            return _execution_error()
-        copied = _copy_json(arguments)
-        state_lock = threading.Lock()
-        state: dict[str, Any] = {
-            "abandoned": False,
-            "cleaned": False,
-            "ready": False,
-            "raw": None,
-        }
-
-        def cleanup_once(raw: Any) -> None:
-            with state_lock:
-                if state["cleaned"]:
-                    return
-                state["cleaned"] = True
-            session_id = _web_session_id(raw, copied)
-            page_tokens = _web_page_context_tokens(raw)
-            if session_id and copied.get("command") != "close":
-                _best_effort(
-                    lambda: self._web_use_dispatch(
-                        {"command": "close", "web_session_id": session_id},
-                        owner_id=self._web_use_owner_id,
-                    )
-                )
-            if page_tokens:
-                _best_effort(
-                    self._web_use_release_pages,
-                    self._web_use_owner_id,
-                    page_tokens,
-                )
-            if self._closed:
-                _best_effort(
-                    self._web_use_release_owner,
-                    self._web_use_owner_id,
-                )
-
-        def abandon() -> None:
-            with state_lock:
-                state["abandoned"] = True
-                ready = state["ready"]
-                raw = state["raw"]
-            if ready:
-                cleanup_once(raw)
-
-        def dispatch() -> Any:
-            try:
-                raw = self._web_use_dispatch(
-                    copied, owner_id=self._web_use_owner_id,
-                )
-            except Exception:
-                if self._closed:
-                    _best_effort(
-                        self._web_use_release_owner,
-                        self._web_use_owner_id,
-                    )
-                raise
-            with state_lock:
-                state["raw"] = raw
-                state["ready"] = True
-                needs_cleanup = state["abandoned"] or self._closed
-            if needs_cleanup:
-                cleanup_once(raw)
-            return raw
-
-        try:
-            raw = await anyio.to_thread.run_sync(dispatch)
-            if cancel_event.is_set() or self._closed:
-                abandon()
-                return _execution_error()
-            if isinstance(raw, AgentToolResult):
-                return raw
-            from openprogram.programs._host.runtime import _normalize_result
-            return _normalize_result(
-                raw, call_id=call_id, max_chars=100_000,
-                persist_full=False, head_ratio=0.7,
-            )
-        except asyncio.CancelledError:
-            abandon()
-            raise
-        except Exception:
-            return _execution_error()
 
     async def prompt_send(
         self,
@@ -1034,8 +792,9 @@ class MCPService:
                 execution_id=record.execution_id,
             )
             registered = True
-            _active, result = asyncio.run(adapter.activate(admission))
-            return result
+            activated = asyncio.run(adapter.activate(admission))
+            # ``None``: a cancel reached the turn before it ran; no result.
+            return activated[1] if activated is not None else None
         finally:
             if registered and record.execution_id:
                 _best_effort(

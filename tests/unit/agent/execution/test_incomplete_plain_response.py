@@ -68,6 +68,20 @@ def test_length_response_continues_instead_of_ending_turn():
     assert len(contexts) == 2
 
 
+def test_length_response_drops_undispatched_streaming_tool_call():
+    partial = _message("Checking the review", "length")
+    partial.content.append({
+        "type": "toolCall", "id": "call_incomplete|fc_incomplete",
+        "name": "bash", "arguments": {}, "partial_json": '{"command":',
+    })
+    messages, _events, contexts = asyncio.run(_run([partial, _message("complete")]))
+    assert len(contexts) == 2
+    for history in (messages, contexts[1]):
+        for message in history:
+            if isinstance(message, AssistantMessage):
+                assert all(isinstance(block, TextContent) for block in message.content)
+
+
 def test_progressive_length_responses_do_not_hit_no_progress_limit():
     _messages, _events, contexts = asyncio.run(_run([
         _message("part one", "length"),

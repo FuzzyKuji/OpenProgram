@@ -136,7 +136,7 @@ def _run_python_fallback(pattern: str, path: str, glob: str | None,
     name="grep",
     accept_edits_safe=True,   # acceptEdits 档下自动放行（只读）
     description=_DESCRIPTION,
-    max_result_chars=20_000,    # Claude Code default for grep
+    max_result_weight=5_000,    # about Claude Code's 20,000-character grep cap
     toolset=["core", "research"],
     path_params={"path": "read"},
 )
@@ -159,14 +159,8 @@ def grep(pattern: str,
     if _remote_fs is not None:
         from . import _remote
         return _remote.grep(_remote_fs, pattern, path, glob, output_mode, case_insensitive)
-    if path:
-        root = path
-    else:
-        try:
-            from openprogram.state.paths import get_default_workdir
-            root = get_default_workdir()
-        except Exception:
-            root = os.getcwd()
+    from openprogram.state.worktree.path_resolve import resolve_root
+    root, outside_warning = resolve_root(path)
     if not os.path.exists(root):
         return f"Error: path not found: {root}"
     from openprogram.host.sandbox import validate_read_path
@@ -175,5 +169,7 @@ def grep(pattern: str,
         from openprogram.runtime.permissions import refusal
         raise refusal.sandbox("grep", violation)
     if shutil.which("rg"):
-        return _run_rg(pattern, root, glob, output_mode, case_insensitive)
-    return _run_python_fallback(pattern, root, glob, output_mode, case_insensitive)
+        out = _run_rg(pattern, root, glob, output_mode, case_insensitive)
+    else:
+        out = _run_python_fallback(pattern, root, glob, output_mode, case_insensitive)
+    return f"{outside_warning}\n{out}" if outside_warning else out

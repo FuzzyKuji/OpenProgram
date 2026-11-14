@@ -40,7 +40,7 @@
 <thead class="sr"><tr><th scope="col">Setting</th><th scope="col">Controls</th></tr></thead>
 <tbody>
 <tr><th scope="row"><code translate="no">name</code>, <code translate="no">description</code>, <code translate="no">parameters</code>, <code translate="no">label</code></th><td>What the LLM sees. <code translate="no">@function</code> derives them from signature and docstring; Agent methods reuse <code translate="no">_build_agentic_tool_spec</code></td></tr>
-<tr><th scope="row"><code translate="no">max_result_chars</code>, <code translate="no">persist_full</code>, <code translate="no">head_ratio</code>, <code translate="no">stream_capacity_chars</code></th><td>Head-and-tail truncation with marker, full copy on disk, bounded tail for streamed <code translate="no">on_update</code></td></tr>
+<tr><th scope="row"><code translate="no">max_result_weight</code>, <code translate="no">stream_capacity_chars</code></th><td>A smaller result bound than the model's, recorded as <code translate="no">details["cap"]</code> and applied once by the agent loop, which keeps the whole text in the conversation's <code translate="no">tool_results/&lt;sha256&gt;.txt</code> (<a href="../context/overview.html#cross-turn-tool-context">Tool output</a>); bounded tail for streamed <code translate="no">on_update</code></td></tr>
 <tr><th scope="row"><code translate="no">timeout</code>, <code translate="no">timeout_min</code>, <code translate="no">timeout_max</code></th><td>Static or LLM-controlled timeout</td></tr>
 <tr><th scope="row"><code translate="no">cache</code>, <code translate="no">cache_ttl</code></th><td>Memoize on name and arguments</td></tr>
 <tr><th scope="row"><code translate="no">describe</code></th><td>Current description and parameters, applied at each list resolve (<code translate="no">current_tool</code>), so a tool names only what is available</td></tr>
@@ -53,9 +53,10 @@
 <table class="stack fixed">
 <thead class="sr"><tr><th scope="col">Knob</th><th scope="col">Behaviour</th></tr></thead>
 <tbody>
-<tr><th scope="row">Dynamic result ceiling</th><td><code translate="no">min(per-tool max, 0.3 × context window)</code>, so small-context models shrink. <code translate="no">_effective_max_chars</code>, <code translate="no">_current_context_window_chars</code> set per turn</td></tr>
+<tr><th scope="row">Result share of a small window</th><td>The agent loop stores a result bounded to the model's <code translate="no">tool_output_weight</code> (default 10,000), at most <code translate="no">0.3 × context window</code>, in weight: a CJK character 1, anything else 0.25. A local model added by hand without a window (4,096 tokens) gets 1,228, a 32,768-token model 9,830. <code translate="no">spill.result_cap</code>, set around each tool dispatch from the model, including the weekly report's source reads</td></tr>
+<tr><th scope="row">A read page in that share</th><td><code translate="no">read</code> pages within the same cap, its header and continue note counted, a line cut to what one page holds. The AGENTS.md a read reaches goes beside the result, bounded on its own, so it takes nothing from the page</td></tr>
 <tr><th scope="row">LLM-controllable timeout</th><td>If the function declares <code translate="no">timeout</code> and the decorator sets the range, the value is clamped and used as both <code translate="no">wait_for</code> budget and parameter</td></tr>
-<tr><th scope="row">Bounded streaming tail</th><td><code translate="no">_TailAccumulator</code>; capacity defaults to <code translate="no">max_result_chars</code>, head evicted on overflow</td></tr>
+<tr><th scope="row">Bounded streaming tail</th><td><code translate="no">_TailAccumulator</code>; capacity defaults to 40,000 characters, head evicted on overflow</td></tr>
 <tr><th scope="row"><code translate="no">can_use()</code></th><td>Session-level "is this user or role allowed", beside <code translate="no">check_fn</code> (process) and <code translate="no">unsafe_in</code> (channel)</td></tr>
 </tbody>
 </table>
@@ -102,7 +103,7 @@ PROGRAM_ENTRIES = [researcher.research]</code></pre>
 <thead><tr><th scope="col">Entry point</th><th scope="col">Controls</th><th scope="col">Layer</th><th scope="col">Stored in</th></tr></thead>
 <tbody>
 <tr><th scope="row">Programs page, <code translate="no">/api/tool-profiles</code></th><td>Create, edit, delete profiles</td><td>2b</td><td><code translate="no">functions_meta.json</code></td></tr>
-<tr><th scope="row">Composer "+" menu</th><td>Web Search on or off, on top of the Agent's set</td><td>2b, 5</td><td>Session meta</td></tr>
+<tr><th scope="row">Composer "+" menu</th><td>Web Search on or off, on top of the Agent's set</td><td>2b, 5</td><td>Branch configuration in session metadata</td></tr>
 <tr><th scope="row">Agent profile <code translate="no">tools</code></th><td>All, selected, Access preset, none; disabled names</td><td>2b, 5</td><td><code translate="no">~/.openprogram/agents/&lt;id&gt;.json</code></td></tr>
 <tr><th scope="row">Attended switch (CLI, TUI, Web)</th><td>Withholds <code translate="no">ask_user_question</code> with no human watching</td><td>5</td><td>Session state</td></tr>
 <tr><th scope="row">Global tool disable</th><td>One tool everywhere; overrides any profile; rare</td><td>5</td><td><code translate="no">config.json</code>: <code translate="no">tools.disabled</code></td></tr>
@@ -112,20 +113,19 @@ PROGRAM_ENTRIES = [researcher.research]</code></pre>
 
 <h2>Resolution path</h2>
 <ol>
-<li>A turn starts; <code translate="no">TurnBindings</code> installs the session's <code translate="no">_loaded_deferred</code> set, which <code translate="no">tool_search</code> updates and later turns keep.</li>
 <li><code translate="no">resolve_tools</code> calls <code translate="no">agent_tools(toolset=…, source=req.source, only_available=True)</code>, walking layers 2 to 5, not 6.</li>
-<li>The deferred catalog from the initial set enters the system prompt. <code translate="no">agent_loop</code> still receives the full list.</li>
-<li>Before each provider call, <code translate="no">split_tools_for_dispatch</code> keeps non-deferred and already-loaded tools for <code translate="no">tools=[]</code>.</li>
+<li>The deferred catalog goes beside the user message as the <code translate="no">turn_context</code> section <code translate="no">deferred_catalog</code>: every deferred tool in scope, loaded or not, in full the first time and then only what was added or removed, so neither loading a tool nor a server connecting changes the prompt (<a href="deferred-tools.html#catalog">Deferred tools</a>). <code translate="no">agent_loop</code> still receives the full list.</li>
+<li>Before each provider call, <code translate="no">split_tools_for_dispatch</code> keeps non-deferred tools and the ones the request's own messages loaded (<code translate="no">loaded_tools(messages)</code>: load records on tool results, names a compaction summary carries) for <code translate="no">tools=[]</code>.</li>
 <li>On a <code translate="no">ToolCall</code>, <code translate="no">agent_loop</code> finds the tool in <code translate="no">context.tools</code> or <code translate="no">_registry</code>, validates arguments, and awaits <code translate="no">execute(call_id, args, cancel, on_update)</code>.</li>
-<li><code translate="no">tool_search(select="cron")</code> adds <code translate="no">cron</code> to <code translate="no">_loaded_deferred</code>; the next request carries its schema.</li>
+<li><code translate="no">tool_search(select="cron")</code> loads <code translate="no">cron</code>: the next request carries its schema, because the search's result records each loaded tool's definition (<code translate="no">details.loads</code>, <code translate="no">record_loads</code>), so the history keeps what the model was first sent. A Responses provider that sends the loader natively carries it in the search's result rather than in <code translate="no">tools=[]</code> (<a href="../providers/codex-transport.html#deferred-tools">Codex transport</a>).</li>
 </ol>
 
 <details><summary>Where each piece lives</summary>
 <table class="stack fixed">
 <thead class="sr"><tr><th scope="col">File</th><th scope="col">Holds</th></tr></thead>
 <tbody>
-<tr><th scope="row"><code translate="no">openprogram/programs/_host/runtime.py</code></th><td><code translate="no">_registry</code> (layer 2 source), <code translate="no">_toolset_membership</code>, <code translate="no">_unsafe_in_channel</code>, <code translate="no">filter_for</code>, <code translate="no">_build_and_register_tool</code>, <code translate="no">function</code>, <code translate="no">_parse_docstring</code>, <code translate="no">_build_parameters_schema</code>, <code translate="no">_evaluate_approval</code>, <code translate="no">tool_requires_approval</code>, <code translate="no">_effective_max_chars</code>, <code translate="no">_TailAccumulator</code>, <code translate="no">_loaded_deferred</code>, <code translate="no">install_loaded_deferred</code>, <code translate="no">mark_deferred_loaded</code>, <code translate="no">split_tools_for_dispatch</code>, <code translate="no">deferred_catalog_text</code>, <code translate="no">tool_search</code></td></tr>
-<tr><th scope="row"><code translate="no">openprogram/programs/_host/execution.py</code></th><td><code translate="no">_normalize_result</code>, <code translate="no">_cap_result_text</code>, <code translate="no">_persist_full_result</code></td></tr>
+<tr><th scope="row"><code translate="no">openprogram/programs/_host/runtime.py</code></th><td><code translate="no">_registry</code> (layer 2 source), <code translate="no">_toolset_membership</code>, <code translate="no">_unsafe_in_channel</code>, <code translate="no">filter_for</code>, <code translate="no">_build_and_register_tool</code>, <code translate="no">function</code>, <code translate="no">_parse_docstring</code>, <code translate="no">_build_parameters_schema</code>, <code translate="no">_evaluate_approval</code>, <code translate="no">tool_requires_approval</code>, <code translate="no">_TailAccumulator</code>, <code translate="no">loaded_tools</code>, <code translate="no">record_loads</code>, <code translate="no">split_tools_for_dispatch</code>, <code translate="no">deferred_catalog_text</code>, <code translate="no">tool_search</code></td></tr>
+<tr><th scope="row"><code translate="no">openprogram/programs/_host/execution.py</code></th><td><code translate="no">_normalize_result</code> (never cuts), <code translate="no">with_cap</code>, <code translate="no">_persist_full_result</code></td></tr>
 <tr><th scope="row"><code translate="no">openprogram/programs/_authoring/helpers.py</code></th><td><code translate="no">is_available_agent_tool</code>: layer 4</td></tr>
 <tr><th scope="row"><code translate="no">openprogram/programs/__init__.py</code></th><td><code translate="no">DEFAULT_TOOLS</code>, <code translate="no">TOOLSETS</code>, <code translate="no">agent_tools</code>, <code translate="no">apply_tool_policy</code>, <code translate="no">get_agent_tool</code>, <code translate="no">list_registered_agent_tools</code>, <code translate="no">list_available</code>; imports every subpackage so tools register</td></tr>
 <tr><th scope="row"><code translate="no">openprogram/programs/tools/&lt;group&gt;/&lt;name&gt;/</code></th><td>One <code translate="no">@function</code> per leaf tool</td></tr>
@@ -144,7 +144,7 @@ PROGRAM_ENTRIES = [researcher.research]</code></pre>
 <p><code translate="no">tests/unit/programs/runtime/test_tools_runtime.py</code>, <code translate="no">tests/component/agent/turns/test_dispatcher_tools.py</code>:</p>
 <ul>
 <li>Docstring and signature to parameter schema; sync and async dispatch; exception to <code translate="no">AgentToolResult(is_error=True)</code></li>
-<li>Char cap and <code translate="no">persist_full</code>; <code translate="no">on_update</code> delivery and tail accumulator; cancel propagation; <code translate="no">asyncio.wait_for</code> timeout; <code translate="no">requires_approval</code></li>
+<li>The declared cap recorded, and the loop bounding once with the whole text kept; <code translate="no">on_update</code> delivery and tail accumulator; cancel propagation; <code translate="no">asyncio.wait_for</code> timeout; <code translate="no">requires_approval</code></li>
 <li>Registry filter by toolset, source, names; all shipped tools register on import; <code translate="no">@function</code> overrides</li>
 <li>Layer 1 skips registration on False or exception</li>
 <li>Layer 6 sidecar, <code translate="no">tool_search</code> promotion, unknown names, catalog text</li>

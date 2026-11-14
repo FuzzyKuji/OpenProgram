@@ -360,11 +360,11 @@
 <table class="stack fixed">
 <thead class="sr"><tr><th scope="col">Action</th><th scope="col">Effect</th></tr></thead>
 <tbody>
-<tr><th scope="row">During a turn</th><td>HEAD cannot move: Regenerate, Save &amp; resend, checkout and version switches are refused until it ends</td></tr>
+<tr><th scope="row">During a turn</th><td>Regenerate, Save &amp; resend and Rewind on the running branch wait until it ends; other branches act freely, and switching branches is never refused. A rewind that changes files is refused while another branch runs, with a button to stop that branch first.</td></tr>
 <tr><th scope="row"><strong>Copy</strong></th><td>On every message</td></tr>
 <tr><th scope="row"><strong>Regenerate</strong></th><td>Reruns the user turn as a sibling</td></tr>
 <tr><th scope="row"><strong>Save &amp; resend</strong>, after Edit message</th><td>Forks the turn. Files stay as they are.</td></tr>
-<tr><th scope="row"><strong>Rewind to here</strong> availability</th><td>Every sent user message; disabled, with the reason in its tip, while a turn runs or files upload. Message and attachments return above any draft.</td></tr>
+<tr><th scope="row"><strong>Rewind to here</strong> availability</th><td>Every sent user message; disabled, with the reason in its tip, while its branch runs or files upload. Message and attachments return above any draft.</td></tr>
 <tr><th scope="row">What it restores</th><td>Edit-tool changes only. Files changed only by shell commands, and commits, stay. Files another conversation changed later are left alone and listed.</td></tr>
 <tr><th scope="row"><strong>Rewound here</strong>, <strong>Undo rewind</strong>, <strong>Redo rewind</strong></th><td>Rewound turns are kept and the row marks the spot. Sending again adds a version beside them. Undo and redo move the conversation only.</td></tr>
 <tr><th scope="row"><strong>Fork from here</strong></th><td>New conversation with the history through this message and its reply; this one stays. Also, with Rewind, in the right-click menu.</td></tr>

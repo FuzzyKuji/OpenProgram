@@ -210,7 +210,6 @@ def test_protocol_cancel_stale_success_replays_same_intent_id(
     ))
 
     assert result.accepted and duplicate.accepted
-    assert result.retried_stale_observation
     assert result.command is not None
     assert result.command.command_id == f"{surface}-cancel-intent"
     assert result.command.expected_version == observed.status_version
@@ -590,7 +589,10 @@ def test_driver_failure_never_reverses_a_committed_cancel_intent(tmp_path) -> No
     assert executions.get_execution(execution.execution_id) == result.execution
 
 
-def test_retried_cancel_command_is_not_redispatched(tmp_path) -> None:
+def test_retried_cancel_command_is_not_delivered_twice(tmp_path) -> None:
+    """Recording a stop twice is idempotent, and so is delivering it: an
+    owner that took the stop is not handed it again (one whose first signal
+    was lost is; see test_cancel_submission)."""
     executions, attempts, execution, attempt = _execution(tmp_path, active=True)
     registry = DriverRegistry()
     driver = RecordingDriver(executions)
@@ -618,10 +620,11 @@ def test_retried_cancel_command_is_not_redispatched(tmp_path) -> None:
 
     assert retry.command == first.command
     assert retry.execution == first.execution
-    assert not retry.delivered
+    assert not retry.delivered and retry.issue_code == "already_delivered"
     assert driver.observed == [
-        ("cancel", ExecutionStatus.CANCELLING, CommandStatus.APPLYING)
+        ("cancel", ExecutionStatus.CANCELLING, CommandStatus.APPLYING),
     ]
+    assert len(executions.list_commands(execution.execution_id)) == 1
 
 
 def test_pause_completes_only_after_checkpoint_and_attempt_finalization(
@@ -1283,3 +1286,49 @@ def test_cancel_escalation_notifies_terminal_observer_once(tmp_path, monkeypatch
                             attempt.attempt_id, attempt.generation, "cancel.user")
     assert observed == [execution.execution_id]
     assert store.get_execution(execution.execution_id).status is ExecutionStatus.CANCELLED
+
+
+@pytest.mark.parametrize("alive", [True, False])
+def test_a_stop_for_a_turn_in_another_live_process_is_written_where_it_looks(tmp_path, monkeypatch, alive) -> None:
+    """A scheduled run's turn runs in its own process: the stop goes to its file,
+    and that process, following it, stops the turn from there."""
+    from openprogram.runtime.execution import process_owner
+    from openprogram.runtime.execution.control import stop_requests
+
+    executions, attempts, execution, attempt = _execution(tmp_path, active=True)
+    monkeypatch.setattr(process_owner, "owned_by_another_process", lambda _lease: True)
+    monkeypatch.setattr(process_owner, "process_owner_may_be_alive", lambda _lease: alive)
+    service = RuntimeControlService(executions, attempts, DriverRegistry())
+
+    result = asyncio.run(service.request_cancel(
+        command_id="cancel_1", execution_id=execution.execution_id,
+        expected_version=execution.status_version, actor={"surface": "test"}, reason_code="cancel.user",
+    ))
+
+    assert result.issue_code == "owner_not_local" and result.execution.status is ExecutionStatus.CANCELLING
+    log = executions.function_log(execution.execution_id)
+    assert log.requested(attempt.generation) == ({stop_requests.CANCEL} if alive else set())
+
+
+def test_the_process_running_a_turn_stops_it_when_asked_elsewhere(tmp_path, monkeypatch) -> None:
+    from openprogram.runtime.execution import run_control
+    from openprogram.runtime.execution import process_owner
+    from openprogram.runtime.execution.control import stop_requests
+    import openprogram.runtime.execution as execution_package
+
+    executions, attempts, execution, attempt = _execution(tmp_path, active=True)
+    monkeypatch.setattr(execution_package, "default_store", lambda: executions)
+    monkeypatch.setattr(process_owner, "owned_by_another_process", lambda _lease: False)
+    stopped = []
+    monkeypatch.setattr(run_control, "cancel_execution", stopped.append)
+    handled: set[int] = set()
+
+    stop_requests._stop_if_asked(execution.execution_id, handled)
+    assert stopped == []
+    executions.function_log(execution.execution_id).request(stop_requests.CANCEL, attempt.generation + 1)
+    stop_requests._stop_if_asked(execution.execution_id, handled)
+    assert stopped == []  # A request for another attempt is not this one's.
+    executions.function_log(execution.execution_id).request(stop_requests.CANCEL, attempt.generation)
+    stop_requests._stop_if_asked(execution.execution_id, handled)
+    stop_requests._stop_if_asked(execution.execution_id, handled)
+    assert stopped == [execution.execution_id]

@@ -164,17 +164,16 @@ def test_program_task_mapping_reaches_consumer_through_native_codex_tool_loop(
     store.create_session("owned-mapping", "Owned mapping test")
     worktoken = set_worktree(str(project))
     token = af_runtime._current_runtime.set(runtime)
-    deferred_token = tools_runtime.install_loaded_deferred(
-        {"program", "execute_code", "owned_nullable_mapping"}
-    )
     try:
         with session_scope(store, "owned-mapping"):
             runtime.exec(
                 content=[{"type": "text", "text": "Invoke the owned task program"}],
+                # Named in the call's tool list, so their schemas are sent
+                # from the first request without a search.
                 tools=[
-                    tools_runtime.get("program"),
-                    tools_runtime.get("execute_code"),
-                    owned_nullable_mapping,
+                    tools_runtime.as_resident(tools_runtime.get("program")),
+                    tools_runtime.as_resident(tools_runtime.get("execute_code")),
+                    tools_runtime.as_resident(owned_nullable_mapping),
                 ],
                 max_iterations=2,
             )
@@ -193,7 +192,14 @@ def test_program_task_mapping_reaches_consumer_through_native_codex_tool_loop(
                 assert not output.exists()
 
         assert transport.calls == 2
-        assert expected in transport.contents[1]
+        # The adapter sends the body as encoded bytes; the second request
+        # carries the program tool's result back to the model.
+        tool_outputs = [
+            str(item.get("output"))
+            for item in json.loads(transport.contents[1])["input"]
+            if item.get("type") == "function_call_output"
+        ]
+        assert any(expected in out for out in tool_outputs), tool_outputs
         wire = {
             tool["name"]: tool
             for tool in json.loads(transport.contents[0]).get("tools", [])
@@ -220,10 +226,8 @@ def test_program_task_mapping_reaches_consumer_through_native_codex_tool_loop(
             ),
         )
     finally:
-        tools_runtime._loaded_deferred.reset(deferred_token)
         af_runtime._current_runtime.reset(token)
         reset_worktree(worktoken)
-        tools_runtime.release_turn_tools()
         runtime.close()
         store.close()
 

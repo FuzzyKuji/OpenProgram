@@ -36,13 +36,6 @@ def _password_variants(secrets):
     )}
 
 
-def contains_password_value(value: str, secrets) -> bool:
-    """Detect the same encodings removed from emitted observations."""
-    folded = value.casefold()
-    return any((variant[:32] if len(variant) > 32 else variant).casefold() in folded
-               for variant in _password_variants(secrets))
-
-
 def redact_password_values(value, secrets):
     """Remove secrets before emitting observations; never log the captured values."""
     if isinstance(value, str):

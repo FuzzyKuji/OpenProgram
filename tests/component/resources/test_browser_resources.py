@@ -6,6 +6,7 @@ from openprogram.programs.applications.browser.pages import sanitize_operation
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from openprogram.state.store.session.nodes import Call
+from openprogram.state.store.session.branch_config import branch_identity
 from openprogram.state.store import SessionNodeWriter
 from openprogram.state.store.session.session_store import SessionStore
 
@@ -72,9 +73,9 @@ def test_retained_browser_page_survives_invocation_and_is_listed(tmp_path, monke
     assert row["kind"] == "web"
     assert "token=" not in row["target"]
     assert "secret" not in row["target"]
-    assert row["branch_id"].endswith(":u1")
+    assert row["branch_id"] == branch_identity("parent", None)
     assert body["current_branch_id"] != row["branch_id"]
-    assert body["current_branch_id"].endswith(":a2retry")
+    assert body["current_branch_id"] == branch_identity("parent", "a2retry")
     assert row["branch_name"] is None
     assert body["current_branch_name"] is None
 
@@ -114,9 +115,9 @@ def test_listed_resource_keeps_origin_name_after_head_moves(tmp_path, monkeypatc
     assert result.status_code == 200
     body = result.json()
     row = next(item for item in body["items"] if item.get("source") == "browser")
-    assert row["branch_id"].endswith(":u1")
+    assert row["branch_id"] == branch_identity("parent", None)
     assert row["branch_name"] == "五页计数器发布验收"
-    assert body["current_branch_id"].endswith(":a2retry")
+    assert body["current_branch_id"] == branch_identity("parent", "a2retry")
     assert body["current_branch_name"] == "retry-fork"
 
 
@@ -198,8 +199,10 @@ def test_resource_endpoint_reuses_branch_graph_within_each_request(tmp_path, mon
             rows = [row for row in body["items"] if row.get("source") == "browser"]
             assert len(rows) == 40
             assert {row["branch_name"] for row in rows} == {name}
-            assert {row["branch_id"] for row in rows} == {"parent:u1"}
-            assert body["current_branch_id"] == "parent:a2retry"
+            # The turns written under a2 continue the conversation's first
+            # branch: its record (head a2) is reused, not a new one minted.
+            assert {row["branch_id"] for row in rows} == {branch_identity("parent", None)}
+            assert body["current_branch_id"] == branch_identity("parent", "a2retry")
             assert body["current_branch_name"] == "retry"
             assert calls["load"] <= 2, "resource count must not multiply DAG reads"
             assert calls["index"] <= 2, "branch lookup must share its predecessor index"
@@ -233,8 +236,8 @@ def test_child_execution_projects_to_parent_origin_branch_not_checkout(tmp_path,
     assert len(rows) == 1
     assert rows[0]["session_id"] == "child"
     assert rows[0]["conversation_session_id"] == "parent"
-    assert rows[0]["branch_id"].endswith(":u1")
-    assert not rows[0]["branch_id"].endswith(":a2retry")
+    assert rows[0]["branch_id"] == branch_identity("parent", None)
+    assert rows[0]["branch_id"] != branch_identity("parent", "a2retry")
 
 
 def test_legacy_page_without_anchor_is_unassigned(tmp_path, monkeypatch):
@@ -458,15 +461,14 @@ def test_operation_event_uses_operating_execution_branch_not_first_association(
     )
     assert len(captured) == 1
     assert captured[0]["execution_id"] == "exec-new"
-    assert str(captured[0].get("branch_id") or "").endswith(":a2retry")
+    assert captured[0].get("branch_id") == branch_identity("parent", "a2retry")
 
 
 def test_completed_owner_becomes_idle_when_page_is_released_and_effects_are_clear(
     tmp_path, monkeypatch,
 ):
     from openprogram.programs.applications.browser.pages import (
-        BrowserResourceStore, fence_page_writes, project_conversation_resources,
-        writes_fenced,
+        BrowserResourceStore, project_conversation_resources,
     )
 
     monkeypatch.setattr("openprogram.state.paths.get_state_dir", lambda: tmp_path)
@@ -480,7 +482,6 @@ def test_completed_owner_becomes_idle_when_page_is_released_and_effects_are_clea
         user_message_id="u1", assistant_message_id="a1",
         conversation_session_id="parent", live=True,
     )
-    fence_page_writes("page:term", input_seq=1)
     store.set_control_state("page:term", "yielding", command_id="pause-term")
     completed = SimpleNamespace(
         execution_id="exec-term", session_id="parent", parent_execution_id=None,
@@ -510,15 +511,13 @@ def test_completed_owner_becomes_idle_when_page_is_released_and_effects_are_clea
     assert row["control_state"] == "idle"
     assert stored["control_state"] == "idle"
     assert not stored.get("pause_command_id")
-    assert writes_fenced("page:term") is False
 
 
-def test_terminal_unknown_effects_stay_stop_unconfirmed_and_keep_fence(
+def test_terminal_unknown_effects_stay_stop_unconfirmed(
     tmp_path, monkeypatch,
 ):
     from openprogram.programs.applications.browser.pages import (
-        BrowserResourceStore, fence_page_writes, project_conversation_resources,
-        writes_fenced,
+        BrowserResourceStore, project_conversation_resources,
     )
 
     monkeypatch.setattr("openprogram.state.paths.get_state_dir", lambda: tmp_path)
@@ -532,7 +531,6 @@ def test_terminal_unknown_effects_stay_stop_unconfirmed_and_keep_fence(
         user_message_id="u1", assistant_message_id="a1",
         conversation_session_id="parent", live=True,
     )
-    fence_page_writes("page:fail", input_seq=1)
     store.set_control_state("page:fail", "yielding", command_id="pause-fail")
     failed = SimpleNamespace(
         execution_id="exec-fail", session_id="parent", parent_execution_id=None,
@@ -566,7 +564,6 @@ def test_terminal_unknown_effects_stay_stop_unconfirmed_and_keep_fence(
     stored = store.get_resource("page:fail")
     assert row["control_state"] == "stop_unconfirmed"
     assert stored["control_state"] == "stop_unconfirmed"
-    assert writes_fenced("page:fail") is False
 
 
 def _paused_wait_open(eid, session_id="parent"):
@@ -653,71 +650,6 @@ def test_wait_open_projects_waiting_and_resume_does_not_continue(tmp_path, monke
         )
     assert resume.status_code == 400
     assert continues == []
-
-
-def test_human_input_while_wait_open_does_not_mint_pause_id(tmp_path, monkeypatch):
-    from openprogram.programs.applications.browser.pages import handle_human_page_input, BrowserResourceStore
-
-    monkeypatch.setattr("openprogram.state.paths.get_state_dir", lambda: tmp_path)
-    db = _conversation(tmp_path)
-    monkeypatch.setattr("openprogram.runtime.context.session_db.default_db", lambda: db)
-    store = BrowserResourceStore(tmp_path / "session-resources.db")
-    store.retain(
-        page_key="page:wait", window_id="win", tab_id="tab-a", title="Plans",
-        target="https://example.test/", connection_generation=1,
-        session_id="parent", execution_id="exec-wait",
-        user_message_id="u1", assistant_message_id="a1",
-        conversation_session_id="parent", live=True,
-    )
-    paused = _paused_wait_open("exec-wait")
-    pauses = []
-
-    class _Store:
-        def get_execution(self, eid):
-            return paused if eid == "exec-wait" else None
-
-        def get_execution_input(self, eid):
-            return SimpleNamespace(user_message_id="u1", assistant_message_id="a1")
-
-    monkeypatch.setattr("openprogram.runtime.execution.default_store", lambda: _Store())
-    monkeypatch.setattr(
-        "openprogram.runtime.execution.conversation_scope.conversation_executions",
-        lambda *args: [paused],
-    )
-    monkeypatch.setattr(
-        "openprogram.runtime.execution.conversation_scope.conversation_parent_ids",
-        lambda *args: {"exec-wait": None},
-    )
-    monkeypatch.setattr(
-        "openprogram.runtime.execution.conversation_scope.authorize_conversation_execution",
-        lambda *args, **kwargs: None,
-    )
-    monkeypatch.setattr(
-        "openprogram.runtime.execution.default_control_service",
-        lambda: SimpleNamespace(effects=SimpleNamespace(list_unresolved=lambda eid: [])),
-    )
-
-    async def _no_pause(**kwargs):
-        pauses.append(kwargs)
-        return paused
-
-    monkeypatch.setattr("openprogram.programs.applications.browser.pages.request_page_pause", _no_pause)
-    monkeypatch.setattr(
-        "openprogram.programs.applications.browser.pages.page_keys_for_socket_tab",
-        lambda *args, **kwargs: ["page:wait"],
-    )
-    monkeypatch.setattr(
-        "openprogram.programs.applications.browser.pages.emit_browser_resource",
-        lambda *args, **kwargs: None,
-    )
-    asyncio.run(handle_human_page_input(
-        ws=SimpleNamespace(scope={}), window_id="win", tab_id="tab-a",
-        input_seq=3, kind="pointer",
-    ))
-    stored = store.get_resource("page:wait")
-    assert stored["control_state"] == "idle"
-    assert not stored.get("pause_command_id")
-    assert pauses == []
 
 
 def test_ordinary_paused_execution_still_projects_paused(tmp_path, monkeypatch):

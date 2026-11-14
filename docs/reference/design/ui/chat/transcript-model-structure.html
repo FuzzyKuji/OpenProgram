@@ -30,6 +30,7 @@
 </ol>
 <p><code translate="no">spawn_branch_root</code> rows are never adopted into a parent turn by a caller edge. Caller descendants match only the tool and leaf rule of <code translate="no">_collect_exec_rows</code>.</p>
 <p>The index is extended as the head advances and rebuilt on a structure change. Views no socket holds sit in an LRU of 16. A view a socket holds is never evicted.</p>
+<p>The store's transcript state moves on what the index keeps instead of reading fresh: a reparent, and a metadata patch to a summary, whose compaction rows are drawn from its metadata. Compaction stamps <code translate="no">tokens_before</code>, <code translate="no">tokens_after</code> and <code translate="no">compacted_at</code> after the insert. Other patches change row bodies, which every read takes fresh.</p>
 <p>Everything non-local is computed from index metadata, so a turn can be projected alone: compaction slots and <code translate="no">superseded_summary</code> from summary nodes, <code translate="no">spawned_from</code> from attach nodes, sibling navigation from child maps, goal marks from one scan of the session's executions held as <code translate="no">{assistant id: execution id}</code> and extended as new turns appear.</p>
 <h3>Turn</h3>
 <p><code translate="no">{ id, rows }</code>. <code translate="no">id</code> is the opener row's id. A compaction row placed before the first opener joins that turn but never becomes its id, so the id is stable.</p>

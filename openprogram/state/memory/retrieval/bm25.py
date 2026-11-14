@@ -3,15 +3,18 @@
 The index is deliberately lexical: it uses no embedding model or vector store.
 Topic files are indexed; timeline files are excluded because they duplicate
 topic events, and the conversations a Topic cites stay in the chat history.
+
+Topic files are read by the one lenient reader, ``read_topic_file``; this
+module only turns the units it returns into events. An event is one cited
+claim of a block: a paragraph citing two things in two places is two
+events, ``<block>:1`` and ``<block>:2``. A paragraph that cites nothing (a
+person's note, a file another tool wrote) is one event under its own ID,
+with no refs and its ``origin`` saying where it came from.
 """
 
 from __future__ import annotations
 
-import hashlib
-import json
-import os
 import re
-import tempfile
 import threading
 from dataclasses import asdict, dataclass
 from datetime import date, timedelta
@@ -20,14 +23,10 @@ from typing import Any
 
 from rank_bm25 import BM25Plus
 
-from ..markdown.syntax import (
-    definition_match,
-    source_reference,
-)
+from ..markdown.models import MemoryUnit
+from ..markdown.parser import read_topic_file, settle_ids, topic_files
 from ..workspace_layout import runtime_dir
 
-# The cache sits beside the runtime directory and takes its name, so a
-# workspace built before the rename keeps every file it already has.
 _WORD_RE = re.compile(r"[^\W_]+", re.UNICODE)
 # Scripts written without spaces, where a whole run would otherwise become one
 # token: CJK ideographs (plus extensions A/B and compatibility), hiragana,
@@ -36,19 +35,10 @@ _UNSEGMENTED_RE = re.compile(
     r"[぀-ヿ㐀-䶿一-鿿豈-﫿가-힯]"
     r"|[\U00020000-\U0002a6df]"
 )
-_REF_RE = re.compile(r"D\d+:\d+(?:-(?:D\d+:)?\d+)?")
 _DATE_RE = re.compile(r"(?<!\d)\d{4}-\d{2}-\d{2}(?!\d)")
 _TEMPORAL_VALUE_RE = re.compile(r"\d{4}(?:-\d{2}(?:-\d{2})?)?")
-_HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
-_EVENT_RE = re.compile(r"<!--\s*memory-event:(ev_[0-9a-f]+)\s*-->")
-_RECORD_LINES_LINE_RE = re.compile(
-    r"\s*<!--\s*record-lines:(\d{1,9})\s*-->\s*"
-)
 _COMMENT_RE = re.compile(r"<!--.*?-->")
 _MARKDOWN_LINK_RE = re.compile(r"\[([^]]+)\]\(([^)]+)\)")
-_BLOCK_SUFFIX_RE = re.compile(r"\s+\^([A-Za-z0-9-]+)\s*$")
-_EVIDENCE_RE = re.compile(r"\[\^([A-Za-z0-9_-]+)\]")
-_EVIDENCE_GROUP_RE = re.compile(r"(?:\[\^[A-Za-z0-9_-]+\])+")
 
 
 @dataclass(frozen=True)
@@ -61,6 +51,8 @@ class MemoryEvent:
     dates: list[str]
     content: str
     refs: list[str]
+    # ``cited``, ``person`` or ``outside``: see ``MemoryUnit.origin``.
+    origin: str = "cited"
 
 
 def tokenize(text: str) -> list[str]:
@@ -92,20 +84,6 @@ def _clean_markdown(text: str) -> str:
     text = _MARKDOWN_LINK_RE.sub(r"\1", text)
     text = _COMMENT_RE.sub(" ", text)
     return " ".join(text.split())
-
-
-def _refs(text: str) -> list[str]:
-    return list(dict.fromkeys(_REF_RE.findall(text)))
-
-
-def _date(text: str) -> str:
-    match = _DATE_RE.search(text)
-    return match.group(0) if match else ""
-
-
-def _stable_id(path: str, line: int, content: str, refs: list[str]) -> str:
-    payload = json.dumps([path, line, content, refs], ensure_ascii=False)
-    return "lex_" + hashlib.sha256(payload.encode()).hexdigest()[:16]
 
 
 def temporal_bounds(value: str) -> tuple[date, date]:
@@ -186,153 +164,81 @@ def _event_overlaps_window(
     return False
 
 
-def parse_topic_file(path: Path, topics_root: Path) -> list[MemoryEvent]:
-    """Parse legacy line records and current paragraph-block Topic files."""
-    relative = path.relative_to(topics_root).as_posix()
-    lines = path.read_text(encoding="utf-8").splitlines()
-    definitions = {}
-    for line in lines:
-        match = definition_match(line)
-        if match:
-            labels = [
-                source_reference(label, target)
-                for label, target in _MARKDOWN_LINK_RE.findall(
-                    match.group("sources")
-                )
-            ]
-            definitions[match.group("id")] = (
-                "" if match.group("when") == "undated" else match.group("when"),
-                labels or _refs(match.group("sources")),
-            )
-    headings: list[str] = []
-    events: list[MemoryEvent] = []
-    index = 0
+def unit_events(units: list[MemoryUnit]) -> list[MemoryEvent]:
+    """Every paragraph of ``units`` as events: one per cited claim, or one
+    for the whole paragraph when it cites nothing.
 
-    while index < len(lines):
-        line = lines[index]
-        heading = _HEADING_RE.match(line)
-        if heading:
-            level = len(heading.group(1))
-            headings = headings[: level - 1] + [heading.group(2).strip()]
-            index += 1
-            continue
-
-        marker = _EVENT_RE.search(line)
-        if marker:
-            event_id = marker.group(1)
-            block = [line]
-            content_line = ""
-            content_number = index + 1
-            cursor = index + 1
-            while cursor < len(lines):
-                candidate = lines[cursor]
-                if _HEADING_RE.match(candidate) or _EVENT_RE.search(candidate):
-                    break
-                block.append(candidate)
-                is_footnote_content = re.search(r"\[\^mem_[A-Za-z0-9_-]+\]", candidate)
-                if (
-                    not content_line
-                    and not candidate.lstrip().startswith(("<!--", "[^mem_"))
-                    and (_DATE_RE.search(candidate) or is_footnote_content)
-                ):
-                    content_line = candidate
-                    content_number = cursor + 1
-                cursor += 1
-            joined = "\n".join(block)
-            refs = _refs(joined)
-            content = _clean_markdown(
-                re.sub(r"\[\^mem_[A-Za-z0-9_-]+\]", "", content_line)
-            )
-            date = _date(joined)
-            if content and date and not content.startswith(f"[{date}]"):
-                content = f"[{date}] {content}"
-            if content and refs:
+    Whatever a Topic file holds is memory and is found by search; whether
+    it cites is said in the result, not decided by admission. A merged
+    paragraph is one unit per absorbed ID; its events go under the last,
+    its own.
+    """
+    own: dict[tuple[str, int], MemoryUnit] = {}
+    for unit in units:
+        own[(unit.topic_path, unit.created_order)] = unit
+    events = []
+    for unit in own.values():
+        if not unit.source_refs:
+            content = _clean_markdown(unit.content)
+            if content:
                 events.append(MemoryEvent(
-                    event_id=event_id,
-                    path=f"topics/{relative}",
-                    line=content_number,
-                    headings=list(headings),
-                    date=date,
-                    dates=[date] if date else [],
+                    event_id=unit.memory_id,
+                    path=f"topics/{unit.topic_path}",
+                    line=unit.line,
+                    headings=list(unit.headings),
+                    date="",
+                    dates=[],
                     content=content,
-                    refs=refs,
+                    refs=[],
+                    origin=unit.origin,
                 ))
-            index = cursor
             continue
-
-        if definition_match(line):
-            index += 1
-            continue
-
-        if line.strip():
-            cursor = index
-            paragraph = []
-            while cursor < len(lines):
-                candidate = lines[cursor]
-                if not candidate.strip() or _HEADING_RE.match(candidate):
-                    break
-                if definition_match(candidate) or _EVENT_RE.search(candidate):
-                    break
-                paragraph.append(candidate)
-                cursor += 1
-            joined = "\n".join(paragraph)
-            block = _BLOCK_SUFFIX_RE.search(joined)
-            if block:
-                body = joined[:block.start()]
-                groups = list(_EVIDENCE_GROUP_RE.finditer(body))
-                claim_start = 0
-                for group_number, group in enumerate(groups, start=1):
-                    citations = _EVIDENCE_RE.findall(group.group(0))
-                    dates = list(dict.fromkeys(
-                        definitions[citation][0]
-                        for citation in citations
-                        if citation in definitions and definitions[citation][0]
-                    ))
-                    refs = list(dict.fromkeys(
-                        ref
-                        for citation in citations
-                        for ref in definitions.get(citation, ("", []))[1]
-                    ))
-                    content = _clean_markdown(body[claim_start:group.start()])
-                    claim_start = group.end()
-                    if not content or not refs:
-                        continue
-                    if dates and not content.startswith("["):
-                        content = f"[{'; '.join(dates)}] {content}"
-                    events.append(MemoryEvent(
-                        event_id=f"{block.group(1)}:{group_number}",
-                        path=f"topics/{relative}",
-                        line=index + 1,
-                        headings=list(headings),
-                        date=dates[0] if dates else "",
-                        dates=dates,
-                        content=content,
-                        refs=refs,
-                    ))
-                index = cursor
+        claims: dict[int, list] = {}
+        for annotation in unit.evidence:
+            claims.setdefault(annotation.claim, []).append(annotation)
+        for claim, annotations in sorted(claims.items()):
+            dates = list(dict.fromkeys(a.when for a in annotations if a.when))
+            refs = list(dict.fromkeys(
+                ref for a in annotations for ref in a.source_refs
+            ))
+            content = _clean_markdown(annotations[0].quote)
+            if not content or not refs:
                 continue
-
-        refs = _refs(line)
-        content = _clean_markdown(line)
-        if refs and content and not line.lstrip().startswith("<!--"):
-            event_date = _date(line)
+            if dates and not content.startswith("["):
+                content = f"[{'; '.join(dates)}] {content}"
             events.append(MemoryEvent(
-                event_id=_stable_id(relative, index + 1, content, refs),
-                path=f"topics/{relative}",
-                line=index + 1,
-                headings=list(headings),
-                date=event_date,
-                dates=[event_date] if event_date else [],
+                event_id=f"{unit.memory_id}:{claim}",
+                path=f"topics/{unit.topic_path}",
+                line=unit.line,
+                headings=list(unit.headings),
+                date=dates[0] if dates else "",
+                dates=dates,
                 content=content,
                 refs=refs,
             ))
-        index += 1
-
     return events
 
 
-def _file_hash(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+def topic_events(memory_dir: Path, files: dict[str, Path]) -> list[MemoryEvent]:
+    """Every event of the indexable ``files`` (keyed ``topics/...``)."""
+    from ..management.ownership import outside_paths
+
+    topics = Path(memory_dir).resolve() / "topics"
+    try:
+        outside = outside_paths(Path(memory_dir).resolve())
+    except Exception:  # noqa: BLE001 - provenance never stops recall
+        outside = set()
+    read = [
+        (
+            relative.removeprefix("topics/"),
+            read_topic_file(
+                path, topics,
+                outside=relative.removeprefix("topics/") in outside,
+            )[0],
+        )
+        for relative, path in sorted(files.items())
+    ]
+    return unit_events(settle_ids(read).units)
 
 
 def _indexable_files(
@@ -340,12 +246,7 @@ def _indexable_files(
     files: list[Path] | tuple[Path, ...] | None = None,
 ) -> dict[str, Path]:
     root = memory_dir.resolve()
-    if files is None:
-        candidates = (
-            (root / "topics").rglob("*.md") if (root / "topics").exists() else ()
-        )
-    else:
-        candidates = iter(files)
+    candidates = topic_files(root / "topics") if files is None else iter(files)
 
     result = {}
     for candidate in candidates:
@@ -358,7 +259,7 @@ def _indexable_files(
         if (
             len(relative.parts) >= 2
             and relative.parts[0] == "topics"
-            and path.suffix == ".md"
+            and path.suffix.lower() == ".md"
             and path.is_file()
             and not path.is_symlink()
         ):
@@ -373,74 +274,30 @@ class MemoryBM25Index:
         self,
         memory_dir: str | Path,
         *,
-        persist: bool = True,
         files: list[Path] | tuple[Path, ...] | None = None,
     ):
         self.memory_dir = Path(memory_dir).resolve()
         self.topics_dir = self.memory_dir / "topics"
-        self._runtime_name = runtime_dir(self.memory_dir).name
-        self.cache_path = self.memory_dir / f"{self._runtime_name}-bm25.json"
         self._visible_files = None if files is None else tuple(files)
-        self.persist = persist and files is None
         self._lock = threading.RLock()
-        self._files: dict[str, dict[str, Any]] = {}
         self.events: list[MemoryEvent] = []
-        if self.persist:
-            self._load_cache()
+        # A per-file cache from before the one reader; reading the whole
+        # tree costs tens of milliseconds, and ``inspect`` keeps the index
+        # until the workspace changes.
+        stale = self.memory_dir / f"{runtime_dir(self.memory_dir).name}-bm25.json"
+        if files is None and stale.is_file():
+            try:
+                stale.unlink()
+            except OSError:
+                pass
         self.refresh()
-
-    def _load_cache(self) -> None:
-        if not self.cache_path.exists():
-            return
-        try:
-            payload = json.loads(self.cache_path.read_text(encoding="utf-8"))
-            if payload.get("version") == 11 and isinstance(payload.get("files"), dict):
-                self._files = payload["files"]
-        except (OSError, ValueError, TypeError):
-            self._files = {}
-
-    def _write_cache(self) -> None:
-        self.memory_dir.mkdir(parents=True, exist_ok=True)
-        payload = {"version": 11, "files": self._files}
-        fd, temporary = tempfile.mkstemp(prefix=f"{self._runtime_name}-bm25-", dir=self.memory_dir)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                json.dump(payload, handle, ensure_ascii=False, separators=(",", ":"))
-            os.replace(temporary, self.cache_path)
-        finally:
-            if os.path.exists(temporary):
-                os.unlink(temporary)
 
     def refresh(self) -> None:
         with self._lock:
-            self._refresh()
-
-    def _refresh(self) -> None:
-        current = _indexable_files(self.memory_dir, self._visible_files)
-
-        changed = set(self._files) != set(current)
-        refreshed: dict[str, dict[str, Any]] = {}
-        for relative, path in sorted(current.items()):
-            digest = _file_hash(path)
-            cached = self._files.get(relative)
-            if cached and cached.get("sha256") == digest:
-                refreshed[relative] = cached
-                continue
-            changed = True
-            events = parse_topic_file(path, self.topics_dir)
-            refreshed[relative] = {
-                "sha256": digest,
-                "events": [asdict(event) for event in events],
-            }
-
-        self._files = refreshed
-        self.events = [
-            MemoryEvent(**row)
-            for relative in sorted(self._files)
-            for row in self._files[relative].get("events", [])
-        ]
-        if changed and self.persist:
-            self._write_cache()
+            self.events = topic_events(
+                self.memory_dir,
+                _indexable_files(self.memory_dir, self._visible_files),
+            )
 
     @staticmethod
     def _search_text(event: MemoryEvent) -> str:
@@ -532,6 +389,21 @@ class MemoryBM25Index:
         return results[: max(1, min(int(top_k), 50))]
 
 
+#: What a result that cites nothing says instead of its refs.
+SOURCE_LINES = {
+    "outside": "source: outside file",
+    "person": "source: added by person",
+}
+
+
+def source_line(row: dict[str, Any]) -> str:
+    """``refs: …`` for a cited result, ``source: …`` for one citing nothing."""
+    origin = SOURCE_LINES.get(str(row.get("origin") or ""))
+    if origin and not row.get("refs"):
+        return f"   {origin}"
+    return f"   refs: {', '.join(row.get('refs') or [])}"
+
+
 def render_search_results(results: list[dict[str, Any]]) -> str:
     if not results:
         return "No BM25 matches."
@@ -542,6 +414,6 @@ def render_search_results(results: list[dict[str, Any]]) -> str:
             f"{rank}. {row['path']}:{row['line']} "
             f"[date={','.join(row['dates']) or 'unknown'}; score={row['final_score']:.4f}; rules={features}]\n"
             f"   {row['content']}\n"
-            f"   refs: {', '.join(row['refs'])}"
+            + source_line(row)
         )
     return "\n".join(blocks)

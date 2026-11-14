@@ -36,11 +36,10 @@
 
 <h2 id="full-result-artifact-identity">Full-result files</h2>
 <ul>
-<li>A file in the profile state directory's <code translate="no">tool_results/</code> belongs to its session, execution and qualified occurrence. A raw provider call ID can repeat and is not an identity.</li>
-<li>The name holds a digest of that ownership, and exclusive creation gives each save its own path, including calls with no scope.</li>
-<li>Saving one occurrence again may add a file but cannot overwrite content an earlier receipt references.</li>
-<li>The path is returned only after the complete file is written and closed.</li>
-<li>Existing receipts and legacy files stay readable, without migration.</li>
+<li>A whole text is kept in the running conversation's directory, at <code translate="no">tool_results/&lt;sha256&gt;.txt</code>, named by its content. It is deleted and backed up with the conversation. Outside a conversation (a one-off CLI call) it goes to the profile state directory's <code translate="no">tool_results/</code>.</li>
+<li>The same text is kept once; two different texts never share a name, whichever call or layer saved them. A raw provider call ID can repeat and plays no part in the name.</li>
+<li>An existing file is reused, since its name says it holds that text. A new one is written to a temporary file and moved into place, so the path is returned only after the complete file is written.</li>
+<li>Files written earlier under other names stay readable, without migration.</li>
 </ul>
 
 <h2>Failure signals</h2>
@@ -66,7 +65,7 @@
 
 <h2>Reading results at the delegation limit</h2>
 <ul>
-<li><code translate="no">job_output</code> stays discoverable and usable at <code translate="no">agent.max_messages</code>. Reading creates no execution, branch or delivery and spends no allowance.</li>
+<li><code translate="no">read_conversation</code> stays discoverable and reads an execution id at <code translate="no">agent.max_messages</code>. Reading creates no execution, branch or delivery and spends no allowance.</li>
 <li>Session and ancestor ownership checks still apply, before any wait.</li>
 <li>Exhausted chains still hide <code translate="no">agent</code>; <code translate="no">send_message</code> keeps its delivery-time guard. There is no separate cancellation tool.</li>
 </ul>
@@ -77,7 +76,7 @@
 <thead class="sr"><tr><th scope="col">Subject</th><th scope="col">How it is exercised</th></tr></thead>
 <tbody>
 <tr><th scope="row"><code translate="no">execute_code</code></th><td>Registered tool through <code translate="no">AgentTool.execute</code> with real successful, failing and timed-out snippets</td></tr>
-<tr><th scope="row"><code translate="no">job_output</code></th><td>Public tool catalog resolved at the limit, an owned completed Job read, a foreign Job refused before waiting</td></tr>
+<tr><th scope="row"><code translate="no">read_conversation</code></th><td>Public tool catalog resolved at the limit, an owned completed Job read, a foreign Job refused before waiting</td></tr>
 <tr><th scope="row">Auxiliary providers</th><td>Registered wrappers with controlled official-provider transport and owned PNG files; unknown references, unavailable backends, sandbox denial before backend access, cancellation</td></tr>
 <tr><th scope="row">Canvas</th><td>Registered tool on owned files; explicit flags, unchanged text, successful <code translate="no">Error:</code> data, plain-call compatibility</td></tr>
 <tr><th scope="row"><code translate="no">ask_user_question</code></th><td>Unavailable input and a controlled frontend answer through <code translate="no">AgentTool.execute</code>, with no real prompt</td></tr>

@@ -24,7 +24,7 @@
 <thead class="sr"><tr><th scope="col">位置</th><th scope="col">发生什么</th></tr></thead>
 <tbody>
 <tr><th scope="row">打开的窗口</th><td>各显示一条消息</td></tr>
-<tr><th scope="row">系统通知</th><td>正在用 App 时也发。App 发出，点击打开对话；没有窗口时 worker 以同样的名字和图标发出。pip 安装的 worker 在 macOS 上通过脚本编辑器发，Linux 需要 <code translate="no">notify-send</code>。</td></tr>
+<tr><th scope="row">系统通知</th><td>正在用 App 时也发。App 发出，点击打开对话；没有窗口时 worker 以同样的名字和图标发出。pip 安装的 worker 在 macOS 上通过脚本编辑器发，Linux 需要 <code translate="no">notify-send</code>。Windows 上 worker 通过 Windows PowerShell 发 toast，显示它的名字。</td></tr>
 <tr><th scope="row"><a href="../integrations/channels.zh.html">聊天渠道</a>对话</th><td>作为消息发送</td></tr>
 <tr><th scope="row">唤醒：新一轮</th><td>消息以 ⏰ 和提醒内容开头，使用该对话的权限模式和规则。聊天渠道里回答也发到渠道。</td></tr>
 <tr><th scope="row">唤醒：对话正忙</th><td>最多等 10 分钟。仍忙则不开始新轮，聊天渠道对话收到提醒内容。</td></tr>

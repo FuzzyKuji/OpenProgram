@@ -626,6 +626,40 @@ def test_known_owner_registration_does_not_scan_unrelated_sessions(monkeypatch):
         thread.join(timeout=1)
 
 
+def test_a_finished_turn_retires_its_owner_without_scanning_other_sessions(monkeypatch):
+    """The owner names its session; retiring it at the turn's end reads that
+    session only. A scan read and folded every session's log twice, about
+    0.9 s of a real profile's turn end."""
+    calls: list[str] = []
+
+    class _Store:
+        def list_sessions(self, **_kwargs):
+            calls.append("list_sessions")
+            return [{"id": "unrelated-owner"}, {"id": "target-owner"}]
+
+        def get_nodes(self, session_id):
+            calls.append(session_id)
+            return []
+
+    store = _Store()
+    monkeypatch.setattr("openprogram.runtime.context.session_db.default_db", lambda: store)
+    from openprogram.runtime.jobs import store as job_store
+
+    job_lookups: list[tuple[str, str]] = []
+    monkeypatch.setattr(job_store, "load_job",
+                        lambda session_id, execution_id: job_lookups.append((session_id, execution_id)) or None)
+    event = threading.Event()
+    assert run_control.claim_cancel_event("target-owner", event, execution_id="exec-done")
+    calls.clear()
+    job_lookups.clear()
+
+    run_control.unregister_cancel_event("target-owner", event, execution_id="exec-done")
+
+    assert calls == ["target-owner"]
+    assert job_lookups == [("target-owner", "exec-done")]
+    assert "exec-done" not in run_control_owners._owners
+
+
 def test_known_owner_registration_skips_job_runner_cache_miss_scan(monkeypatch):
     from openprogram.runtime.jobs.runner import JobRunner
 
@@ -840,6 +874,10 @@ def test_forced_tool_exit_does_not_retire_successor_token(monkeypatch):
         @staticmethod
         def invalidate_cache(_session_id):
             return None
+
+        @staticmethod
+        def get_nodes(_session_id):
+            return []
 
     successor = {}
 

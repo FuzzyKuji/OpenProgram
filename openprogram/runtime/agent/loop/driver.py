@@ -68,6 +68,8 @@ class LoopDriverOptions:
         stop_after_tool_round: bool = False,
         web_search: bool | None = None,
         response_format: Any | None = None,
+        recall: bool = True,
+        dated: bool = False,
     ):
         self.initial_state = initial_state
         self.convert_to_llm = convert_to_llm
@@ -86,6 +88,8 @@ class LoopDriverOptions:
         self.stop_after_tool_round = stop_after_tool_round
         self.web_search = web_search
         self.response_format = response_format
+        self.recall = recall
+        self.dated = dated
 
     @classmethod
     def from_dict(cls, opts_dict: dict[str, Any]) -> "LoopDriverOptions":
@@ -140,6 +144,8 @@ class LoopDriver:
         self._parallel_tool_calls: bool | None = opts.parallel_tool_calls
         self._max_iterations: int | None = opts.max_iterations
         self._stop_after_tool_round = opts.stop_after_tool_round
+        self._recall = getattr(opts, "recall", True)
+        self._dated = getattr(opts, "dated", False)
         self._web_search: bool | None = opts.web_search
         self._response_format = opts.response_format
 
@@ -258,7 +264,8 @@ class LoopDriver:
     def abort(self) -> None:
         """Cancel the current operation."""
         if self._cancel_event:
-            self._cancel_event.set()
+            from openprogram.runtime.execution.run_control.wakeups import set_and_fire
+            set_and_fire(self._cancel_event)
         if self._running_task and not self._running_task.done():
             self._running_task.cancel()
 
@@ -366,6 +373,8 @@ class LoopDriver:
             parallel_tool_calls=self._parallel_tool_calls,
             max_iterations=self._max_iterations,
             stop_after_tool_round=self._stop_after_tool_round,
+            recall=self._recall,
+            dated=self._dated,
             web_search=self._web_search,
             response_format=self._response_format,
             convert_to_llm=self._convert_to_llm,
@@ -437,7 +446,8 @@ class LoopDriver:
 
         except asyncio.CancelledError:
             if self._cancel_event is not None:
-                self._cancel_event.set()
+                from openprogram.runtime.execution.run_control.wakeups import set_and_fire
+                set_and_fire(self._cancel_event)
             if ev_stream is not None:
                 await ev_stream.cancel_producer()
             raise
@@ -465,11 +475,12 @@ class LoopDriver:
             # Structured taxonomy so surfaces above the provider layer can tell
             # a retryable rate-limit from a fatal auth/context failure instead of
             # just a string. See docs/design/providers/reliability/error-taxonomy-propagation.md.
-            err_reason = err_retryable = err_retry_after_s = None
+            err_reason = err_retryable = err_retry_after_s = err_cause = None
             if not is_aborted:
                 try:
-                    from openprogram.models.providers.utils.errors import taxonomy_fields
+                    from openprogram.models.providers.utils.errors import failure_cause, taxonomy_fields
                     err_reason, err_retryable, err_retry_after_s = taxonomy_fields(err)
+                    err_cause = failure_cause(err)
                 except Exception:
                     # Taxonomy is optional detail; the error message still carries the text.
                     _log.debug("error taxonomy unavailable for %s", type(err).__name__, exc_info=True)
@@ -489,6 +500,7 @@ class LoopDriver:
                     else err_retryable
                 ),
                 error_retry_after_s=err_retry_after_s,
+                error_cause=err_cause,
                 error_retryable_inferred=getattr(err, "retryable", None) is None,
                 error_transport_exhausted=bool(
                     getattr(err, "transport_exhausted", False)

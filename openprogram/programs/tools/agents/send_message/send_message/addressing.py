@@ -78,6 +78,14 @@ def _normalize_existing_target(
     return "none", None
 
 
+def name_key(name: str) -> str:
+    """A name with case, spaces and punctuation folded away, so a name is
+    reached however it is spelled: with spaces as written, or with the
+    underscores older agent names were stored with."""
+    import re
+    return "_".join(re.split(r"[\W_]+", (name or "").casefold())).strip("_")
+
+
 def agent_tips(session_id: str) -> list[tuple[str, str]]:
     """The agents spawned in this session, as ``(label, tip)``: the name
     the ``agent`` call gave it and the current tip of its branch. A
@@ -257,10 +265,17 @@ def _resolve_branch_by_name(name: str) -> tuple[str, object]:
             if bname and head:
                 candidates.append((bname, sid, head))
     exact = [c for c in candidates if c[0] == needle]
-    if not exact and cur:
+    tips = agent_tips(cur) if cur and not exact else []
+    if not exact:
         # The name an agent was spawned with (its branch may have been
         # renamed since, or retired from the branch list when it ended).
-        exact = [(label, cur, tip) for label, tip in agent_tips(cur) if label == needle]
+        exact = [(label, cur, tip) for label, tip in tips if label == needle]
+    if not exact and name_key(needle):
+        # Spelled another way: "Spell the word harbor" and the older
+        # identifier form "Spell_the_word_harbor" are one name.
+        key = name_key(needle)
+        exact = [c for c in candidates if name_key(c[0]) == key] or [
+            (label, cur, tip) for label, tip in tips if name_key(label) == key]
     if len(exact) == 1:
         return "ok", (exact[0][1], exact[0][2])
     if len(exact) > 1:

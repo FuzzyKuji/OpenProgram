@@ -190,7 +190,9 @@ class AgentContinuation:
             not isinstance(snapshot.get("model"), Mapping)
             or not isinstance(snapshot["model"].get("id"), str)
             or not snapshot["model"]["id"]
-            or not isinstance(snapshot.get("system_prompt"), str)
+            # The prompt's text, or the hash of the prompt recorded on the
+            # branch (``loop_runner.prompt_by_reference``).
+            or not isinstance(snapshot.get("system_prompt", snapshot.get("system_prompt_sha256")), str)
             or not isinstance(snapshot.get("tools"), list)
         ):
             raise RuntimeContractError("checkpoint_schema_invalid", "resolved snapshot is invalid")

@@ -67,9 +67,7 @@ class MethodOptions:
     check_fn: Callable | None = None
     requires_env: tuple = ()
     can_use: Callable | None = None
-    max_result_chars: int | None = None
-    persist_full: bool = False
-    head_ratio: float | None = None
+    max_result_weight: int | None = None
     requires_approval: object = None
     cache: bool = False
     cache_ttl: float = 300.0
@@ -160,13 +158,9 @@ def register_method(self) -> None:
     )
     from openprogram.programs._host.runtime import (
         _build_and_register_tool,
-        _effective_max_chars,
-        _persist_full_result,
         _cache_key,
         _cache_get,
         _cache_set,
-        DEFAULT_MAX_RESULT_CHARS,
-        DEFAULT_HEAD_RATIO,
     )
 
     name = self.tool_name or self._fn.__name__
@@ -181,11 +175,7 @@ def register_method(self) -> None:
     description = (
         self.tool_description or spec.get("description") or self._fn.__name__
     )
-    max_chars = self.max_result_chars or DEFAULT_MAX_RESULT_CHARS
-    head_ratio = (
-        self.head_ratio if self.head_ratio is not None else DEFAULT_HEAD_RATIO
-    )
-    persist_full = self.persist_full
+    result_cap = self.max_result_weight
     wrapper = self._wrapper
     use_cache = self.cache
     cache_ttl = self.cache_ttl
@@ -273,17 +263,7 @@ def register_method(self) -> None:
             if cancel_token is not None:
                 _current_cancel.reset(cancel_token)
 
-        if isinstance(raw, AgentToolResult):
-            result = raw
-        else:
-            result = _normalize_result(
-                raw,
-                call_id=call_id,
-                max_chars=_effective_max_chars(max_chars),
-                persist_full=persist_full,
-                head_ratio=head_ratio,
-                persist=_persist_full_result,
-            )
+        result = _normalize_result(raw, call_id=call_id, cap=result_cap)
         if use_cache and not result.is_error:
             _cache_set(_cache_key(name, kwargs), result, cache_ttl)
         return result

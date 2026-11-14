@@ -46,7 +46,7 @@ def test_the_system_prompt_runs_in_this_order():
     assert ordered == [
         "base", "output_style", "messaging", "inline_prompt",
         "environment", "chat_surface", "agents_md", "memory", "open_work", "capabilities",
-        "current_date", "plan_mode",
+        "plan_mode",
     ]
 
 
@@ -72,7 +72,7 @@ def test_environment_block_carries_cwd_and_repository(monkeypatch, tmp_path):
     assert "OS:" in env
     assert f"Working directory: {repo}" in env
     assert f"Git repository: {repo.resolve()}" in env
-    assert "Today is " in out
+    assert "Today is " not in out
     assert out.index("You are bot") < out.index("<environment>")
 
 
@@ -189,33 +189,17 @@ def test_browser_application_registers_its_pages_section():
     assert "application:browser:pages" in {c.name for c in comp._REGISTRY["L2"]}
 
 
-# current_date sits at the L1 tail
+# The date is not in the system prompt
 #
-# The date is the only component that changes on its own — at midnight,
-# with nothing in the session having changed. From L0 it preceded the
-# tool-runtime and memory blocks, so the rollover invalidated the entire
-# cached prefix mid-session. At the L1 tail only what follows it is lost.
+# It is the only text that changes on its own, at midnight. In the
+# instructions it ended every cached prefix; it rides each turn's message
+# instead (tests/unit/context/test_turn_prefix_cache.py).
 
 
-def test_current_date_registered_at_the_l1_tail():
-    l1 = {c.name: c.order for c in comp._REGISTRY["L1"]}
-    assert "current_date" in l1, "date must be an L1 component"
-    assert "current_date" not in {c.name for c in comp._REGISTRY["L0"]}
-    # After every stable block: tools, catalog, workspace, memory.
-    for stable in ("environment", "capabilities", "agents_md"):
-        assert l1["current_date"] > l1[stable], stable
-
-
-def test_current_date_is_the_last_thing_before_plan_mode():
-    ordered = [c.name for c in sorted(comp._REGISTRY["L1"], key=lambda c: c.order)]
-    assert ordered[-2:] == ["current_date", "plan_mode"], ordered
-
-
-def test_date_still_reaches_the_system_prompt():
-    """Moving it must not drop it off the wire."""
-    import datetime
-    prompt = comp.build_system_prompt({"id": "main"})
-    assert datetime.date.today().strftime("%B %d, %Y") in prompt
+def test_no_component_writes_the_date():
+    names = {c.name for layer in ("L0", "L1") for c in comp._REGISTRY[layer]}
+    assert "current_date" not in names
+    assert "Today is" not in comp.build_system_prompt({"id": "main"})
 
 
 def test_a_built_prompt_splits_back_into_its_components():
@@ -249,3 +233,23 @@ def test_a_chat_bound_to_a_channel_is_not_taught_to_draw(monkeypatch):
     assert _prompt_channel(SimpleNamespace(source="web", session_id="plain")) == "web"
     assert _prompt_channel(SimpleNamespace(source="web", session_id="new")) == "web"
     assert _prompt_channel(SimpleNamespace(source="wechat", session_id="bound")) == "wechat"
+
+
+def test_the_system_prompt_is_the_same_on_two_days(monkeypatch):
+    """The date is not in the instructions, so a conversation (and every
+    one-shot call) that crosses midnight keeps its cached prefix."""
+    import datetime as real
+
+    class Day(real.date):
+        today_value = real.date(2026, 11, 12)
+
+        @classmethod
+        def today(cls):
+            return cls.today_value
+
+    monkeypatch.setattr(real, "date", Day)
+    first = build_system_prompt({"id": "main", "name": "bot"})
+    Day.today_value = real.date(2026, 11, 13)
+    second = build_system_prompt({"id": "main", "name": "bot"})
+    assert first == second
+    assert comp.current_date_note() == "Today is Friday, November 13, 2026."

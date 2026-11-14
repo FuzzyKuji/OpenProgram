@@ -6,7 +6,7 @@
 <p>分层沿用 Hermes 的 stable、context、volatile。Hermes 靠写死的 <code translate="no">if</code> 链到达各层，只有两个注册点；这里所有成分都是注册项。</p>
 
 <figure>
-<svg class="fig-wide" viewBox="0 0 680 262" role="img" aria-label="请求从上到下由最稳定到最不稳定。tools 放 L0 工具集和 MCP，之后是断点一。system 放 L0 主提示词、输出风格和智能体指令，之后是断点二，再放 L1 环境、AGENTS.md、记忆、未结事项、能力、日期和计划模式，之后是断点三。messages 放 L1 历史，之后是断点四，最后是不缓存的 L2 本次调用。">
+<svg class="fig-wide" viewBox="0 0 680 262" role="img" aria-label="请求从上到下由最稳定到最不稳定。tools 放 L0 工具集和 MCP，之后是断点一。system 放 L0 主提示词、输出风格和智能体指令，之后是断点二，再放 L1 环境、AGENTS.md、记忆、未结事项、能力和计划模式，之后是断点三。messages 放 L1 历史，之后是断点四，最后是不缓存的 L2 本次调用。">
   <text class="t-soft" x="0" y="20">最稳定</text>
   <rect class="tile" x="84" y="30" width="596" height="44" rx="6"/>
   <text x="0" y="57">tools</text>
@@ -20,7 +20,7 @@
   <text class="t-soft" x="590" y="109">断点二</text>
   <rect class="tile" x="84" y="130" width="596" height="44" rx="6"/>
   <text class="t-soft" x="98" y="157">L1</text>
-  <text x="130" y="157">环境、AGENTS.md、记忆 … 日期、计划</text>
+  <text x="130" y="157">环境、AGENTS.md、记忆 … 计划模式</text>
   <text class="t-soft" x="590" y="157">断点三</text>
   <rect class="tile" x="84" y="182" width="596" height="44" rx="6"/>
   <text x="0" y="209">messages</text>
@@ -33,7 +33,7 @@
 <dl class="pairs fig-narrow">
   <dt><code translate="no">tools</code></dt><dd>L0 工具集、MCP · 断点一</dd>
   <dt><code translate="no">system</code></dt><dd>L0 主提示词、输出风格、智能体指令 · 断点二</dd>
-  <dt><code translate="no">system</code></dt><dd>L1 环境、AGENTS.md、记忆 … 日期、计划 · 断点三</dd>
+  <dt><code translate="no">system</code></dt><dd>L1 环境、AGENTS.md、记忆 … 计划模式 · 断点三</dd>
   <dt><code translate="no">messages</code></dt><dd>L1 历史，在末尾增长 · 断点四</dd>
   <dt><code translate="no">messages</code></dt><dd>L2 本次调用：不缓存</dd>
 </dl>
@@ -67,7 +67,7 @@ class ContextComponent:
 <table class="stack">
 <thead><tr><th scope="col">顺序</th><th scope="col">成分</th><th scope="col">出现条件</th></tr></thead>
 <tbody>
-<tr><th scope="row">10</th><td><code translate="no">base</code>：智能体是谁、怎么工作、信任什么（<code translate="no">context/guides/base.md</code>）</td><td>恒</td></tr>
+<tr><th scope="row">10</th><td><code translate="no">base</code>：智能体是谁、怎么工作、何时停下、项目归谁、怎么汇报、信任什么（<code translate="no">context/guides/base.md</code>）</td><td>恒</td></tr>
 <tr><th scope="row">20</th><td><code translate="no">output_style</code></td><td>选了非默认风格</td></tr>
 <tr><th scope="row">30</th><td><code translate="no">inline_prompt</code>：智能体自身指令，冲突时优先</td><td>设置了 <code translate="no">system_prompt</code></td></tr>
 <tr><th scope="row">—</th><td>工具和 MCP schema，在请求的工具列表中</td><td>恒</td></tr>
@@ -79,11 +79,10 @@ class ContextComponent:
 <tbody>
 <tr><th scope="row">10</th><td><code translate="no">environment</code>：系统、shell、工作目录、Git 仓库、远程环境、额外目录、渠道格式</td><td>恒</td></tr>
 <tr><th scope="row">20</th><td><code translate="no">agents_md</code>：全局，然后从项目根到 cwd；共享 32 KiB 预算</td><td>有文件</td></tr>
-<tr><th scope="row">30</th><td><code translate="no">memory</code>：<code translate="no">MEMORY.md</code> 导航，然后核心</td><td>可读且非空</td></tr>
+<tr><th scope="row">30</th><td><code translate="no">memory</code>：<code translate="no">MEMORY.md</code> 导航，然后核心。和 <code translate="no">environment</code>、<code translate="no">agents_md</code>、<code translate="no">open_work</code>、<code translate="no">capabilities</code> 一样是可移动的节：提示词其余部分不变时，对话保留记录提示词时的这一段，之后的版本跟着本轮消息发送（见 L2）</td><td>可读且非空</td></tr>
 <tr><th scope="row">35</th><td><code translate="no">open_work</code>：智能体还欠什么</td><td>有未结事项</td></tr>
 <tr><th scope="row">40</th><td><code translate="no">capabilities</code>：技能索引、Program 用法、延迟工具名（最多 80 个）</td><td>有其一</td></tr>
-<tr><th scope="row">85</th><td><code translate="no">current_date</code>，精确到天。放在末尾，午夜翻日只损失其后的内容</td><td>恒</td></tr>
-<tr><th scope="row">90</th><td><code translate="no">plan_mode</code></td><td>计划模式开启</td></tr>
+<tr><th scope="row">90</th><td><code translate="no">plan_mode</code>：只给带自己提示词的轮次；对话自己的一轮放在消息旁（见 L2）</td><td>计划模式开启</td></tr>
 <tr><th scope="row">—</th><td>历史：活动分支</td><td>有历史</td></tr>
 </tbody>
 </table>
@@ -103,13 +102,27 @@ class ContextComponent:
 </details>
 
 <h3 id="l2">L2</h3>
-<p><code translate="no">build_system_prompt</code> 只组装 L0 和 L1。Program 用 <code translate="no">ctx.context(name, build, layer="L2")</code> 添加 L2，注册为 <code translate="no">&lt;owner&gt;:&lt;name&gt;</code>。<code translate="no">build_turn_sections(agent, turn, channel=, tools=)</code> 构建它们，构建函数读 <code translate="no">turn_inputs()</code>；轮次循环（<code translate="no">resolve_agent_runtime</code>）把文本追加到本次系统提示的目标指令之后。恢复的检查点沿用已存提示。</p>
+<p><code translate="no">build_system_prompt</code> 只组装 L0 和 L1。Program 用 <code translate="no">ctx.context(name, build, layer="L2")</code> 添加 L2，注册为 <code translate="no">&lt;owner&gt;:&lt;name&gt;</code>。<code translate="no">build_turn_sections(agent, turn, channel=, tools=)</code> 构建它们，构建函数读 <code translate="no">turn_inputs()</code>；对话自己的一轮把文本作为 <code translate="no">pages</code> 节放在消息旁；其他轮次（验证、check-in）把它追加到本次系统提示的目标指令之后。</p>
+<p>恢复的检查点沿用已存提示。</p>
+<p>下表各项按顺序放在本轮用户消息前面，存在用户节点的 <code translate="no">turn_context</code> 列表里（<code translate="no">context.turn_context</code>），之后每个请求渲染出同样的字节。每次渲染由组装请求的代码告诉它 <code translate="no">audience</code>。</p>
 <table class="stack fixed">
 <thead class="sr"><tr><th scope="col">内容</th><th scope="col">送达方式</th></tr></thead>
 <tbody>
-<tr><th scope="row">每轮记忆预取</th><td><code translate="no">_inject_memory_prefetch</code>：当前用户消息内的前缀</td></tr>
+<tr><th scope="row">日期</th><td><code translate="no">Today is {weekday}, {month} {day}, {year}.</code> 放在同一段前缀的最前面，不进系统提示词：它在午夜自己变，别的都没变。用户节点存下发送那天的日期（<code translate="no">current_date</code>），所以跨过午夜的对话保住缓存前缀；Codex 也把日期放在本轮的环境上下文里发送</td></tr>
+<tr><th scope="row">什么时候带日期</th><td>一轮只在日期和渲染出的历史里最后一个日期不同时才带（Claude Code、Codex、Kimi Code 和 OpenCode 都这样），所以第一轮、跨午夜后和压缩后的第一轮带着它。<code translate="no">runtime.exec</code> 的模型调用同样带上日期（<code translate="no">AgentLoopConfig.dated</code>）；工作流角色和宿主提供的 <code translate="no">call</code> 不带</td></tr>
+<tr><th scope="row">回退说明</th><td>在日期之后：回退之后对话和文件是什么关系。回退把它挂在会话上待发，对话的下一条消息存储时取到这条消息上，所以失败后再次发送的一轮仍带着它</td></tr>
+<tr><th scope="row">各节更新</th><td>接着，每个变了的节一条，都是当前完整文字，取代系统提示词里那一节和更早的更新：memory 用 <code translate="no">&lt;memory-map-update&gt;</code>，其他节用 <code translate="no">&lt;system-prompt-update section="…"&gt;</code>，还有打开的页面</td></tr>
+<tr><th scope="row">保留记录的提示词</th><td>分支上记录的提示词与新提示词只差可移动的节时（<code translate="no">turn_context.kept_sections</code>），原样再发记录的提示词。换了 shell 也这样告诉模型：对话的提示词保留它最初写的 shell，新的 shell 在环境节的更新里只说一次</td></tr>
+<tr><th scope="row">计划模式、Goal、待办</th><td>在各节更新之后，只在对话自己的一轮，按渲染出的历史决定：计划模式说明在进入时发，之后每 5 轮一条（每第 5 条完整版），退出时发一次（<code translate="no">plan_mode.note_for</code>）</td></tr>
+<tr><th scope="row">Goal 和待办</th><td>同样决定：视图里没有说同样内容的完整 Goal 说明时发完整版，否则发带用量的简短版（<code translate="no">goal.chat.goal_note</code>）；10 轮没用 todo 工具时发 Goal 的待办列表。它们都不在系统提示词里，所以开始 Goal 或进入计划模式不重建任何东西</td></tr>
+<tr><th scope="row">什么时候发更新</th><td>一节与请求里模型看到的不同时：渲染出的历史里该节最后一条更新，没有渲染出更新时（压缩过、从空历史开始或只取尾部）看提示词里那节</td></tr>
+<tr><th scope="row">消失或重建</th><td>消失的节发一条“不再适用”的更新；关掉记忆就是这样一条更新，记忆在压缩之后第一次重建时离开提示词。提示词别的部分变了，就用当前各节重建提示词。不报告最后渲染了哪些更新的上下文引擎，按可能显示任何已存更新处理</td></tr>
+<tr><th scope="row">更新在哪里渲染</th><td>只在对话自己的请求里，也就是唯一保留分支记录提示词的那类轮次（<code translate="no">loop_runner.owns_conversation_contract</code>）；关掉记忆之后 memory 节的更新也照样渲染：历史从不撤回。用户节点记下这一点（<code translate="no">memory_map_notes</code>），恢复的轮次照原样渲染</td></tr>
+<tr><th scope="row">哪里不渲染</th><td>轮次里的工具、<code translate="no">runtime.exec</code> 或 Agent 方法、Goal 验证、check-in、工作流和摘要都不渲染：它们自己的提示词里就是当前各节。上下文面板在分支最新一轮发了更新时才计入</td></tr>
+<tr><th scope="row">每轮记忆预取</th><td><code translate="no">_inject_memory_prefetch</code>：本轮用户消息内的前缀，加在为请求复制的那份上；循环在其后追加提示时仍留在这条消息上，之后的轮次从存下的节点把它渲染回原处</td></tr>
+<tr><th scope="row">运行说明</th><td>接在记忆预取之后，同在这段前缀里。用户节点存下它（<code translate="no">run_note</code>），之后的轮次把它渲染回原处；从检查点恢复的轮次从节点渲染它，不再追加一次</td></tr>
 <tr><th scope="row">用户输入和附件</th><td>用户消息</td></tr>
-<tr><th scope="row">App 打开的浏览器 Page</th><td><code translate="no">application:browser:pages</code>，经 <code translate="no">build_turn_sections</code>；需加载浏览器应用，且本轮有 Page 或浏览器可用</td></tr>
+<tr><th scope="row">App 打开的浏览器 Page</th><td><code translate="no">application:browser:pages</code>，经 <code translate="no">build_turn_sections</code>；需加载浏览器应用，且本轮有 Page 或浏览器可用；列表变了时作为一节更新放在消息旁</td></tr>
 <tr><th scope="row">处境、输出格式和契约</th><td>设计中，见下文</td></tr>
 </tbody>
 </table>
@@ -119,18 +132,19 @@ class ContextComponent:
 <summary>已构建成分的文本</summary>
 <pre translate="no" tabindex="0"><code>You are {name} (agent_id={agent_id}), an agent running in OpenProgram on the user's computer.{mentions}
 # How you work …
+# Finishing work …
+# The project is yours …
+# How you report …
 # What to trust …
 
 &lt;environment&gt;
-OS: {os} · Shell: {shell}
+OS: {os} · Shell: {name} ({path})            # 命令实际运行的 shell（沙箱开着时是沙箱里的），不是登录 shell
 Working directory: {cwd}
 Git repository: {root}                       # cwd 在仓库内时
 Runs on SSH host … / in a Docker container … # 远程环境
 Also writable: {dirs}
 {channel rule}                               # telegram / discord / slack / wechat / web
-&lt;/environment&gt;
-
-Today is {weekday}, {month} {day}, {year}.</code></pre>
+&lt;/environment&gt;</code></pre>
 <p>渠道是本轮的 <code translate="no">source</code>，传给 <code translate="no">build_system_prompt(channel=...)</code>。绑定了渠道对话的 <code translate="no">web</code> 轮没有渠道，因为回复以文本发到该渠道。没有规则的来源（<code translate="no">tui</code>、<code translate="no">acp</code>、<code translate="no">agent_spawn</code>）不加行。web 规则就是整份 <code translate="no">guides/visuals.md</code>，其中列出的名称都必须存在于 <code translate="no">openprogram/interfaces/server/routes/visual-frame.html</code> 和 <code translate="no">apps/web/lib/chat/markdown/visual-frames.ts</code>。</p>
 </details>
 

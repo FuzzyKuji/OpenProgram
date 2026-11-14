@@ -6,6 +6,7 @@ import time
 
 import pytest
 
+from openprogram.models.providers.utils.stream_retry import ProviderStreamError
 from openprogram.runtime.agent.loop.driver import LoopDriver, LoopDriverOptions
 from openprogram.runtime.agent.loop import agent_loop
 from openprogram.runtime.agent.loop.types import AgentContext, AgentLoopConfig
@@ -36,6 +37,15 @@ SCHEMA = {
     "required": ["answer"],
     "additionalProperties": False,
 }
+
+
+def _primary_unavailable():
+    """A failure that moves to the fallback model at once.
+
+    An overloaded provider is failover-worthy and not a transport failure,
+    so the request is not sent again to the same model first.
+    """
+    return ProviderStreamError("HTTP 503: primary unavailable", http_status=503, retryable=True)
 
 
 class _UnusedProvider:
@@ -351,7 +361,7 @@ def test_cross_provider_unknown_fallback_never_receives_native_options(monkeypat
             calls.append((self.name, options.response_format))
 
             async def events():
-                raise ConnectionError("primary unavailable")
+                raise _primary_unavailable()
                 yield
 
             return events()
@@ -376,7 +386,7 @@ def test_cross_provider_unknown_fallback_never_receives_native_options(monkeypat
         )
         return await stream.result()
 
-    with pytest.raises(ConnectionError):
+    with pytest.raises(ProviderStreamError, match="primary unavailable"):
         asyncio.run(run())
 
     assert [provider for provider, _options in calls] == ["primary-native"]
@@ -539,7 +549,7 @@ def test_failover_candidate_dispatch_uses_its_negotiated_registry_snapshot(monke
 
             async def events():
                 if self.name == "primary-native":
-                    raise ConnectionError("primary unavailable")
+                    raise _primary_unavailable()
                 message = AssistantMessage(
                     content=[TextContent(text='{"answer": 4}')],
                     api=model.api,

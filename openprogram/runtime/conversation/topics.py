@@ -24,6 +24,7 @@ from typing import Any
 
 from openprogram.models.providers.structured_output import JsonSchemaOutput
 from openprogram.runtime.execution.activity_runs import Ask, asks_on_branch
+from openprogram.host._platform.filesystem import replace_file
 
 _log = logging.getLogger(__name__)
 
@@ -95,7 +96,7 @@ def _write_book(session_dir: Path, book: TopicBook) -> None:
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             json.dump({"topics": book.topics, "messages": book.messages}, handle, ensure_ascii=False)
-        os.replace(temporary, session_dir / TOPICS_FILE)
+        replace_file(temporary, session_dir / TOPICS_FILE)
     except BaseException:
         Path(temporary).unlink(missing_ok=True)
         raise
@@ -211,7 +212,14 @@ def _start(session_id: str) -> None:
 
 
 def sort_after_turn(session_id: str) -> None:
-    """A new message always gets a try, even shortly after a failed one."""
+    """A new message always gets a try, even shortly after a failed one.
+
+    Not while side work is held (``side_work``): the next pass picks the
+    message up."""
+    from openprogram.runtime.conversation import side_work
+
+    if not side_work.allowed():
+        return
     with _lock:
         _retry_at.pop(session_id, None)
         if session_id not in _running:

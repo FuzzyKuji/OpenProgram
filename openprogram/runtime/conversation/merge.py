@@ -56,6 +56,8 @@ class MergeTurnResult:
     """Index into ``peers`` that the caller marked as the "base"
     (attach-style merge — one peer carries forward, the rest are
     supplemental context). None = symmetric merge, all peers equal."""
+    branch_id: Optional[str] = None
+    """The target branch the merge reply was written to."""
 
 
 def _peer_final_text(
@@ -194,6 +196,7 @@ def process_merge_turn(
     *,
     peers: Optional[list[dict]] = None,
     base_peer: Optional[int] = None,
+    target_branch_id: Optional[str] = None,
 ) -> MergeTurnResult:
     """Aggregate N branches onto ``target_session_id``.
 
@@ -213,6 +216,10 @@ def process_merge_turn(
     write its reply as a continuation of that branch, with the others
     as supplemental context. None ⇒ symmetric merge, all peers equal.
     Attach-style ("graft B onto A") = ``base_peer = <A's index>``.
+
+    ``target_branch_id`` is the target's branch the merge was started on;
+    the reply continues that branch even if another one is selected by the
+    time it is written. ``None`` takes the branch selected now.
     """
     from openprogram.runtime.context.session_db import default_db
     from openprogram.state.store.session.context_commit.store import save_commit, load_commit_for_head
@@ -290,11 +297,11 @@ def process_merge_turn(
         base_idx = base_peer
 
     target_sess = store.get_session(target_session_id) or {}
-    target_head = target_sess.get("head_id")
+    target_branch_id, target_head = _target_branch(target_sess, target_branch_id)
     merge_prompt = _build_prompt(peers, message, base_peer=base_idx)
     import asyncio
     from openprogram.runtime.agent.turn_request import TurnRequest
-    from openprogram.runtime.conversation.production_driver import CanonicalAgentAdapter
+    from openprogram.runtime.conversation.production_driver import CanonicalAgentAdapter, STOPPED_BEFORE_START
 
     # ``history_override=None`` lets the dispatcher load the active
     # branch, so the attach pointers just written are part of the
@@ -310,6 +317,7 @@ def process_merge_turn(
         agent_id=agent_id,
         source="merge_turn",
         history_override=None,
+        **({"branch_id": target_branch_id} if target_branch_id else {}),
         **conversation_permission(target_session_id),
         **runtime_authority(_parent_authority, "merge_turn"),
     )
@@ -383,7 +391,7 @@ def process_merge_turn(
             _log.warning("merge attach nodes left non-terminal in session %s (%s)", target_session_id, reason, exc_info=True)
 
     try:
-        _active, turn = asyncio.run(adapter.activate(admission))
+        activated = asyncio.run(adapter.activate(admission))
     except Exception as e:  # noqa: BLE001
         try:
             adapter.fail_admission(
@@ -398,6 +406,15 @@ def process_merge_turn(
             failed=True,
             error=f"{type(e).__name__}: {e}",
         )
+    if activated is None:
+        # A stop reached the merge turn before it ran; it ended cancelled.
+        _terminalize_attach_nodes("stopped_before_start", STOPPED_BEFORE_START)
+        return MergeTurnResult(
+            target_session_id=target_session_id,
+            failed=True,
+            error=STOPPED_BEFORE_START,
+        )
+    _active, turn = activated
 
     if turn.failed:
         return MergeTurnResult(
@@ -500,7 +517,31 @@ def process_merge_turn(
         final_text=turn.final_text or "",
         failed=False,
         base_peer=base_idx,
+        branch_id=target_branch_id,
     )
+
+
+def still_selected(session_id: str, branch_id: str | None) -> bool:
+    """Whether the merge's branch is still the selected one, so the
+    conversation's head may follow its reply. A merge on a branch the person
+    left only moves that branch (the store already did)."""
+    if not branch_id:
+        return True
+    from openprogram.runtime.context.session_db import default_db
+    return (default_db().get_session(session_id) or {}).get("active_branch_id") == branch_id
+
+
+def _target_branch(session: dict, branch_id: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+    """The merge's target branch and its tip: the named branch's record,
+    else the selected branch and the conversation's head."""
+    active = session.get("active_branch_id")
+    branch_id = branch_id or active
+    if branch_id and branch_id != active:
+        ref = (session.get("branch_refs") or {}).get(branch_id)
+        if isinstance(ref, dict) and ref.get("head_id") and ref.get("status") != "aborted":
+            return branch_id, ref["head_id"]
+        branch_id = active
+    return branch_id, session.get("head_id")
 
 
 def _label_for(store, sid: str, head_id: Optional[str] = None) -> str:

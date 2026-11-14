@@ -317,6 +317,15 @@ class RuntimeControlService(WaitsOperations, CancellationOperations, BranchesOpe
             )
         except DriverRegistryConflict as exc:
             issue = "owner_not_local" if exc.code == "not_found" else exc.code
+            if issue == "owner_not_local" and operation == "cancel":
+                # A turn running in a process of its own (a scheduled run)
+                # follows its execution's file and stops itself from there.
+                from .stop_requests import forward
+
+                try:
+                    forward(self.executions, execution, "cancel")
+                except Exception:
+                    _log.warning("stop of %s not passed to its process", execution.execution_id, exc_info=True)
             return ControlDispatch(
                 command=command,
                 execution=execution,

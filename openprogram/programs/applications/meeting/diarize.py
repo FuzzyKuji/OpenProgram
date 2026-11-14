@@ -29,6 +29,7 @@ import threading
 import wave
 from pathlib import Path
 from typing import Callable, Iterable
+from openprogram.host._platform.filesystem import replace_file
 
 RATE = 16000
 #: Clustering distance: smaller finds more speakers, larger fewer. With the CAM++ embeddings
@@ -101,7 +102,7 @@ def _fetch(url: str, target: Path) -> None:
                     written += len(chunk)
         if written == 0 or (expected and expected.isdigit() and written != int(expected)):
             raise RuntimeError(f"incomplete download ({written} of {expected or '?'} bytes)")
-        os.replace(partial, target)
+        replace_file(partial, target)
     finally:
         partial.unlink(missing_ok=True)
 
@@ -122,7 +123,7 @@ def _fetch_segmentation(target: Path) -> None:
             with source, open(partial, "wb") as out:
                 while block := source.read(1 << 20):
                     out.write(block)
-            os.replace(partial, target)
+            replace_file(partial, target)
     finally:
         archive.unlink(missing_ok=True)
 

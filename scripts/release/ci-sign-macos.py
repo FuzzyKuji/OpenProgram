@@ -22,6 +22,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 REQUIRED = ('MAC_CSC_LINK', 'MAC_CSC_KEY_PASSWORD', 'APPLE_ID',
             'APPLE_APP_SPECIFIC_PASSWORD', 'APPLE_TEAM_ID')
@@ -29,11 +30,31 @@ PROFILE = 'OpenProgram-CI'
 SIGNER = Path(__file__).with_name('sign-macos-release.py')
 
 
-def run(*args):
-    result = subprocess.run(args, capture_output=True, text=True)
-    if result.returncode:
-        raise RuntimeError(f'{Path(args[0]).name} {args[1]} failed')
-    return result.stdout
+def redacted(text):
+    """What a tool said, with no secret value in it."""
+    for key in REQUIRED:
+        value = os.environ.get(key)
+        if value:
+            text = text.replace(value, '***')
+    return text.strip()
+
+
+def run(*args, attempts=1):
+    """Run a tool; on failure say what it said, never what it was given.
+
+    ``attempts`` above one is for a call that reaches Apple over the network,
+    which fails now and then for reasons a second try clears.
+    """
+    for attempt in range(1, attempts + 1):
+        result = subprocess.run(args, capture_output=True, text=True)
+        if not result.returncode:
+            return result.stdout
+        said = redacted((result.stderr or '') + (result.stdout or ''))
+        print(f'{Path(args[0]).name} {args[1]} failed (try {attempt} of {attempts}):\n{said}',
+              file=sys.stderr, flush=True)
+        if attempt < attempts:
+            time.sleep(20 * attempt)
+    raise RuntimeError(f'{Path(args[0]).name} {args[1]} failed')
 
 
 def state_directory():
@@ -47,7 +68,7 @@ def setup():
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True, mode=0o700)
     original = shlex.split(run('security', 'list-keychains', '-d', 'user'))
-    (work / 'original-keychains.json').write_text(json.dumps(original))
+    (work / 'original-keychains.json').write_text(json.dumps(original), encoding="utf-8")
     keychain = str(work / 'signing.keychain-db')
     password = secrets.token_hex(16)
     p12 = work / 'identity.p12'
@@ -64,7 +85,8 @@ def setup():
         # The runner's Xcode installation provides Apple's certificate chain.
         run('xcrun', 'notarytool', 'store-credentials', PROFILE,
             '--apple-id', os.environ['APPLE_ID'], '--team-id', os.environ['APPLE_TEAM_ID'],
-            '--password', os.environ['APPLE_APP_SPECIFIC_PASSWORD'], '--keychain', keychain)
+            '--password', os.environ['APPLE_APP_SPECIFIC_PASSWORD'], '--keychain', keychain,
+            attempts=3)
     finally:
         p12.unlink(missing_ok=True)
 
@@ -85,7 +107,7 @@ def cleanup():
     work = state_directory()
     original_file = work / 'original-keychains.json'
     if original_file.exists():
-        run('security', 'list-keychains', '-d', 'user', '-s', *json.loads(original_file.read_text()))
+        run('security', 'list-keychains', '-d', 'user', '-s', *json.loads(original_file.read_text(encoding="utf-8")))
     keychain = work / 'signing.keychain-db'
     if keychain.exists():
         run('security', 'delete-keychain', str(keychain))

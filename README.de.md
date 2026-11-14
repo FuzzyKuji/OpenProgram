@@ -50,7 +50,7 @@
 curl -fsSL https://openprogram.io/install | sh
 ```
 
-Unter Windows (ab v1.1.0): `irm https://openprogram.io/install.ps1 | iex`. Die macOS-Desktop-App ist ein DMG auf der [Release-Seite](https://github.com/FuzzyKuji/OpenProgram/releases); die Apps für Linux und Windows kommen mit v1.1.0. Falls openprogram.io nicht antwortet: `curl -fsSL https://raw.githubusercontent.com/FuzzyKuji/OpenProgram/main/docs/_static_root/install.sh | sh`. Weitere Optionen in der [Installationsanleitung](https://openprogram.io/docs/install/install.html) (Englisch).
+Unter Windows (ab v1.2.0): `irm https://openprogram.io/install.ps1 | iex`. Die macOS-Desktop-App ist ein DMG auf der [Release-Seite](https://github.com/FuzzyKuji/OpenProgram/releases); die Linux-App liegt dort als deb und AppImage, die Windows-App kommt mit v1.1.1. Falls openprogram.io nicht antwortet: `curl -fsSL https://raw.githubusercontent.com/FuzzyKuji/OpenProgram/main/docs/_static_root/install.sh | sh`. Weitere Optionen in der [Installationsanleitung](https://openprogram.io/docs/install/install.html) (Englisch).
 
 ## Schnellstart
 
@@ -101,7 +101,7 @@ Jeder Eintrag verlinkt auf sein Designdokument (Englisch).
 
 | | |
 |---|---|
-| **[Desktop- und Web-Oberfläche](https://openprogram.io/docs/reference/design/ui/README.html)** | Die App auf macOS, ab v1.1.0 auch auf Linux und Windows; die Weboberfläche auf jedem davon oder einem Server. |
+| **[Desktop- und Web-Oberfläche](https://openprogram.io/docs/reference/design/ui/README.html)** | Die App auf macOS und Linux, ab v1.2.0 auch auf Windows; die Weboberfläche auf jedem davon oder einem Server. |
 | **[Geteilte Ansichten](https://openprogram.io/docs/reference/design/ui/workspace/center-tabs-and-split-layout.html)** | Chats, Dateien, Terminals und Webseiten nebeneinander. |
 | **[Integrierter Browser](https://openprogram.io/docs/reference/design/ui/browser/built-in-browser.html)** | Ein Browser, den der Agent liest und bedient, während du zusiehst. |
 | **[Integriertes Terminal](https://openprogram.io/docs/reference/design/ui/workspace/integrated-terminal.html)** | Terminals im Arbeitsbereich, gemeinsam mit dem Agenten genutzt. |

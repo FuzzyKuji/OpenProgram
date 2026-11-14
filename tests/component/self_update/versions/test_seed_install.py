@@ -141,6 +141,94 @@ def test_a_link_that_leaves_the_seed_is_refused(tmp_path):
         install_seed._extract_tar(archive, tmp_path / "out", "/built")
 
 
+@pytest.mark.parametrize(("target", "stays"), [
+    ("python.exe", True),
+    ("..\\..\\bases\\x", True),
+    ("D:/a/seed/store/runtime/bases/x/python.exe", True),  # As Windows' tar writes it.
+    ("d:\\A\\seed\\store\\runtime\\bases\\x", True),
+    ("D:/a/seed/store/runtime-other/x", False),
+    ("D:/a/seed/store/runtime/../x", False),
+    ("C:/Windows/System32/cmd.exe", False),
+    ("C:\\Windows\\System32\\cmd.exe", False),
+    ("\\\\server\\share\\x", False),
+    ("/etc/passwd", False),
+])
+def test_a_windows_link_is_judged_by_where_it_points_not_by_its_slashes(target, stays):
+    assert install_seed.link_stays(target, "D:\\a\\seed\\store\\runtime") is stays
+
+
+def test_a_drive_link_that_leaves_the_seed_is_refused(tmp_path):
+    archive = tmp_path / "bad.tar.gz"
+    with tarfile.open(archive, "w:gz") as tar:
+        member = tarfile.TarInfo("a/link")
+        member.type = tarfile.SYMTYPE
+        member.linkname = "C:/Windows/System32/cmd.exe"
+        tar.addfile(member)
+    with pytest.raises(install_seed.SeedError):
+        install_seed._extract_tar(archive, tmp_path / "out", "D:\\a\\seed\\store\\runtime")
+
+
+def test_the_installed_batch_file_has_the_line_ends_cmd_needs(tmp_path):
+    source = RELEASE / "bootstrap/bin-openprogram.cmd"
+    target = tmp_path / "openprogram.cmd"
+    install_seed.write_batch_file(source, target)
+    written = target.read_bytes()
+    assert written.count(b"\r\n") == written.count(b"\n") > 20, "a bare line feed can hide a goto label from cmd.exe"
+    assert written.replace(b"\r\n", b"\n") == source.read_bytes().replace(b"\r\n", b"\n")
+    # install_tools is what writes it on Windows.
+    text = (RELEASE / "bootstrap/install_seed.py").read_text(encoding="utf-8")
+    assert 'write_batch_file(seed / "bootstrap" / "bin-openprogram.cmd", binary / "openprogram.cmd")' in text
+
+
+def test_the_installed_command_starts_python_in_utf8_mode_and_gives_the_console_back():
+    lines = (RELEASE / "bootstrap/bin-openprogram.cmd").read_text(encoding="ascii").splitlines()
+    starts = [line for line in lines if "python.exe\" -I" in line or "%BASE_PYTHON%\" -I" in line]
+    assert len(starts) == 2
+    assert all(" -I -B -X utf8 " in line for line in starts), starts
+    saved, switched, restored = (lines.index(line) for line in (
+        """for /f "tokens=2 delims=:." %%P in ('chcp') do set "_OPENPROGRAM_CODEPAGE=%%P\"""",
+        "chcp 65001 >nul",
+        "chcp %_OPENPROGRAM_CODEPAGE% >nul",
+    ))
+    assert saved < switched < min(lines.index(line) for line in starts)
+    # Both ways through the file reach the restore with Python's own exit status.
+    assert lines[restored - 1] == ":finish" and lines[restored + 1] == "exit /b %_OPENPROGRAM_EXIT%"
+    for start in starts:
+        assert lines[lines.index(start) + 1] == 'set "_OPENPROGRAM_EXIT=%ERRORLEVEL%"'
+    # The same preamble the complete-runtime installer writes.
+    release = (RELEASE / "install-release.ps1").read_text(encoding="utf-8")
+    for line in (lines[saved], lines[switched], lines[restored], "setlocal DisableDelayedExpansion"):
+        assert line in release and line in lines
+
+
+def test_git_messages_are_read_as_utf8_whatever_the_code_page(tmp_path, monkeypatch):
+    seen = []
+
+    def run(command, **options):
+        seen.append(options)
+        return subprocess.CompletedProcess(command, 1, "", "fatal: 用户/目录 is not a bundle")
+
+    monkeypatch.setattr(install_seed.subprocess, "run", run)
+    with pytest.raises(install_seed.SeedError, match="用户/目录"):
+        install_seed._git(("git", {}), tmp_path, "update-ref", "refs/heads/local", "0" * 40)
+    assert seen[0]["encoding"] == "utf-8" and seen[0]["errors"] == "replace" and "text" not in seen[0]
+
+
+def test_both_bootstrap_tools_look_for_the_bundled_git_in_the_same_place(tmp_path):
+    versions = _load(RELEASE / "bootstrap/versions.py", "bootstrap_versions")
+    root = tmp_path / "runtime"
+    for windows in (True, False):
+        git = root / "bases" / ("windows" if windows else "posix") / "git"
+        command = install_seed.git_executable(git, windows)
+        command.parent.mkdir(parents=True)
+        command.write_text("")
+    # Git for Windows has no bin\git.exe; the POSIX builds have no cmd.
+    assert versions._git(root, windows=True) == str(root / "bases/windows/git/cmd/git.exe")
+    assert versions._git(root, windows=False) == str(root / "bases/posix/git/bin/git")
+    builder = (RELEASE / "install-release.ps1").read_text(encoding="utf-8")
+    assert 'Join-Path $ReleaseDir "git\\cmd"' in builder
+
+
 def test_a_failed_install_leaves_the_marker_so_it_starts_over(tmp_path):
     seed = tmp_path / "seed"
     seed.mkdir()

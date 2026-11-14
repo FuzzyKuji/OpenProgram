@@ -234,7 +234,7 @@
 <thead class="sr"><tr><th scope="col">Note</th><th scope="col">Rule</th></tr></thead>
 <tbody>
 <tr><th scope="row">Send-back node</th><td>With <code translate="no">predecessor</code> = initiator, forms a fork if the user also sent a message, and joins the <code translate="no">&lt; N/M &gt;</code> switcher (<a href="../../ui/invariants.html">invariants</a> rule 7). A turn of the receiving chain whatever its <code translate="no">caller</code>: user tier, reply one right. Label is the sender's name and words; <code translate="no">message_from</code> carries the sender</td></tr>
-<tr><th scope="row">Sub-agent spawning again</th><td><code translate="no">agent.max_spawn_depth</code>, default 0 (no limit). Past the limit a spawn is refused. The renderer recurses at any depth</td></tr>
+<tr><th scope="row">Sub-agent spawning again</th><td><code translate="no">agent.max_spawn_depth</code>, default 1. Past the limit a spawn is refused. The renderer recurses at any depth</td></tr>
 </tbody>
 </table>
 
@@ -255,12 +255,12 @@
 <thead><tr><th scope="col">Field</th><th scope="col">Meaning</th><th scope="col">Source</th><th scope="col">Drawing</th></tr></thead>
 <tbody>
 <tr><th scope="row"><code translate="no">in_context</code></th><td>In the covered set</td><td><code translate="no">get_branch</code></td><td>Full chip</td></tr>
-<tr><th scope="row"><code translate="no">aged</code></th><td>Code node rendered as a one-line stub</td><td><code translate="no">render.py::_aged_code_ids</code>, <code translate="no">aging.py</code></td><td>Icon 75%; never whole-node <code translate="no">opacity</code></td></tr>
+<tr><th scope="row"><code translate="no">aged</code></th><td>Always false: old results are never aged. Kept so the payload keeps its shape</td><td><code translate="no">routes/files/tree.py</code></td><td>None</td></tr>
 <tr><th scope="row"><code translate="no">spilled</code></th><td>Written to <code translate="no">large_nodes/</code>, render cites it</td><td><code translate="no">metadata.spilled</code>, <code translate="no">spill.py::spill_if_large</code></td><td><code translate="no">▤</code> drawn as <code translate="no">&lt;text&gt;</code>, so the first-shape scan skips it</td></tr>
 </tbody>
 </table>
 
-<p class="note">Re-fetched on <code translate="no">context_stats</code> and <code translate="no">compaction_finished</code> (<code translate="no">chat-handlers.ts</code>). <code translate="no">aged</code> and <code translate="no">spilled</code> are outside the render signature, so new coverage clears it (<code translate="no">setLastSignature(null)</code>). The summary is an ordinary chain member, so branch ids are drawn ids and need no translation; only synthetic bridges are filtered (<code translate="no">filter.py</code>).</p>
+<p class="note">Re-fetched on <code translate="no">context_stats</code> and <code translate="no">compaction_finished</code> (<code translate="no">chat-handlers.ts</code>). <code translate="no">spilled</code> is outside the render signature, so new coverage clears it (<code translate="no">setLastSignature(null)</code>). The summary is an ordinary chain member, so branch ids are drawn ids and need no translation; only synthetic bridges are filtered (<code translate="no">filter.py</code>).</p>
 
 <h2 id="s9">9. Compaction as one capsule</h2>
 <p>A summary stands for its range, so it draws as one chip with the archive icon, its covered count <code translate="no">+N</code> on the shoulder. <code translate="no">metadata.covers_ids</code> (<code translate="no">context/persistence.py</code>), passed through <code translate="no">builder.py</code> with covered turns' caller subtrees and missing ids dropped, drives shape, fold, count, ghosts and inspector. The front end does no seq arithmetic, which would catch dead forks.</p>

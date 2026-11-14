@@ -1,4 +1,5 @@
 "use client";
+import { sameSettingsBranch } from "@/lib/session-store/branch-settings";
 import { requestSessionLoad, acceptSessionLoad, failSessionLoad, disposeSessionLoads } from "@/lib/runtime-bridge/session/session-load";
 
 /**
@@ -59,6 +60,7 @@ import { notifyDesktopSessionLoaded } from "@/lib/desktop/self-update-reopen";
 import { translateText } from "@/lib/i18n";
 import { getQueryClient } from "@/lib/query-client";
 import {
+  agentSettingsChanged,
   loadAgentSettings,
   loadProviders,
   updateAgentBadges,
@@ -385,14 +387,22 @@ export function useWS(): void {
               ["cancelled", "completed", "failed", "interrupted", "error", "done"],
             );
             if (terminal.has(String(execution.status))) {
+              // The page's own stop of this turn is answered here, once the
+              // execution reports it ended; a command's answer only says the
+              // stop is in force.
+              let stopped = false;
               for (const [commandId, pendingCancel] of Object.entries(
                 runtimeState._optimisticCancels,
               )) {
                 if (
                   pendingCancel.sessionId === sid
                   && pendingCancel.task.execution_id === eid
-                ) delete runtimeState._optimisticCancels[commandId];
+                ) {
+                  stopped = true;
+                  delete runtimeState._optimisticCancels[commandId];
+                }
               }
+              if (stopped && execution.status === "cancelled") showToast("Stopped.");
             }
             // The terminal execution frame releases the composer; the reply's
             // own terminal row reaches the chat as a transcript update. An old
@@ -495,28 +505,9 @@ export function useWS(): void {
           }
           return true;
         case "agent_settings_changed": {
-          // Keep window._agentSettings in sync (backward compat)
-          const as = runtimeState._agentSettings;
-          if (as) {
-            if (d?.chat) as.chat = d.chat as Record<string, unknown>;
-            if (d?.exec) as.exec = d.exec as Record<string, unknown>;
-          }
-          // Push directly to React store (primary data source)
-          import("@/lib/session-store").then(({ useSessionStore }) => {
-            const chatData = d?.chat as Record<string, unknown> | undefined;
-            const execData = d?.exec as Record<string, unknown> | undefined;
-            const chatValid = chatData?.provider && chatData?.model;
-            const execValid = execData?.provider && execData?.model;
-            useSessionStore.getState().setAgentSettings({
-              chat: chatValid ? chatData : undefined,
-              exec: execValid ? execData : undefined,
-            });
-            // Every conversation's cached model may have changed (a model
-            // disabled in Settings): split panes refetch their own.
-            useSessionStore.getState().clearSessionAgentSettings();
-          });
-          // Still fetch full settings (includes thinking config etc.)
-          loadAgentSettings();
+          // The frame names no conversation: whose model it carries only a
+          // read says. Each chip keeps its model until its own read lands.
+          void agentSettingsChanged();
           // Enabled-models may have changed with the settings (Settings
           // toggles broadcast this event) — drop the query cache so every
           // tab's model picker refetches, not just the settings tab.
@@ -652,9 +643,10 @@ export function useWS(): void {
           });
           return true;
         case "permission_changed": {
-          const value = d as { session_id?: string; mode?: unknown; version?: unknown };
+          const value = d as { session_id?: string; mode?: unknown; version?: unknown; active_branch_id?: unknown };
           if (value?.session_id) {
             const store = useSessionStore.getState();
+            if (!sameSettingsBranch(store.composerSettingsBySession[value.session_id] ?? {}, value)) return true;
             const patch = permissionSnapshotPatch(store.composerSettingsBySession[value.session_id] ?? {}, value);
             if (patch) store.setComposerSettings(patch, value.session_id);
           }
@@ -662,10 +654,11 @@ export function useWS(): void {
         }
         case "sandbox_changed":
           import("@/lib/session-store").then(({ useSessionStore }) => {
-            const dd = (d || {}) as { session_id?: string; sandbox?: unknown; request_id?: string };
+            const dd = (d || {}) as { session_id?: string; sandbox?: unknown; request_id?: string; active_branch_id?: unknown };
             // Correlated replies belong to their request owner, which rejects stale reads.
             if (dd.request_id) return;
             if (!dd.session_id || typeof dd.sandbox !== "boolean") return;
+            if (!sameSettingsBranch(useSessionStore.getState().composerSettingsBySession[dd.session_id] ?? {}, dd)) return;
             useSessionStore
               .getState()
               .setComposerSettings({ sandbox: dd.sandbox }, dd.session_id);
@@ -684,7 +677,7 @@ export function useWS(): void {
               turns?: Array<{ rows: Array<{ id?: unknown; status?: unknown; attachCards?: unknown[]; runtimeChildren?: unknown[] }> }>;
               graph?: unknown;
               run_active?: unknown;
-              run_task?: { msg_id?: string; execution_id?: string; status_version?: number } | null;
+              run_task?: { msg_id?: string; execution_id?: string; status_version?: number; op_kind?: string; op_id?: string } | null;
               run_seq?: unknown;
             } | undefined;
             if (typeof dd?.id === "string" && dd.id) {
@@ -798,7 +791,7 @@ export function useWS(): void {
             | {
               session_id?: unknown;
               run_active?: unknown;
-              run_task?: { msg_id?: string; execution_id?: string; status_version?: number } | null;
+              run_task?: { msg_id?: string; execution_id?: string; status_version?: number; op_kind?: string; op_id?: string } | null;
               run_seq?: unknown;
             }
             | undefined;
@@ -880,6 +873,18 @@ export function useWS(): void {
           const sid = d?.session_id;
           if (typeof sid === "string" && sid) {
             void import("@/lib/chat/conversation-work").then(({ notifyConversationWorkChanged }) => notifyConversationWorkChanged(sid));
+          }
+          return true;
+        }
+        case "branch_running_task":
+        case "branch_running_task_clear": {
+          // Another branch's run, kept for the panes that show a different
+          // branch of the conversation (lib/chat/run/other-branch-runs.ts).
+          const type = msg.type;
+          if (d && typeof d === "object") {
+            void import("@/lib/chat/run/other-branch-runs").then(({ useOtherBranchRuns }) => {
+              useOtherBranchRuns.getState().applyFrame(type, d as Record<string, unknown>);
+            });
           }
           return true;
         }

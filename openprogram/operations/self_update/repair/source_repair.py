@@ -14,6 +14,7 @@ from ..store import SelfUpdateStore
 from ..types import _validate_update_id
 from ..verification.verification_channel import _read
 from ..verification.verification_channel import _digest
+from ..verification.verification_channel import job_digest
 
 PREFIX = "source-repair-config-sha256:"
 SECONDS = 600
@@ -113,7 +114,7 @@ def _request(store, record, config):
         raise ValueError("source repair requires completed diagnosis")
     job = load_job(record.request.session_id, request["job_id"])
     diagnosis._check_job(record, request, diagnostic_config, job)
-    if receipt["job_sha256"] != _digest(job.to_dict()) or receipt["diagnosis"] != diagnosis._validate_result(record, request, job):
+    if receipt["job_sha256"] != job_digest(job) or receipt["diagnosis"] != diagnosis._validate_result(record, request, job):
         raise ValueError("diagnostic evidence changed")
     if receipt["diagnosis"]["category"] not in {"implementation", "test"}:
         raise ValueError("diagnosis does not permit automatic source repair")

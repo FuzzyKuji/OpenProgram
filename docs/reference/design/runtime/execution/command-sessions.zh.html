@@ -93,7 +93,7 @@
 <thead class="sr"><tr><th scope="col">部分</th><th scope="col">行为</th></tr></thead>
 <tbody>
 <tr><th scope="row"><code translate="no">group_guard</code>，管道</th><td>以 <code translate="no">/dev/null</code> 作 stdin 运行命令</td></tr>
-<tr><th scope="row"><code translate="no">group_guard</code>，tty</th><td>打开 pty 作为自身会话的控制终端，把进程组置前台，设 30×120，并泵送 master 与 supervisor 管道</td></tr>
+<tr><th scope="row"><code translate="no">group_guard</code>，tty</th><td>打开 pty 作为自身会话的控制终端，把进程组置前台，设 30×120，并泵送 master 与 supervisor 管道。进程组和会话里其他进程组（<code translate="no">set -m</code> 的作业、调用过 setpgid 的子进程）都空了以后停止读取，最晚在进程组结束两秒后：macOS 上 guard 持有终端时不会报告输出结束，而完全关闭的 pty 会丢弃未读输出</td></tr>
 <tr><th scope="row"><code translate="no">group_guard</code>，信号</th><td>忽略 SIGINT 和 SIGTERM，因此中断到达命令</td></tr>
 <tr><th scope="row">Supervisor</th><td><code translate="no">write</code> 不加换行；<code translate="no">interrupt</code> 向进程组发 SIGINT（Windows：终止进程树）</td></tr>
 <tr><th scope="row"><code translate="no">ProcessStore</code></th><td>记录 <code translate="no">tty</code>、<code translate="no">sandboxed</code>、<code translate="no">background</code>、<code translate="no">reported</code>、<code translate="no">last_used</code>。<code translate="no">take()</code> 返回未读输出和读取前丢弃的字节数。</td></tr>

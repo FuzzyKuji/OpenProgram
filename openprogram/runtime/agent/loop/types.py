@@ -68,6 +68,18 @@ class AgentLoopConfig(SimpleStreamOptions):
     max_iterations: int | None = None
     # Caller-owned workflows consume receipts before requesting the next step.
     stop_after_tool_round: bool = False
+    # Whether a request with no recalled memory given (``AgentContext
+    # .memory_prefetch`` None) recalls some: a workflow role's request holds
+    # only what the workflow put there.
+    recall: bool = True
+    # Whether a request with no date given (``AgentContext.current_date``
+    # None) is told today's date beside its message: a model call built on
+    # a prompt of its own (``runtime.exec``). A chat turn names the date
+    # stored on its message.
+    dated: bool = False
+    # Somebody is watching this turn: after a long stretch of tool rounds with
+    # nothing shown, the loop asks for a word of progress (loop/progress_note.py).
+    progress_notes: bool = False
 
     # Converts AgentMessage[] to LLM-compatible Message[]
     convert_to_llm: Callable[[list[AgentMessage]], list[Message] | Awaitable[list[Message]]]
@@ -89,6 +101,15 @@ class AgentLoopConfig(SimpleStreamOptions):
     # a provider stream, task, stack frame, or other process-local object.
     safe_point_hook: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None
 
+    # A conversation turn's durable compaction between two of its requests
+    # (``turn_runtime/turn_compaction.py``). Called with the loop's messages
+    # and why: ``"mid_turn"`` after a step's tool results when the next
+    # request would pass the automatic threshold, ``"reactive"`` after the
+    # provider reported an overflow. Returns the messages to continue with
+    # (the compacted history, then this turn's own messages), or None when
+    # nothing was compacted. Calls without a conversation leave it None.
+    compact_turn: Callable[[list[AgentMessage], str], Awaitable[list[AgentMessage] | None]] | None = None
+
     model_config = {"arbitrary_types_allowed": True}
 
 
@@ -107,10 +128,23 @@ class AgentContext(BaseModel):
     # also stamps it on the user node); the loop falls back to recalling it
     # itself for entry points that don't.
     _request_compactor: Any = PrivateAttr(default=None)
+    # The text of the user message this turn's prefix block went into, and the
+    # block recalled for it, so later rounds put the same block in the same place.
+    _prefetch_anchor: Any = PrivateAttr(default=None)
     memory_prefetch: str | None = None
     # Told to the model beside this turn's message: a scheduled run's last
     # result and how to answer. Not memory, so memory settings do not touch it.
     run_note: str | None = None
+    # The date line sent beside this turn's message (``current_date_note``).
+    # None: the loop writes today's date when the turn's first request is
+    # made, if the loop is configured to (``AgentLoopConfig.dated``); ""
+    # sends none (the message already carries the one it was sent with).
+    current_date: str | None = None
+    # The notes sent beside this turn's message between its date and its
+    # recalled memory: a rewind note, the sections whose text changed since
+    # the kept system prompt, the plan-mode and Goal notes
+    # (``context.turn_context.notes_text``). None/"": none.
+    turn_notes: str | None = None
     # Resolved immutable runtime contract used by durable safe points.  This
     # is metadata only; executable tool callbacks never enter the context.
     runtime_contract: dict[str, Any] | None = None

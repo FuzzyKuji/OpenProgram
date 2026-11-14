@@ -13,7 +13,7 @@
 <tbody>
 <tr><th scope="row"><code translate="no">openprogram permissions check</code>、<code translate="no">test</code></th><td>用原匹配器只读解释和自测权限规则，不改变执行判定。</td></tr>
 <tr><th scope="row">命令网络域名</th><td>可选，仅 macOS：带认证的本地代理加 Seatbelt。默认联网不变，拒绝私有地址，Linux 和 WSL 在域名模式下拒绝执行。</td></tr>
-<tr><th scope="row"><code translate="no">execution.prevent_idle_sleep</code></th><td>默认关闭，仅 macOS。每个活动执行持有一个 IOKit 断言，完成、出错或取消时释放。不影响显示器休眠和用户主动休眠。下次执行时读取。获取失败记警告，任务继续。只在调度执行外包一层资源生命周期。</td></tr>
+<tr><th scope="row"><code translate="no">execution.prevent_idle_sleep</code></th><td>默认关闭。每个活动执行持有一个句柄，完成、出错或取消时释放：macOS 是 IOKit 断言，Windows 是 system-required 电源请求，Linux 是 <code translate="no">systemd-inhibit</code> 对空闲和睡眠的锁。不影响显示器休眠；Linux 上用户主动发起的睡眠也会等待。下次执行时读取。获取失败记警告，任务继续。只在调度执行外包一层资源生命周期。</td></tr>
 <tr><th scope="row"><code translate="no">bash</code> 会话</th><td>见下表 <code translate="no">execution</code>。</td></tr>
 <tr><th scope="row"><code translate="no">execution</code></th><td><code translate="no">bash</code> 按 unified_exec 的 exec_command 工作：等待 <code translate="no">yield_time_ms</code> 后返回，还在运行的命令作为会话继续，由 <code translate="no">write_stdin</code> 轮询、中断或输入（tty），并沿用 Codex 的 64 个会话上限和最久未用淘汰。会话跑在现有的受管进程 supervisor 上，worker 重启后仍在。不采用 zsh fork 和 Shell 快照。见<a href="execution/command-sessions.zh.html">命令会话</a>。</td></tr>
 <tr><th scope="row"><code translate="no">network</code></th><td>原有 Shell 沙箱只有网络总开关；safe_http 保护受管 HTTP 客户端，不能约束任意命令的套接字。保留可选的 macOS 命令域名限制，默认行为不变。</td></tr>

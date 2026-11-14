@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Callable
 
 from .layout import Layout, valid_id
+from openprogram.host._platform import filesystem
 
 DIRECTORY = "unapplied"
 MANIFEST = "manifest.json"
@@ -85,7 +86,7 @@ def mark_reported(capture: Capture) -> None:
     temporary = path.with_name(f"{path.name}.{os.getpid()}.tmp")
     try:
         temporary.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-        os.replace(temporary, path)
+        filesystem.replace_file(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
 

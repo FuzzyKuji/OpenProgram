@@ -76,9 +76,9 @@ openprogram: running (PID 82472, port 18100, up 48m)
 <tbody>
 <tr><th scope="row">macOS</th><td>launchd，<code translate="no">~/Library/LaunchAgents/ai.openprogram.worker.plist</code></td><td><code translate="no">stop</code> 卸载任务，崩溃重启不会把它拉起</td></tr>
 <tr><th scope="row">Linux</th><td>systemd <code translate="no">--user</code></td><td>每个命名 <a href="../install/profiles.zh.html">profile</a> 有独立 unit</td></tr>
-<tr><th scope="row">Windows 源码 checkout</th><td>最小权限的按用户任务计划条目</td><td>一个任务 <code translate="no">OpenProgram Worker</code> 服务所有 profile</td></tr>
+<tr><th scope="row">Windows 源码 checkout</th><td>最小权限的按用户任务计划条目</td><td><code translate="no">OpenProgram Worker</code>；每个命名 profile 有自己的任务。<code translate="no">stop</code> 同时结束任务的这次运行，重试不会把 worker 带回来</td></tr>
 </tbody>
 </table>
-<p class="note">macOS 和 Linux 上，<code translate="no">start</code>、<code translate="no">stop</code>、<code translate="no">restart</code> 走已安装的服务，不会另建脱离的进程。<code translate="no">start</code> 和 <code translate="no">restart</code> 还会用当前 CLI 运行时重新生成 plist 或 unit，升级后不会继续启动旧版本。</p>
+<p class="note"><code translate="no">start</code>、<code translate="no">stop</code>、<code translate="no">restart</code> 走已安装的服务，不会另建脱离的进程。<code translate="no">start</code> 和 <code translate="no">restart</code> 还会用当前 CLI 运行时重新生成 plist、unit 或任务的启动脚本，升级后不会继续启动旧版本。</p>
 
 <p class="next"><a href="configuration.zh.html">配置</a> · <a href="backup.zh.html">备份</a> · <a href="troubleshooting.zh.html">故障排查</a></p>

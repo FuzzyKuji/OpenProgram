@@ -414,10 +414,15 @@ def run_agent_method_call(
     # Claim the same atomic session occupancy used by chat before mutating
     # the DAG. The reservation covers parent-side node creation; activation
     # below hands ownership to the direct function worker.
-    if not _s._try_reserve_run(session_id, msg_id):
+    refusal = _s.reserve_operation(
+        session_id, "function", msg_id, on_repeat="refuse",
+        key=f"send:{client_request_id}" if client_request_id else None,
+    )
+    if refusal is not None:
         return {
-            "error": _s.RUN_ACTIVE_ERROR,
-            "code": "run_active",
+            "error": refusal["error"],
+            "code": refusal.get("code") or "run_active",
+            "kind": refusal.get("kind"),
             "status_code": 409,
         }
     try:
@@ -640,6 +645,9 @@ def run_agent_method_call(
             user_message_id=msg_id,
             assistant_message_id=_forced_node_id,
             config_snapshot_ref=f"provider:{provider or ''}/model:{model or ''}",
+            # A stop sent before this response arrives names the run by
+            # the id its caller made (stop by request id).
+            client_request_id=client_request_id,
         )
     except BaseException as exc:
         _s._release_run_reservation(session_id, msg_id)
@@ -727,12 +735,18 @@ def run_agent_method_call(
                     _s._emit_running_task_event(session_id)
 
                 async def _activate():
-                    _active, result = await _adapter.activate(
+                    return await _adapter.activate(
                         _admission, on_activated=_publish_activation,
                     )
-                    return result
 
-                out = asyncio.run(_activate())
+                activated = asyncio.run(_activate())
+                if activated is None:
+                    # A stop reached the call before it ran; it ended
+                    # cancelled, so only its code node is closed here.
+                    from openprogram.runtime.conversation.production_driver import STOPPED_BEFORE_START
+                    _terminalize_pending_node("stopped_before_start", STOPPED_BEFORE_START)
+                    return
+                out = activated[1]
                 if getattr(out, "failed", False) or (
                     isinstance(out, dict)
                     and (

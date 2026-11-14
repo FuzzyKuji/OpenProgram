@@ -6,7 +6,7 @@
 <table class="stack">
 <thead><tr><th scope="col">类型</th><th scope="col">后端</th><th scope="col">命令形式</th><th scope="col">工作文件夹</th><th scope="col">本机沙箱</th></tr></thead>
 <tbody>
-<tr><th scope="row"><code translate="no">local</code></th><td><code translate="no">LocalBackend</code></td><td>本机子进程</td><td>本机</td><td>生效</td></tr>
+<tr><th scope="row"><code translate="no">local</code></th><td><code translate="no">LocalBackend</code></td><td>本机子进程。macOS 和 Linux：<code translate="no">bash -c</code>，沙箱内外相同（没有 bash 才用 <code translate="no">sh</code>），所以 <code translate="no">echo</code> 原样输出 <code translate="no">\n</code>，<code translate="no">printf</code> 才展开；定时任务的命令同样这样运行。Windows：Git Bash 或 PowerShell，沙箱内是 WSL 的 bash</td><td>本机</td><td>生效</td></tr>
 <tr><th scope="row"><code translate="no">ssh</code></th><td><code translate="no">SshBackend(target, workdir)</code></td><td><code translate="no">ssh … &lt;target&gt; 'cd &lt;dir&gt; &amp;&amp; &lt;cmd&gt;'</code></td><td>远程绝对路径</td><td>关闭；隔离靠远程账户</td></tr>
 <tr><th scope="row"><code translate="no">docker</code></th><td><code translate="no">DockerBackend(image, container, mounts)</code></td><td><code translate="no">docker exec -i [-w cwd] &lt;container&gt; sh -c &lt;cmd&gt;</code></td><td>本机路径，以相同路径挂载</td><td>关闭；隔离靠容器</td></tr>
 </tbody>

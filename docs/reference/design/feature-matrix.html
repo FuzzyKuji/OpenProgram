@@ -85,7 +85,7 @@
 <tr><th scope="row">Read existing conversation history as context <details><summary>Evidence</summary>Our read_conversation · openclaw sessions_history · hermes session_search</details></th><td>●</td><td>● openclaw, hermes</td></tr>
 <tr><th scope="row">Built-in deep-research workflow <details><summary>Evidence</summary>buddy builtin/workflows/deep-research.workflow.js uses five parallel branches and three voting-based validations</details></th><td>·</td><td>◐ openclaw · ● buddy</td></tr>
 <tr><th scope="row">Answer product questions from its own documentation <details><summary>Evidence</summary>claude claude-code-guide subagent · gm internal get_internal_docs · openclaw docs command</details></th><td>·</td><td>● claude, openclaw, cc internal, gm internal · ◐ buddy</td></tr>
-<tr><th scope="row">Image and PDF input <details><summary>Evidence</summary>Our Web/channels accept attachments. Images become ImageContent; PDFs are saved in the session workdir and read with pdf/read. TUI has no equivalent file-picker entry</details></th><td>◐</td><td>● claude, codex, openclaw, opencode, hermes, pi-mono, cc internal, cx internal, gm internal, buddy · ◐ weclaw</td></tr>
+<tr><th scope="row">Image and PDF input <details><summary>Evidence</summary>Our Web/channels accept attachments. Images become ImageContent; PDFs are saved in the session workdir and read with pdf/read. The TUI now attaches images and PDFs by pasted or dragged path, clipboard and @path (moved since scoring)</details></th><td>◐</td><td>● claude, codex, openclaw, opencode, hermes, pi-mono, cc internal, cx internal, gm internal, buddy · ◐ weclaw</td></tr>
 </tbody>
 </table>
 </details>
@@ -142,7 +142,7 @@
 <tr><th scope="row">Multi-model consensus or cross-review <details><summary>Evidence</summary>Our mixture_of_agents · claude /advisor · openclaw oracle skill</details></th><td>●</td><td>● claude, openclaw, hermes, cc internal</td></tr>
 <tr><th scope="row">Subagent depth budget <details><summary>Evidence</summary>Our agent.max_spawn_depth defaults to 0, meaning no limit · Claude defaults to 3 · hermes max_spawn_depth</details></th><td>●</td><td>● claude, hermes, cc internal · ◐ buddy</td></tr>
 <tr><th scope="row">Concurrency and per-session total-spawn limits <details><summary>Evidence</summary>Our runtime/jobs/resource_governance/ applies per-session live/queued/total limits plus token, cost, and runtime limits, configured through state.settings and measured in the usage ledger · Claude concurrency 20 and 200 spawns per session · Hermes max_concurrent_children defaults to 3</details></th><td>●</td><td>● claude, openclaw, hermes, cc internal, buddy · ◐ opencode</td></tr>
-<tr><th scope="row">Resume subagents from persistent state <details><summary>Evidence</summary>Calling our agent(to=…) again continues an existing persistent branch. If the target is busy, a process-crash window remains between persistent Job admission and inbox persistence; that deferred intent is not automatically recovered, so status is partial. Buddy uses agentId and agent-{id}.jsonl with a resume parameter on later calls</details></th><td>◐</td><td>● buddy</td></tr>
+<tr><th scope="row">Resume subagents from persistent state <details><summary>Evidence</summary>Calling our agent(to=…) again continues an existing persistent branch. Every hand-off from the request to the result writes its intent before acting and is replayed by the next Worker: a busy target's inbox entry rides on the admitted Job, a held spawn is published once its submitter is gone, and an unsent result notice is replayed; tests/component/agent/jobs/test_subagent_handoff_crash.py kills the process at each window. Buddy uses agentId and agent-{id}.jsonl with a resume parameter on later calls</details></th><td>●</td><td>● buddy</td></tr>
 <tr><th scope="row">Function-call trees in the same session graph <details><summary>Evidence</summary>Our <code translate="no">runtime/agent/call_state.py</code> writes code nodes; <code translate="no">state/store/session/session_node_writer.py</code> and <code translate="no">state/store/session/nodes.py</code> unify caller/predecessor semantics</details></th><td>●</td><td>None confirmed</td></tr>
 <tr><th scope="row">Restrict subagent tools by remaining message budget <details><summary>Evidence</summary>Our <code translate="no">runtime/conversation/model_tools.py</code> reads the call-chain message budget while resolving tools; tests/unit/agent/jobs/test_spawn_caller_invariant.py verifies collaboration tools are removed when the budget is exhausted</details></th><td>●</td><td>None confirmed</td></tr>
 </tbody>
@@ -199,7 +199,7 @@
 <tr><th scope="row">Incoming and outgoing phone calls <details><summary>Evidence</summary>openclaw voice-call uses Twilio, Telnyx, or Plivo, with DTMF support</details></th><td>·</td><td>● openclaw</td></tr>
 <tr><th scope="row">Theme switching <details><summary>Evidence</summary>Our Web settings persist multiple themes and auto; TUI /theme persists auto, dark/light, and dim variants. OpenClaw Control UI supports themes</details></th><td>●</td><td>● claude, codex, openclaw, opencode, hermes, pi-mono, cc internal, cx internal, gm internal, buddy</td></tr>
 <tr><th scope="row">Vim mode <details><summary>Evidence</summary>Claude full modal engine with text objects · buddy /vim · codex /vim</details></th><td>·</td><td>● claude, codex, cc internal, cx internal, gm internal, buddy · ◐ pi-mono</td></tr>
-<tr><th scope="row">Fully remappable keyboard shortcuts <details><summary>Evidence</summary>Buddy keybindings.json has 16 contexts and key chords · Claude about 95 bindable actions</details></th><td>·</td><td>● claude, codex, opencode, pi-mono, cc internal, cx internal, buddy</td></tr>
+<tr><th scope="row">Fully remappable keyboard shortcuts <details><summary>Evidence</summary>Buddy keybindings.json has 16 contexts and key chords · Claude about 95 bindable actions · our TUI now reads action overrides from keybindings.json and lists them under ? (moved since scoring)</details></th><td>·</td><td>● claude, codex, opencode, pi-mono, cc internal, cx internal, buddy</td></tr>
 <tr><th scope="row">Standalone binary without Node installation <details><summary>Evidence</summary>pi-mono bun build --compile · Buddy native installer and Homebrew tap · Weclaw uses Go</details></th><td>·</td><td>● claude, codex, opencode, pi-mono, weclaw, buddy</td></tr>
 <tr><th scope="row">Screen readers and accessibility <details><summary>Evidence</summary>claude --ax-screen-reader · gm internal --screen-reader</details></th><td>·</td><td>● claude, cc internal, gm internal</td></tr>
 </tbody>
@@ -306,7 +306,7 @@
 <tr><th scope="row">openclaw</th><td>94.0</td></tr>
 <tr><th scope="row">cc internal</th><td>94.0</td></tr>
 <tr><th scope="row">hermes</th><td>92.0</td></tr>
-<tr><th scope="row">Ours</th><td>91.5</td></tr>
+<tr><th scope="row">Ours</th><td>92.0</td></tr>
 <tr><th scope="row">codex</th><td>73.5</td></tr>
 <tr><th scope="row">cx internal</th><td>64.0</td></tr>
 <tr><th scope="row">opencode</th><td>54.0</td></tr>
@@ -330,7 +330,7 @@
 <tr><th scope="row">Code understanding</th><td>40%</td><td>25%–60%, median 45%</td></tr>
 <tr><th scope="row">Version control</th><td>50%</td><td>10%–90%, median 48%</td></tr>
 <tr><th scope="row">Tasks and planning</th><td>77%</td><td>9%–64%, median 43%</td></tr>
-<tr><th scope="row">Multi-agent</th><td>68%</td><td>4%–57%, median 23%</td></tr>
+<tr><th scope="row">Multi-agent</th><td>71%</td><td>4%–57%, median 23%</td></tr>
 <tr><th scope="row">Memory and knowledge</th><td>50%</td><td>10%–70%, median 48%</td></tr>
 <tr><th scope="row">Extensions</th><td>73%</td><td>36%–86%, median 80%</td></tr>
 <tr><th scope="row">Interfaces</th><td>54%</td><td>38%–88%, median 60%</td></tr>
@@ -341,7 +341,7 @@
 </tbody>
 </table>
 </figure>
-<div><p class="note">Multi-agent is 9.5/14 (68%) against cc internal 8.0/14 (57%). Tasks and planning is 8.5/11 (77%) against claude, openclaw, cc internal and buddy at 7.0/11 (64%). Sessions and history is 13.0/17 (76%) against openclaw 14.0/17 (82%). Largest gaps to the top reference: integration and interoperability, version control, interfaces.</p></div>
+<div><p class="note">Multi-agent is 10.0/14 (71%) against cc internal 8.0/14 (57%). Tasks and planning is 8.5/11 (77%) against claude, openclaw, cc internal and buddy at 7.0/11 (64%). Sessions and history is 13.0/17 (76%) against openclaw 14.0/17 (82%). Largest gaps to the top reference: integration and interoperability, version control, interfaces.</p></div>
 
 <h2 id="gaps">59 features unconfirmed in OpenProgram</h2>
 <p>OpenProgram is · and at least one reference is not. Design candidates, not proven defects. Groups follow the product scope: one user, local machine, resident worker, general harness, own TUI, Web and desktop. Evidence is in the <a href="#matrix">complete table</a>.</p>
@@ -560,7 +560,7 @@
 <table class="stack fixed">
 <thead><tr><th scope="col">Item</th><th scope="col">Status</th></tr></thead>
 <tbody>
-<tr><th scope="row">Feature matrix, 91.5 score, 59 candidate differences, 6 version-evidence differences</th><td>Computed from this table; general baseline <code translate="no">integrated candidate@d91c3e66</code>, JSON Schema <code translate="no">2fb471b3</code>, Runtime URL SSRF <code translate="no">be5eaa3c</code>. Not re-scored for later code; rows that have moved say so in their evidence.</td></tr>
+<tr><th scope="row">Feature matrix, 92.0 score, 59 candidate differences, 6 version-evidence differences</th><td>Computed from this table; general baseline <code translate="no">integrated candidate@d91c3e66</code>, JSON Schema <code translate="no">2fb471b3</code>, Runtime URL SSRF <code translate="no">be5eaa3c</code>. Not re-scored for later code; rows that have moved say so in their evidence.</td></tr>
 <tr><th scope="row">◐ in the OpenProgram column</th><td>Confirmed only for some interfaces or input paths; limits are in the row evidence</td></tr>
 <tr><th scope="row">Scores, category shares, candidate counts</th><td>Computed from the matrix, with no quality or importance weights</td></tr>
 </tbody>

@@ -19,7 +19,7 @@
 <table class="stack">
 <thead><tr><th scope="col">Resource</th><th scope="col">Authority</th><th scope="col">Lifetime</th></tr></thead>
 <tbody>
-<tr><th scope="row">Webpages</th><td><code translate="no">CenterTab</code> records and recorded session provenance; <code translate="no">web_use</code> opens carry the trusted runtime session ID through the desktop command</td><td>Until the webpage closes. Agent pages stay in Resources; user-opened and pinned pages stay in the strip.</td></tr>
+<tr><th scope="row">Webpages</th><td><code translate="no">CenterTab</code> records and recorded session provenance; a tab the Agent opens carries the trusted runtime session ID through the desktop command</td><td>Until the webpage closes. Agent pages stay in Resources; user-opened and pinned pages stay in the strip.</td></tr>
 <tr><th scope="row">GUI desktop, VM</th><td>Trusted usage registry and configured application or VM endpoint</td><td>Integration attachment</td></tr>
 <tr><th scope="row">Other integrations</th><td><code translate="no">resource_use(kind, title, target)</code> with the same trusted context</td><td>The reported period of use</td></tr>
 <tr><th scope="row">Background terminal</th><td>A command a bash call left running (<code translate="no">background</code> set), the one <code translate="no">ProcessStore</code> projection; see <a href="../../runtime/execution/command-sessions.html">command sessions</a></td><td>Until exit; read-only row with Stop</td></tr>
@@ -75,17 +75,17 @@
 
 <h2>Resource interface</h2>
 <table class="stack">
-<thead><tr><th scope="col">Operation</th><th scope="col">Web</th><th scope="col">Terminal</th><th scope="col">Application</th></tr></thead>
+<thead><tr><th scope="col">Operation</th><th scope="col">Terminal</th><th scope="col">Application</th></tr></thead>
 <tbody>
-<tr><th scope="row"><code translate="no">list</code>, <code translate="no">describe</code></th><td>Authorized Page inventory, supported actions</td><td>Native host inventory and generation</td><td>Installed, enabled manifest and declared operations</td></tr>
-<tr><th scope="row"><code translate="no">open</code></th><td>Create a Page explicitly</td><td>Create a private shell explicitly</td><td>Open the installed instance</td></tr>
-<tr><th scope="row"><code translate="no">observe</code></th><td>Page observation with identity</td><td>Independent output cursor, input revision</td><td>Instance state, operation status</td></tr>
-<tr><th scope="row"><code translate="no">act</code></th><td><code translate="no">web_use</code> actions</td><td>Input or interrupt with observed revision</td><td>Declared Agent-visible operations only</td></tr>
-<tr><th scope="row"><code translate="no">release</code></th><td>Release control binding</td><td>Release Agent binding, keep process</td><td>Detach association</td></tr>
-<tr><th scope="row"><code translate="no">close</code></th><td>Explicit close where supported</td><td>Request termination, wait for exit</td><td>Only when declared</td></tr>
+<tr><th scope="row"><code translate="no">list</code>, <code translate="no">describe</code></th><td>Native host inventory and generation</td><td>Installed, enabled manifest and declared operations</td></tr>
+<tr><th scope="row"><code translate="no">open</code></th><td>Create a private shell explicitly</td><td>Open the installed instance</td></tr>
+<tr><th scope="row"><code translate="no">observe</code></th><td>Independent output cursor, input revision</td><td>Instance state, operation status</td></tr>
+<tr><th scope="row"><code translate="no">act</code></th><td>Input or interrupt with observed revision</td><td>Declared Agent-visible operations only</td></tr>
+<tr><th scope="row"><code translate="no">release</code></th><td>Release Agent binding, keep process</td><td>Detach association</td></tr>
+<tr><th scope="row"><code translate="no">close</code></th><td>Request termination, wait for exit</td><td>Only when declared</td></tr>
 </tbody>
 </table>
-<p class="note">Unsupported actions return a capability error; nothing is invented. <code translate="no">web_use</code> and <code translate="no">terminal_use</code> remain public entries. A resource identifier is not an access grant. Hiding a view, releasing Agent access and terminating an environment are separate.</p>
+<p class="note">Unsupported actions return a capability error; nothing is invented. Web pages are not a provider here: <code translate="no">computer_use_agent(target="browser")</code> lists, opens, operates and closes them. <code translate="no">terminal_use</code> remains a public entry. A resource identifier is not an access grant. Hiding a view, releasing Agent access and terminating an environment are separate.</p>
 
 <details>
 <summary>Trust and failures</summary>

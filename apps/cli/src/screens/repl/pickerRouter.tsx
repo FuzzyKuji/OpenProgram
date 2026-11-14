@@ -31,12 +31,14 @@ import {
   type JobRow,
 } from '../../ws/client.js';
 import { randomLocalId, tsToDate } from './helpers.js';
+import { cancelExecution } from './cancelExecution.js';
 import { buildChannelPicker } from './pickers/channel.js';
 import { buildRegisterPicker } from './pickers/register.js';
 import { buildQuestionPicker } from './pickers/question.js';
 import { buildProviderAccountsPicker, type AccountKind } from './pickers/providerAccounts.js';
 import type { AccountsState, AddStarted } from '../../utils/providerAccounts.js';
 import type { ColorTheme } from '../../theme/themes.js';
+import { defaultBindings, helpRows, type ResolvedBindings } from '../../keybindings/resolve.js';
 import type {
   AgentInfo,
   BranchRow,
@@ -124,6 +126,8 @@ export interface PickerCtx {
   /** Run a line as if typed at the prompt (used by the command palette). */
   onSubmit: (text: string) => void;
   sessionAliasesRef: React.MutableRefObject<SessionAliasRow[]>;
+  /** The active keys, for the `?` shortcut list. */
+  keybindings?: ResolvedBindings;
 }
 
 const localRemaining = (limit: number | null, ...used: Array<number | null>): number | null | undefined => {
@@ -243,16 +247,12 @@ export function buildPickerNode(ctx: PickerCtx): React.ReactElement | null {
             const executionId = selectedJob.execution_id
               ?? selectedJob.resource?.execution_id
               ?? selectedJob.id;
-            client.send({
-              type: 'execution.command',
-              action: 'execution.cancel',
-              command_id: `tui-${randomLocalId()}`,
-              execution_id: executionId,
-              expected_version: selectedJob.status_version
-                ?? selectedJob.resource?.status_version
-                ?? 0,
-              payload: {},
-            });
+            cancelExecution(
+              client,
+              executionId,
+              selectedJob.status_version ?? selectedJob.resource?.status_version ?? 0,
+              `tui-${randomLocalId()}`,
+            );
           } else if (item.value === 'back') {
             setSelectedJob(null);
             setPickerKind('jobs');
@@ -315,18 +315,16 @@ export function buildPickerNode(ctx: PickerCtx): React.ReactElement | null {
   }
 
   if (pickerKind === 'shortcuts') {
+    // The action table with the keys now in force (defaults plus
+    // keybindings.json), so the list is what the keys actually do.
     const shortcuts: PickerItem<string>[] = [
       { label: '/', description: 'commands and completion', value: 'slash' },
-      { label: '@', description: 'attach a workspace file', value: 'file' },
-      { label: 'enter', description: 'send · alt+enter inserts a newline', value: 'send' },
-      { label: 'shift+tab', description: 'cycle safe permission modes', value: 'permission' },
-      { label: 'ctrl+k', description: 'open command palette', value: 'palette' },
-      { label: 'ctrl+r', description: 'search saved context', value: 'search' },
-      { label: 'ctrl+a / ctrl+e', description: 'start / end of input', value: 'line' },
-      { label: 'ctrl+w', description: 'delete previous word', value: 'word' },
-      { label: 'esc', description: 'clear input or stop a running turn', value: 'escape' },
-      { label: 'ctrl+c twice', description: 'exit while idle', value: 'exit' },
-      { label: '↑ / ↓', description: 'prompt history or picker selection', value: 'history' },
+      { label: '@', description: 'attach a workspace file · an image or PDF path attaches the file', value: 'file' },
+      ...helpRows(ctx.keybindings ?? defaultBindings()).map((row) => ({
+        label: row.keys,
+        description: row.description,
+        value: row.id,
+      })),
     ];
     return (
       <Picker

@@ -30,7 +30,8 @@
 <tbody>
 <tr><th scope="row">写入模型不可用（登录被拒、套餐无权限、模型不存在、额度用尽）</th><td>切换到默认 agent 的模型，再到最近使用的模型</td></tr>
 <tr><th scope="row">编辑未通过格式检查</th><td>退回就地修复最多三次，然后整轮重做一次</td></tr>
-<tr><th scope="row">Topic 文件被手动改坏</th><td>修复 agent 在新写入前修好格式，保留事实和 block ID，有单独的历史条目</td></tr>
+<tr><th scope="row">你或别的工具写的 Topic 文件</th><td>按原样记住：能被搜到，也能被召回，标“added by person”或“outside file”代替来源。记忆从不改写别的工具写的文件；不是文本的文件在记忆页列一次，其余记忆照常</td></tr>
+<tr><th scope="row">手写引用一条消息</th><td>段落末尾加脚注，来源写 <code translate="no">[关键词](/s/&lt;会话&gt;#&lt;消息&gt;)</code>：会话 ID 在<strong>复制链接</strong>得到的链接末尾（只保留 <code translate="no">/s/…</code> 部分），消息 ID 是在上下文图里选中这条消息的节点后<strong>复制 ID</strong> 得到的内容。关闭记忆的对话不能引用。</td></tr>
 </tbody>
 </table>
 <details>
@@ -39,7 +40,7 @@
 <thead class="sr"><tr><th scope="col">情况</th><th scope="col">结果</th></tr></thead>
 <tbody>
 <tr><th scope="row">上次运行仍失败</th><td>Memory 顶部红条：原因、上次写入时间、等待的轮次数</td></tr>
-<tr><th scope="row">会自动重试</th><td>只留在红条</td></tr>
+<tr><th scope="row">会自动重试</th><td>只留在红条。服务中断和用量上限从 5 分钟等到最长 6 小时，不会放弃。对话本身的失败试三次，间隔一小时，之后等对话变化。登录失效或写入器无法从这份记忆开始时只停一次，直到登录、配置或这份记忆变化</td></tr>
 <tr><th scope="row">不会重试</th><td>红条加一次通知，原因变化才再弹</td></tr>
 <tr><th scope="row">未写入的轮次</th><td>重试</td></tr>
 <tr><th scope="row">没有值得保留的内容</th><td>算已写入</td></tr>

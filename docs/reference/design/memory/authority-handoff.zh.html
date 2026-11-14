@@ -11,7 +11,7 @@
 <tr><th scope="row">Unpaired</th><td>无</td><td>消息不到达 Agent</td></tr>
 </tbody>
 </table>
-<p class="note">未配对不是第三个档位，也不存在只能回复的状态：消息根本不渲染进模型上下文，这个注入面被移除。表里还有一个键 <code translate="no">mcp_browser</code>（只有 <code translate="no">browser.control</code>），给 MCP 浏览器调用方，没有发言人持有它。</p>
+<p class="note">未配对不是第三个档位，也不存在只能回复的状态：消息根本不渲染进模型上下文，这个注入面被移除。</p>
 
 <h2 id="the-gate">门口</h2>
 <p><code translate="no">authority_tier</code> 是请求边界上的一个枚举，与 <code translate="no">principal_id</code>、<code translate="no">speaker_kind</code>、<code translate="no">speaker_id</code>、<code translate="no">speaker_display</code>、<code translate="no">interaction</code> 并列。请求不带调用方能自造的能力列表。</p>

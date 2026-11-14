@@ -94,6 +94,7 @@ from .server_runtime.session_persistence import (  # noqa: F401 -- server namesp
     _hydrate_messages_from_db,
     _set_active_head,
     _emit_running_task_event,
+    _emit_branch_running_task_event,
     _save_session,
     _default_agent_id,
     _restore_sessions,
@@ -109,12 +110,33 @@ from .server_runtime.session_lifecycle import (  # noqa: F401 -- server namespac
     _get_or_create_session,
     _canonical_foreground_task,
     _is_run_active,
+    _is_selected_run_active,
+    _side_branch_tasks,
+    _any_branch_run_active,
+    _branch_run_active,
+    _running_branches,
+    _try_reserve_branch_run,
+    _set_branch_run_execution,
+    _slot_location,
+    _slot_branch,
+    _emit_slot_state,
+    _selected_branch,
+    switch_branch,
     _run_identity,
     _try_reserve_run,
+    reserve_operation,
+    repeated_request_refusal,
+    reserve_branch_operation,
+    reserve_branches_operation,
+    release_branches_operation,
+    branches_through,
+    running_branch_among,
+    cancel_operation,
     _try_reserve_run_locked,
     _release_run_reservation,
     _activate_run_reservation,
     _finish_owned_run,
+    _take_owned_run,
     _release_session_occupancy_for_execution,
 )
 from .server_runtime.context_stats import (  # noqa: F401 -- server namespace, read as server.<name>
@@ -147,8 +169,18 @@ _follow_up_queues: dict = {}
 _follow_up_lock = threading.Lock()
 _FOLLOW_UP_DISCONNECTED = object()
 
-# Track running tasks so refresh can recover them
-_running_tasks: dict = {}  # session_id → {msg_id, func_name, started_at, ...}
+# The run slots of every conversation branch, one table keyed by
+# (session_id, branch_key); each entry is the branch's foreground operation
+# (server_runtime/run_slots.py). ``_running_tasks`` is its view by session
+# (the selected branch) and ``_branch_running_tasks`` its view by
+# (session_id, branch_id) for the other branches; guarded by
+# ``_running_tasks_lock``.
+from .server_runtime.run_slots import BranchSlots as _BranchSlots  # noqa: E402
+from .server_runtime.run_slots import SelectedSlots as _SelectedSlots  # noqa: E402
+
+_run_slots: dict = {}
+_running_tasks = _SelectedSlots(_run_slots)  # session_id → {msg_id, op_kind, op_id, ...}
+_branch_running_tasks = _BranchSlots(_run_slots)
 _running_tasks_lock = threading.Lock()
 
 # Every frame that reports whether a session is running carries a
@@ -937,11 +969,6 @@ def create_app(*, owner_auth=None, port: int = 18100):
     # /api/mcp/* — MCP server management (shared by webui / CLI / TUI)
     from openprogram.interfaces.server.routes.catalog import mcp as _routes_mcp
     _routes_mcp.register(app)
-
-    # Narrow owner-authenticated bridge used by the independent stdio MCP
-    # process. Browser Page bindings remain owned by this worker process.
-    from openprogram.interfaces.server.routes.execution import web_use as _routes_web_use
-    _routes_web_use.register(app)
 
     # /api/skills/* — Skills management
     from openprogram.interfaces.server.routes.catalog import skills as _routes_skills

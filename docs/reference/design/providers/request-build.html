@@ -39,7 +39,7 @@
 <thead class="sr"><tr><th scope="col">Rule</th><th scope="col">Detail</th></tr></thead>
 <tbody>
 <tr><th scope="row">Caller marks</th><td><code translate="no">cache_control</code> on a content block passes through verbatim; <code translate="no">Tool.cache_control</code> likewise (<a href="../plans/cache-control-passthrough.html">passthrough plan</a>)</td></tr>
-<tr><th scope="row">Unmarked</th><td><code translate="no">apply_cache_policy</code> (<code translate="no">settings/cache_policy.py</code>) marks the last tool and the latest user message's last text block, else its last block; caller markers stay</td></tr>
+<tr><th scope="row">Unmarked</th><td><code translate="no">apply_cache_policy</code> (<code translate="no">settings/cache_policy.py</code>) marks the last tool not sent with <code translate="no">defer_loading</code> and the latest user message's last text block, else its last block; caller markers stay</td></tr>
 <tr><th scope="row">Budget</th><td><code translate="no">max_breakpoints</code> (4), spent tools first, then messages</td></tr>
 <tr><th scope="row">TTL</th><td><code translate="no">≥ 3600 s</code> is <code translate="no">1h</code>, else the provider default of 5 min; <code translate="no">models.prompt_cache_ttl</code> set to <code translate="no">1h</code> makes a plain cache live an hour</td></tr>
 <tr><th scope="row">System</th><td>One string, so each provider's <code translate="no">_build_system</code> marks the whole block; the policy covers tools and messages</td></tr>

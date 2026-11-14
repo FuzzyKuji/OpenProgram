@@ -39,6 +39,8 @@ When something new happened rather than a correction, write a new paragraph inst
 
 Use ordinary Markdown links to relate memory paragraphs, for example [current work](../career/employment.md#^existing-block-id). Every relative Markdown link from one Topic file to another Topic `.md` file must target `#^existing-block-id`; file-only and heading-only Topic links are invalid. Only link to IDs you can see in the files.
 
+Some Topic files were written outside OpenProgram, by a person or another tool; the workspace structure marks each one read-only. Read them and use what they say, but never edit, move, merge or delete them and never link to their paragraphs: an edit that touches one is rejected with the rest of the turn. A paragraph a person added without a footnote stays as it is; leave it alone rather than rewrite it, since a rewritten paragraph must cite a message like any other.
+
 Read, Write, Edit, Grep, and Glob operate on this workspace, and the shell is there for anything they do not cover. Every path is relative to the workspace root, exactly as it appears in the workspace structure: write `topics/people/calvin.md`, never a leading slash. Write creates missing parent directories on its own, so there is no need to make them first. Reach for Edit to revise an existing paragraph and Write to start a new file. Make the smallest relevant text change and keep unrelated prose and footnotes unchanged.
 
 Create a file that does not exist yet with Write, passing the finished file in one call rather than building it up. Use Edit on a file you have just Read, anchoring `old_string` on text you actually saw in it — the last line or two is the usual anchor for appending. An empty `old_string` matches nothing in a file that has content, so the edit fails.

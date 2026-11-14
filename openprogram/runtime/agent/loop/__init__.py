@@ -11,7 +11,6 @@ from openprogram.runtime.agent.loop.guards import (
     iteration_cap_for,
 )
 from openprogram.runtime.agent.loop.message_context import (
-    memory_prefetch_enabled,
     _inject_memory_prefetch,
 )
 from openprogram.runtime.agent.loop.lifecycle import (
@@ -54,5 +53,4 @@ __all__ = [
     "agent_loop_continue",
     "agent_loop_resume",
     "iteration_cap_for",
-    "memory_prefetch_enabled",
 ]

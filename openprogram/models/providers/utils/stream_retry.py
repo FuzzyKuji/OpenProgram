@@ -32,10 +32,10 @@ Defaults:
   * Retry-After honored as lower bound with positive-only jitter
     (OpenClaw pattern: see ``references/openclaw/src/infra/retry.ts``)
 
-The 5-min SSE idle timeout and 30-min total ceiling are provider-side
-constants (each provider sets its own via ``OPENPROGRAM_SSE_IDLE_TIMEOUT_S``
-/ ``OPENPROGRAM_SSE_TOTAL_TIMEOUT_S``); this module classifies them
-when they bubble up but doesn't enforce them.
+The stream idle bound (``stream_idle.py``, 300 s without an event) and the
+optional total budget are enforced by the transports; this module classifies
+the ``StreamIdleTimeout`` / ``StreamTotalTimeout`` they raise as transport
+failures and retries them, but doesn't enforce them.
 """
 from __future__ import annotations
 
@@ -165,7 +165,14 @@ class ProviderStreamError(Exception):
         retryable: bool = False,
         provider: Optional[str] = None,
     ) -> None:
+        # A web page as the body (a block or outage page from the network
+        # edge) is shown by its words; ``error_text`` keeps the body as it came.
+        from openprogram.models.providers.utils.errors import web_page_text
+        page = web_page_text(error_text)
+        if page is not None and error_text in message:
+            message = message.replace(error_text, page)
         super().__init__(message)
+        self.web_page = page is not None
         self.http_status = http_status
         self.retry_after_s = retry_after_s
         self.error_text = error_text

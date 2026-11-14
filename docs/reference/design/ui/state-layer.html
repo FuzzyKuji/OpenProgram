@@ -75,7 +75,7 @@
 <tr><th scope="row"><code translate="no">heads</code></th><td>active DAG head (selected branch tip) per session</td></tr>
 <tr><th scope="row"><code translate="no">additionalWorkingDirsBySession</code></th><td>extra working directories per session</td></tr>
 <tr><th scope="row"><code translate="no">composerDrafts</code></th><td>unsent composer text per session, persisted to localStorage</td></tr>
-<tr><th scope="row"><code translate="no">composerSettingsBySession</code></th><td>tool toggles / thinking effort per session, persisted</td></tr>
+<tr><th scope="row"><code translate="no">composerSettingsBySession</code></th><td>active-branch tool toggles / thinking effort and branch identity, keyed by session for the visible projection; durable settings belong to branch references</td></tr>
 </tbody>
 </table>
 <p class="note"><code translate="no">pendingDecisions</code> is a flat FIFO whose entries carry <code translate="no">sessionId</code> (<code translate="no">session-store/types.ts</code>); every consumer filters it, and a mis-scoped one would swallow or duplicate another session's question.</p>

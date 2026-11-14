@@ -146,11 +146,13 @@ def test_code_past_its_time_says_so_and_settles_the_step_it_was_in(interpreter, 
         return ToolReturn(text="late")
     monkeypatch.setattr(app, "run", slow)
     try:
-        result = code.run("await cu.app.click(app='Numbers', element_index=3)", {"app": "Numbers"}, "s", timeout=1)
+        result = code.run("print('completed earlier work')\nawait cu.app.click(app='Numbers', element_index=3)",
+                          {"app": "Numbers"}, "s", timeout=1)
     finally:
         release.set()
     assert result.is_error and "ran longer than its 1 seconds" in result.text
     assert "may or may not have been applied" in result.text and "starts again" in result.text
+    assert "Output collected before stopping:\ncompleted earlier work" in result.text
     assert effects.list_unresolved("exec") == []
 
 
@@ -162,4 +164,4 @@ def test_without_an_app_there_is_no_app_target(interpreter):
 def test_a_read_in_code_is_the_whole_tree(interpreter):
     calls, _ = interpreter
     code.run("await cu.app.get_app_state(app='Numbers')", {"app": "Numbers"}, "s")
-    assert calls == [("app", [("get_app_state", {"app": "Numbers", "full": True})], "Numbers")]
+    assert calls == [("app", [("get_app_state", {"app": "Numbers", "full": True, "include": "tree"})], "Numbers")]

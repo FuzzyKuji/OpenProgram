@@ -52,27 +52,12 @@ def test_process_command_line_falls_back_to_cim(monkeypatch) -> None:
     assert processes.process_command_line(42) == "python.exe x"
 
 
-def test_process_ids_by_name_validates_and_parses(monkeypatch) -> None:
-    scripts: list[str] = []
-    monkeypatch.setattr(sys, "platform", "win32")
-
-    def fake(script: str, *, timeout: float = 5.0) -> str:
-        del timeout
-        scripts.append(script)
-        return "12\nnot-a-pid\n34\n"
-
-    monkeypatch.setattr(terminal, "_windows_powershell", fake)
-
-    assert processes.process_ids_by_name(
-        ["chrome.exe", "chrome.exe", "bad'name"]
-    ) == [12, 34]
-    assert "Name = 'chrome.exe'" in scripts[0]
-    assert "bad'name" not in scripts[0]
-
-
 def test_powershell_failure_is_a_safe_empty_result(monkeypatch) -> None:
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setattr("shutil.which", lambda name: "powershell.exe")
+    # On Windows the kernel answers for our own process; this test is about
+    # the CIM fallback, so the kernel must decline first.
+    monkeypatch.setattr(processes, "_windows_command_line", lambda pid: None)
 
     def fail(*args, **kwargs):
         del args, kwargs
@@ -103,33 +88,6 @@ def test_windows_pids_on_port_parses_only_matching_listeners(monkeypatch) -> Non
 
     assert processes.pids_on_port(18100) == [123]
     assert seen["creationflags"] == 0x08000000
-
-
-def test_kill_processes_matching_normalizes_windows_paths(monkeypatch) -> None:
-    monkeypatch.setattr(sys, "platform", "win32")
-    monkeypatch.setattr(processes, "process_ids_by_name", lambda names: [11, 22])
-    monkeypatch.setattr(
-        processes,
-        "process_command_line",
-        lambda pid: (
-            r"chrome.exe --user-data-dir=C:\Users\me\.openprogram\chrome-profile"
-            if pid == 22
-            else "chrome.exe --other-profile"
-        ),
-    )
-    calls: list[list[str]] = []
-
-    def fake_run(command, **kwargs):
-        del kwargs
-        calls.append(command)
-
-    monkeypatch.setattr(subprocess, "run", fake_run)
-
-    processes.kill_processes_matching(
-        ["chrome.exe"], "openprogram/chrome-profile"
-    )
-
-    assert calls == [["taskkill", "/F", "/T", "/PID", "22"]]
 
 
 def test_windows_private_directory_preserves_inherited_acl(
@@ -273,3 +231,78 @@ def test_detached_worker_is_killed_when_spawn_recording_fails(
     ) == 1
     assert killed == [4343]
     assert "failed to record spawned worker: OSError: disk full" in capsys.readouterr().out
+
+
+# What a Chinese Windows prints: netstat's header and the schtasks and
+# PowerShell errors are in the OEM code page (cp936), which is not UTF-8.
+_NETSTAT_ZH = (
+    "\r\n活动连接\r\n\r\n  协议  本地地址          外部地址        状态           PID\r\n"
+    "  TCP    127.0.0.1:18100    0.0.0.0:0       LISTENING       4321\r\n"
+)
+
+
+def _console_tool_writes(monkeypatch, *, stdout: str = "", stderr: str = "", code: int = 0):
+    """Replace the next console tool with a real child writing cp936 bytes."""
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(processes, "_oem_codec", lambda: "cp936")
+    monkeypatch.setattr(subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
+    real_run = subprocess.run
+    child = (
+        "import sys;"
+        f"sys.stdout.buffer.write({stdout.encode('cp936')!r});"
+        f"sys.stderr.buffer.write({stderr.encode('cp936')!r});"
+        f"sys.exit({code})"
+    )
+
+    def run(argv, **options):
+        del argv
+        # Its own console, so the OEM code page is the one it writes in.
+        assert options.pop("creationflags") == 0x08000000
+        return real_run([sys.executable, "-I", "-c", child], **options)
+
+    monkeypatch.setattr(subprocess, "run", run)
+
+
+def test_windows_pids_on_port_reads_netstat_in_the_console_code_page(monkeypatch) -> None:
+    _console_tool_writes(monkeypatch, stdout=_NETSTAT_ZH)
+
+    assert processes.pids_on_port(18100) == [4321]
+
+
+def test_console_text_reads_the_console_code_page(monkeypatch) -> None:
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(processes, "_oem_codec", lambda: "cp936")
+
+    # These four bytes are also valid UTF-8, for two unrelated characters.
+    assert "状态".encode("cp936").decode("utf-8") != "状态"
+    assert processes.console_text("状态".encode("cp936")) == "状态"
+    assert processes.console_text(b"\x81") == "\ufffd"
+    assert processes.console_text(None) == ""
+    assert processes.console_text("already text") == "already text"
+
+
+def test_windows_schtasks_failure_is_reported_in_the_console_code_page(
+    tmp_path, monkeypatch
+) -> None:
+    import pytest
+
+    from openprogram.operations.self_update.delivery import controller, launcher_windows
+
+    _console_tool_writes(monkeypatch, stderr="错误: 拒绝访问。\r\n", code=1)
+
+    with pytest.raises(controller.ControllerLaunchError, match="拒绝访问"):
+        launcher_windows.submit_controller(
+            "ai.test", ["C:\\py.exe"], {}, tmp_path / "supervisor.log"
+        )
+
+
+def test_windows_service_powershell_error_is_read_in_the_console_code_page(
+    monkeypatch,
+) -> None:
+    from openprogram.operations.worker.services import windows
+
+    _console_tool_writes(monkeypatch, stderr="找不到任务。\r\n", code=1)
+    monkeypatch.setattr(windows.shutil, "which", lambda name: "powershell.exe")
+
+    assert windows._powershell("Get-ScheduledTask") == (1, "找不到任务。")

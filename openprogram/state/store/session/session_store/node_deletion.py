@@ -121,7 +121,10 @@ class NodeDeletionOperations:
         old_head = idx.head_id
         new_head = survivor_above(old_head) if old_head in doomed else old_head
 
-        branches = dict(idx.meta.get("branches") or {})
+        # Branch records as they are on disk: the cached copy may miss a
+        # write another process made (``_meta_for_write``).
+        durable = session_log.read_meta()
+        branches = dict(durable.get("branches") or {})
         branch_moves = []
         for nid in doomed:
             if nid not in branches:
@@ -159,6 +162,7 @@ class NodeDeletionOperations:
             session_log.patch_node(row["id"], {"predecessor": row["new"]})
 
         meta = dict(idx.meta)
+        shared.take_durable_branch_records(meta, durable)
         meta["branches"] = branches
         meta["head_id"] = new_head
         self._commit_rebuild(session_log, idx, meta)
@@ -166,6 +170,7 @@ class NodeDeletionOperations:
             tips = self.list_branches(session_id)
             if tips:
                 meta = dict(idx.meta)
+                shared.take_durable_branch_records(meta, session_log.read_meta())
                 meta["head_id"] = tips[0]["head_msg_id"]
                 journal["head"]["new"] = meta["head_id"]
                 shared.atomic_write_text(
@@ -207,7 +212,9 @@ class NodeDeletionOperations:
                 head = journal.get("head") or {}
                 if meta["head_id"] == head.get("new"):
                     meta["head_id"] = head.get("old")
-                branches = dict(meta.get("branches") or {})
+                durable = session_log.read_meta()
+                shared.take_durable_branch_records(meta, durable)
+                branches = dict(durable.get("branches") or {})
                 for move in journal.get("branch_moves") or []:
                     to = move.get("to")
                     if to and branches.get(to) == move.get("entry"):

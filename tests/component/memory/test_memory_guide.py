@@ -43,7 +43,9 @@ def test_first_commit_writes_a_generated_map(tmp_path):
     _commit(root)
     text = (root / "MEMORY.md").read_text(encoding="utf-8")
     assert "## Layout" in text and "`timeline/`" in text
-    assert "`topics/projects/trip/visa.md` — Visitor visa subclass 600 covers the conference trip." in text
+    # The map names files and states no facts: a file goes by its title.
+    assert "`topics/projects/trip/visa.md` — Visa" in text
+    assert "Visitor visa subclass 600" not in text
     assert "`topics/core.md` —" not in text
 
 
@@ -86,3 +88,27 @@ def test_git_history_records_the_map(tmp_path):
     RuntimeStateStore(root).git_commit("memory: test")
     tracked = subprocess.run(["git", "ls-files"], cwd=root, capture_output=True, text=True).stdout
     assert "MEMORY.md" in tracked.splitlines()
+
+
+def test_deleting_a_topic_s_last_record_takes_its_line_out_of_the_map(tmp_path):
+    """A delete through ``memory_update`` runs no agent; the map, which
+    every session reads, must not keep naming (or quoting) what was removed."""
+    from openprogram.state.memory.management import MemoryWorkspace
+
+    root = _root(tmp_path)
+    _commit(root)
+    agents_map = (
+        "# Map\n\n## Subjects\n\n"
+        "- `topics/projects/` — work\n"
+        "  - `topics/projects/trip/visa.md` — Visitor visa subclass 600 covers the conference trip.\n"
+        "- `topics/projects/trip/` — the trip\n"
+    )
+    _commit(root, lambda stage: (stage / "MEMORY.md").write_text(agents_map, encoding="utf-8"))
+    with closing(MemoryWorkspace(root)) as workspace:
+        workspace.update(memory_changes=[{"op": "delete_record", "memory_id": "abc12345"}],
+                         git_commit="off")
+    assert not (root / "topics/projects/trip/visa.md").exists()
+    text = (root / "MEMORY.md").read_text(encoding="utf-8")
+    assert "Visitor visa" not in text
+    assert text.startswith("# Map\n\n## Subjects\n\n- `topics/projects/` — work\n")
+    assert "Owner prefers Chinese" in text  # the core section stays

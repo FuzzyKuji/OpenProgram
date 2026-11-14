@@ -212,13 +212,14 @@ def wrap_with_approval(
         detail = _approval_detail(name, shown)
         return {
             "kind": "approval",
-            "prompt": f"允许执行 {name}？",
+            "prompt": _asked_by(req) + f"允许执行 {name}？",
             "options": ["允许", "拒绝"],
             "allow_custom": False,
             "detail": detail,
             "request_metadata": {
                 "tool": name, "args": args, "tool_call_id": str(call_id),
                 **({"shown_args": shown} if shown is not args else {}),
+                **_asker_metadata(req),
                 "risk_level": _risk_level(name, args),
                 "approval_reason": reason,
                 "allowed_scopes": scopes,
@@ -247,12 +248,13 @@ def wrap_with_approval(
         scopes = ["once", "session"]
         return {
             "kind": "approval",
-            "prompt": f"允许 {name} 在沙箱外执行？",
+            "prompt": _asked_by(req) + f"允许 {name} 在沙箱外执行？",
             "options": ["允许", "拒绝"],
             "allow_custom": False,
             "detail": detail,
             "request_metadata": {
                 "tool": f"{name}:{ESCALATION_SUFFIX}", "args": shown, "tool_call_id": str(call_id),
+                **_asker_metadata(req),
                 "risk_level": "high",
                 "approval_reason": "SANDBOX_ESCALATION",
                 "allowed_scopes": scopes,
@@ -342,6 +344,12 @@ def wrap_with_approval(
         """Run one command outside the sandbox the model asked to leave."""
         if req.permission_mode != "bypass":
             if not can_approve(req):
+                if getattr(req, "run_note", None):
+                    return _denied(refusal.non_interactive(
+                        name, args, layer="sandbox", wanted="SANDBOX_ESCALATION"))
+                if req.source == "agent_spawn":
+                    return _denied(refusal.helper_cannot_ask(
+                        name, args, layer="sandbox", wanted="SANDBOX_ESCALATION", mode=req.permission_mode))
                 return _denied(refusal.no_one_to_approve(
                     name, args, source=req.source, mode=req.permission_mode,
                     wanted="SANDBOX_ESCALATION", layer="sandbox"))
@@ -461,6 +469,26 @@ def wrap_with_approval(
     object.__setattr__(wrapped, "_permission_preflight", _permission_preflight)
     object.__setattr__(wrapped, "_interaction_manifest", _interaction_manifest)
     return wrapped
+
+
+def _asked_by(req) -> str:
+    """The name a foreground sub-agent's card starts with, in its caller's
+    conversation, so the person sees which helper asks; empty otherwise."""
+    from openprogram.runtime.permissions.policy import asks_through_caller
+    if not asks_through_caller(req):
+        return ""
+    label = str((getattr(req, "asks_through", None) or {}).get("label") or "").strip()
+    return f"[{label}] " if label else ""
+
+
+def _asker_metadata(req) -> dict:
+    """The sub-agent a card asks for, kept on the wait (``question_frame_data``)."""
+    from openprogram.runtime.permissions.policy import asks_through_caller
+    if not asks_through_caller(req):
+        return {}
+    route = getattr(req, "asks_through", None) or {}
+    return {"asked_by": str(route.get("label") or ""),
+            "asked_for_execution": str(route.get("execution_id") or "")}
 
 
 def _risk_level(tool_name: str, args: dict) -> str:

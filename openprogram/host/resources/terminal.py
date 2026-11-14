@@ -232,7 +232,13 @@ def execute(action: str, terminal_id: str = "", generation: str = "", binding_id
     candidates = [(ws, wid, rev) for ws, wid, rev in desktop_link.registered_desktop_windows()
                   if not window_id or wid == window_id]
     if len(candidates) != 1:
-        return {"ok": False, "error": "terminal_requires_one_originating_desktop_window"}
+        # A terminal is a pane of an App window. A turn with no window of its
+        # own (a scheduled run, or the App is closed) has none to use.
+        return {"ok": False, "error": "terminal_requires_one_originating_desktop_window",
+                "message": ("Several OpenProgram App windows are open and this turn belongs to none of them."
+                            if candidates else
+                            "No OpenProgram App window is open for this turn, and a terminal is a pane of one.")
+                           + " Run commands with bash; it needs no window."}
     ws, window_id, revision = candidates[0]
     owner_id = f"{session_id}:{execution_id}"
     operation_id = str(runtime_facts.current_tool_call_id() or call_id or secrets.token_hex(16))

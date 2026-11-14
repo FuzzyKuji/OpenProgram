@@ -40,6 +40,7 @@ from pathlib import Path
 from openprogram.host._platform import locking
 from typing import Any, Optional
 import logging
+from openprogram.host._platform.filesystem import replace_file
 
 _log = logging.getLogger(__name__)
 
@@ -105,7 +106,7 @@ def _write(rows: list[dict[str, Any]]) -> None:
             json.dumps(payload, indent=2, sort_keys=True),
             encoding="utf-8",
         )
-        os.replace(tmp, path)
+        replace_file(tmp, path)
 
 
 def _match_account(row: dict, channel: str, account_id: str) -> bool:

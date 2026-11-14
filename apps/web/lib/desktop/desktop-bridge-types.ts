@@ -18,6 +18,10 @@ export interface DesktopThemeApi {
   /** Bounded local diagnostic metadata; never includes messages or page URLs. */
   trace?(payload: { source: string; theme?: string | null; previousTheme?: string | null;
     style?: string; mode?: string; storedMode?: string | null; systemDark?: boolean }): void;
+  /** The OS appearance as the main process reads it; what Auto follows in the App. */
+  systemDark?(): boolean | undefined;
+  /** Fires when the OS appearance changes; returns the unsubscribe function. */
+  onSystemChange?(listener: (dark: boolean) => void): () => void;
 }
 
 /** Public WebTab contracts exposed by the Electron preload bridge. */
@@ -37,15 +41,6 @@ export interface DesktopWebTabFindResult {
   activeMatchOrdinal: number;
   matches: number;
   finalUpdate: boolean;
-}
-
-export type DesktopWebTabHumanInputKind = "pointer" | "key" | "scroll" | "navigate";
-
-export interface DesktopWebTabHumanInput {
-  id: string;
-  windowId: string;
-  sequence: number;
-  kind: DesktopWebTabHumanInputKind;
 }
 
 export interface DesktopBrowserControlOverlay {
@@ -210,8 +205,6 @@ export interface DesktopWebTabApi {
   onPopup?(cb: (popup: { openerId: string; url: string; id?: string }) => void): () => void;
   onFindResult?(cb: (result: DesktopWebTabFindResult) => void): () => void;
   onCommand?(cb: (command: { id: string; command: "find" | "focus-address" | "overview" | "palette" }) => void): () => void;
-  /** Native human input on an owned Page. Payload has no typed text, keys, coords, or URLs. */
-  onHumanInput?(cb: (input: DesktopWebTabHumanInput) => void): () => void;
 }
 /** One recorded page visit from the desktop browsing history. */
 export interface DesktopHistoryEntry {

@@ -5,6 +5,8 @@
 
 <p>Native x64 and ARM64 jobs run platform contracts and the complete unit suite with four workers. A blocked diagnostic process and ordinary failed tests must each emit their details and exit unsuccessfully.</p>
 
+<p>Those two legs set <code translate="no">PYTHONUTF8=1</code>, the mode the released launchers start Python in. A third x64 leg sets <code translate="no">PYTHONUTF8=0</code> for the processes the product still starts in the system code page.</p>
+
 <table class="stack fixed">
 <thead class="sr"><tr><th scope="col">Concern</th><th scope="col">Rule</th></tr></thead>
 <tbody>
@@ -33,4 +35,4 @@
 
 <h2 id="status">Implementation status</h2>
 
-<p>Native confirmation of the final x64 and ARM64 regression runs is outstanding.</p>
+<p>Native confirmation of the final x64 and ARM64 regression runs is outstanding. The <code translate="no">PYTHONUTF8=0</code> leg and, in the install smoke workflow, the App steps (<code translate="no">scripts/release/smoke-windows-desktop.ps1</code>), the x64 files on the Arm runner and the tool call through the worker (<code translate="no">scripts/release/smoke-tool-call.py</code>) have not run.</p>

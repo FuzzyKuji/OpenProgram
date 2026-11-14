@@ -19,6 +19,7 @@ from unittest.mock import patch
 import pytest
 
 from openprogram.runtime.conversation import turn_runtime as D
+from openprogram.runtime.agent_registry.manager import AgentModelRef
 from openprogram.runtime.context.session_db import SessionDB
 from openprogram.interfaces.channels import _conversation as C
 from openprogram.interfaces.channels._message import ChannelMessage
@@ -106,6 +107,12 @@ def stub_routing(monkeypatch: pytest.MonkeyPatch):
         session_scope = "per-account-channel-peer"
         session_daily_reset = ""
         session_idle_minutes = 0
+        # Branch settings fall back to the Agent's own model, effort and
+        # tool policy; this Agent names none of them.
+        model = AgentModelRef()
+        thinking_effort = None
+        tools = None
+        always_on: dict = {}
 
     monkeypatch.setattr("openprogram.runtime.agent_registry.manager.get",
                         lambda agent_id: _StubAgent())
@@ -120,6 +127,17 @@ def stub_routing(monkeypatch: pytest.MonkeyPatch):
     tmp = Path(tempfile.mkdtemp())
     monkeypatch.setattr("openprogram.runtime.agent_registry.manager.sessions_dir",
                         lambda agent_id: tmp / agent_id)
+
+
+def _with_browser_app(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The browser application is loaded, whatever earlier tests left: the
+    conversation's own turn then carries the screen tool at the end of its
+    tools array (refused without a Page)."""
+    from openprogram.programs._host import services
+
+    lookup = services.lookup
+    monkeypatch.setattr(services, "lookup",
+                        lambda name: object() if name == "browser" else lookup(name))
 
 
 def test_dispatch_inbound_persists_via_session_db(
@@ -382,6 +400,7 @@ def test_dispatch_inbound_uses_bound_session_run_config(
         )
 
     assert reply == "configured"
+    # An Agent with no tools gets none, not even the screen tool.
     assert seen["tools"] == []
     assert seen["reasoning"] == "high"
     assert seen["permission_mode"] == "bypass"
@@ -479,6 +498,7 @@ def test_ambient_room_event_speaks_only_through_chat_send(
     monkeypatch.setattr("openprogram.state.paths.get_state_dir", lambda: tmp_path)
     monkeypatch.setattr(D, "_load_agent_profile", lambda agent_id: {
         "id": agent_id, "system_prompt": "", "tools": ["chat_send"]})
+    _with_browser_app(monkeypatch)
     posted: list[tuple[str, str, str, str]] = []
     monkeypatch.setattr(
         "openprogram.interfaces.channels._transport.post_message",
@@ -519,7 +539,8 @@ def test_ambient_room_event_speaks_only_through_chat_send(
         )
 
     assert reply is None
-    assert calls[0] == ["chat_send"]
+    # The screen tool stays at the end of the array, refused without a Page.
+    assert calls[0] == ["chat_send", "computer_use_agent"]
     assert posted == [("telegram", "acct1", "-100", "Lunch is at noon.")]
     assert seen["memory"] == {"mode": "off"}
     [session] = tmp_db.list_sessions()

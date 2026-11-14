@@ -1,3 +1,4 @@
+import { adoptBranchIdentity, adoptStoredControls } from "@/lib/agents/branch-settings";
 /**
  * Provider / agent-settings / token-badge data layer.
  *
@@ -75,6 +76,24 @@ export function updateProviderBadge(info: ProviderInfo | null | undefined): void
 
 /** Guards the one-shot retry below; was `(window as any)._chatRetried`. */
 let chatRetried = false;
+const settingsReads = new Map<string, number>();
+/** The branch a settings reply describes: the named one it answered for,
+ *  else (an older server) the selected one. */
+function settingsBranch(data: { branch_id?: unknown; active_branch_id?: unknown }): unknown {
+  return typeof data.branch_id === "string" ? data.branch_id : data.active_branch_id;
+}
+function beginSettingsRead(sid: string) {
+  const version = (settingsReads.get(sid) ?? 0) + 1;
+  settingsReads.set(sid, version);
+  const branchId = useSessionStore.getState().composerSettingsBySession[sid]?.active_branch_id ?? null;
+  // The read names the pane's branch, so a pane on a branch that is not
+  // selected reads its own model back (after a broadcast wiped it, too).
+  const query = "?session_id=" + encodeURIComponent(sid) + (branchId ? "&branch_id=" + encodeURIComponent(branchId) : "");
+  const accept = (data: { branch_id?: unknown; active_branch_id?: unknown }) => settingsReads.get(sid) === version
+    && (useSessionStore.getState().composerSettingsBySession[sid]?.active_branch_id ?? null) === branchId
+    && (settingsBranch(data) === undefined || branchId === null || settingsBranch(data) === branchId);
+  return { query, accept };
+}
 
 type AgentSettingsPayload = { chat?: AgentBadgeInfo; exec?: AgentBadgeInfo };
 
@@ -92,11 +111,27 @@ function rememberSessionAgentSettings(key: string, settings: AgentSettingsPayloa
  *  a split pane's. Only that conversation's entry changes. */
 export async function loadSessionAgentSettings(sessionId: string): Promise<void> {
   try {
-    const resp = await fetch("/api/agent_settings?session_id=" + encodeURIComponent(sessionId));
-    rememberSessionAgentSettings(sessionId, await resp.json());
+    const { query, accept } = beginSettingsRead(sessionId);
+    const resp = await fetch("/api/agent_settings" + query);
+    const data = await resp.json();
+    if (accept(data)) {
+      adoptBranchIdentity(sessionId, useSessionStore.getState().composerSettingsBySession[sessionId]?.active_branch_id ?? null, settingsBranch(data));
+      adoptStoredControls(sessionId, data.settings);
+      rememberSessionAgentSettings(sessionId, data);
+    }
   } catch {
     /* the pane keeps what it had */
   }
+}
+
+/** ``agent_settings_changed``: a model pick on some conversation's selected
+ *  branch, or models enabled or disabled in Settings. The frame does not say
+ *  which conversation it is about, so no chip takes its model: every chip
+ *  keeps what it shows until its own read lands — the focused conversation's
+ *  here, each other shown pane's when the epoch moves. */
+export function agentSettingsChanged(): Promise<void> {
+  useSessionStore.getState().markSessionAgentSettingsStale();
+  return loadAgentSettings();
 }
 
 export async function loadAgentSettings(): Promise<void> {
@@ -110,12 +145,16 @@ export async function loadAgentSettings(): Promise<void> {
       st.currentSessionId
       ?? runtimeState.currentSessionId
       ?? (st.activeChatKey && st.activeChatKey !== "__new__" ? st.activeChatKey : null));
-    if (sid) {
-      url += "?session_id=" + encodeURIComponent(sid);
-    }
+    const read = sid ? beginSettingsRead(sid) : null;
+    if (read) url += read.query;
     const resp = await fetch(url);
     const newSettings = await resp.json();
+    if (read && !read.accept(newSettings)) return;
+    if (sid) adoptBranchIdentity(sid, useSessionStore.getState().composerSettingsBySession[sid]?.active_branch_id ?? null, settingsBranch(newSettings));
+    if (sid) adoptStoredControls(sid, newSettings.settings);
     if (sid) rememberSessionAgentSettings(sid, newSettings);
+    const focused = useSessionStore.getState().currentSessionId ?? runtimeState.currentSessionId;
+    if (sid && focused && sid !== focused) return;
     if (newSettings.chat) runtimeState._agentSettings.chat = newSettings.chat;
     if (newSettings.exec) runtimeState._agentSettings.exec = newSettings.exec;
   } catch {

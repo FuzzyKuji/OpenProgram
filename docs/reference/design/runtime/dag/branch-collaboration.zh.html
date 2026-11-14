@@ -48,6 +48,39 @@
 </table>
 </details>
 
+<h2 id="three-operations">切换、重新开始、回退</h2>
+
+<table class="stack">
+<thead><tr><th scope="col">操作</th><th scope="col">新建什么</th><th scope="col">有分支在运行时</th></tr></thead>
+<tbody>
+<tr><th scope="row">切换到已有分支</th><td>什么都不建；视图和 head 移到那条分支的末端</td><td>总是允许</td></tr>
+<tr><th scope="row">从旧位置重新开始：编辑后重发、重试、在图里选中一条消息后发送</th><td>在原分支旁新建一条分支，有自己的记录（新消息的 <code translate="no">branch_identity</code>）。两条都保留，都能运行。重试一条从没得到回复的提问时，改为重跑那条提问</td><td>其他分支运行时可从任意位置开始；选中分支自己的轮次在跑时等待</td></tr>
+<tr><th scope="row">回退</th><td>什么都不建。就地撤回当前分支的尾部：分支 id、名字、设置和用量不变；末端退到所选提问之前，那条提问回到输入框</td><td>那条分支在运行时拒绝；改动文件的回退在任一分支运行时拒绝</td></tr>
+</tbody>
+</table>
+
+<p>DAG 只追加，所以回退不删任何东西。它把撤回的节点列进会话元数据（<code translate="no">rewind_hidden_nodes</code>；旧末端在 <code translate="no">rewind_hidden_heads</code>），由 <code translate="no">rewind_view.view_update</code> 和 head 在同一次 compare-and-set 里写入。每个读取方都跳过它们：</p>
+<ul>
+<li>对话记录、消息读取和搜索；</li>
+<li>分支列表和版本计数，所以回退后发的消息延续这条分支，不多出一个版本；</li>
+<li>请求的上下文，它从末端往回走；</li>
+<li>压缩：总结了撤回轮次的摘要一起撤回，它之前的摘要重新生效（<code translate="no">active_summary_for_chain</code> 跳过图的 <code translate="no">retracted</code> 集合）；</li>
+<li>上下文提交时间线。</li>
+</ul>
+<p>回退的撤销和重做把这些节点移出、移回列表。切换到被撤回的末端会被拒绝，并提示用撤销。以前的回退留下了额外分支的会话保持原样，不做迁移。文件恢复见 <a href="../operations/file-management.zh.html#shared-workspace-contract">文件管理</a>。</p>
+
+<p class="note">同类产品都把回退当成从当前这条线上去掉最近的轮次，而不是开一条新线。Claude Code 的 <code translate="no">/rewind</code> 就地截断对话，会话不变，提问还给输入框；分叉是另一个复制会话的命令。Codex 记一条带轮数的 <code translate="no">ThreadRolledBack</code>；这些轮次留在 rollout 文件里，离开历史，也不能作为分叉锚点。</p>
+<p class="note">撤回列表相当于 Codex 的回滚标记，另外保留了会话内的撤销，两家都没有。重新开始仍是单独的操作，所以回退不会让人丢掉原来的内容，撤回也不会多出一个版本。</p>
+
+<h2 id="branch-owned-work">属于某条分支的工作</h2>
+
+<p>在一条分支上开始的工作，在用户选中别的分支后仍作用于原分支：</p>
+<ul>
+<li>Goal 记下它开始时所在的分支（<code translate="no">branch_id</code>）。它的签到和验证继续并读取那条分支；其他分支上的轮次既拿不到它的说明，也不计入它。此前保存的 Goal 跟随选中分支。</li>
+<li><code translate="no">/merge</code> 和 <code translate="no">merge_branches</code> 把回复写到开始时的分支（<code translate="no">target_branch_id</code>），只有那条分支仍被选中时才移动 head。</li>
+<li>为忙碌会话排队的 <code translate="no">send_message</code> 从它指向的那条分支的末端继续。</li>
+</ul>
+
 <h2 id="implementation-status">实现状态</h2>
 <table class="stack fixed">
 <thead class="sr"><tr><th scope="col">状态</th><th scope="col">内容</th></tr></thead>

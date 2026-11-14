@@ -21,7 +21,8 @@ import "@/lib/net/ws/ws-events";
 import { getSocket } from "@/lib/runtime-bridge/state";
 import { showActionsEnabled } from "@/lib/browser/control/browser-control";
 import { desktopBridge } from "./bridge-api";
-import { receiveBrowserResource, showCenterSurface, subscribeAgentPageGlow, subscribeBrowserHumanInput, subscribeWebTabPopups } from "./bridge-events";
+import { handleRecordCommand, type RecordCommand } from "../recording/pane-recorder";
+import { receiveBrowserResource, showCenterSurface, subscribeAgentPageGlow, subscribeWebTabPopups } from "./bridge-events";
 import { destroyStaleWebViews, persistNativeWebTabState, reregisterDesktopWindow, restorableResourceForTab, restoreRetainedWebViews, retryRestoreWebTab } from "./bridge-restoration";
 import { ensureWebView, isDesktopSplitLayoutAvailable, liveViewIds, waitForWebTabReady, webTabGeometryRevisions } from "./bridge-state";
 import { browserPageInventory, closeAgentWebTabResult, finalizeBoundWebTabActivation, finalizeBoundWebTabScreenshot, finalizeWebTabPreview, restorePriorActiveTabAfterFailedWebOpen, selectedMirrorTabById, sendWebTabResult, visibleWebTab, visibleWebTabById } from "./bridge-surfaces";
@@ -81,14 +82,13 @@ export function installDesktopMenuHandlers(): void {
     .map((tab) => tab.id);
   // Register the exact renderer window as soon as the authenticated socket is
   // available. Restoration may wait on resources or transfer recovery and
-  // must not gate the owner/window association used by web_use.
+  // must not gate the owner/window association the tab driver uses.
   reregisterDesktopWindow(bridge);
   window.addEventListener("op-desktop-new-tab", () => {
     useCenterTabs.getState().openNewTabPage();
     showCenterSurface();
   });
   subscribeWebTabPopups(bridge);
-  subscribeBrowserHumanInput(bridge);
   subscribeAgentPageGlow(bridge);
   bridge.webTab.onState((state) => persistNativeWebTabState(state));
   window.addEventListener("op:browser-connection", (event: Event) => {
@@ -116,9 +116,18 @@ export function installDesktopMenuHandlers(): void {
     const d = detail.data as
       | { op?: string; scope?: string; url?: string; session_id?: string; execution_id?: string; branch_id?: string; window_id?: string; tab_id?: string; req_id?: string; background?: boolean; nonce?: string; expected_geometry_revision?: number }
       | undefined;
-    if (!d?.req_id || !["open", "active", "activate", "preview", "screenshot", "list", "resolve", "close", "self_update_capture"].includes(d.op || "")) return;
+    if (!d?.req_id || !["open", "active", "activate", "preview", "screenshot", "list", "resolve", "close", "self_update_capture", "record_panes", "record_start", "record_stop"].includes(d.op || "")) return;
     const ws = getSocket();
     if (ws?.readyState !== WebSocket.OPEN) return;
+    // Pane video recording, asked for by an Agent (lib/desktop/recording).
+    if (d.op?.startsWith("record_")) {
+      handleRecordCommand(bridge, d as RecordCommand, useCenterTabs.getState().tabs, (result) => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ action: "webtab_result", req_id: d.req_id, window_id: bridge.windowId, ...result }));
+        }
+      });
+      return;
+    }
 
     const canAccess = (id: string) => agentCanAccessWebTab(id, d.session_id, useCenterTabs.getState());
     const denied = { ok: false, reason_code: "page_not_accessible", error: "Page is private to another conversation" };

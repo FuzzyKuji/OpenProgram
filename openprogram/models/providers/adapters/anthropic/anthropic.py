@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import re
 import time
-from typing import Any, AsyncGenerator
+from typing import Any, AsyncGenerator, Optional
 
 # The ``anthropic`` SDK is a base dependency (installed by default). This
 # guarded import only stays defensive so importing this module succeeds
@@ -60,6 +60,7 @@ from ...utils.cancelable_stream import iter_until_cancelled
 from ...utils.json_parse import parse_streaming_json
 from ...utils.sanitize_unicode import sanitize_surrogates
 from ...shared.transform_messages import transform_messages as _transform_messages
+from ...shared.tool_attachments import AttachmentMessage
 from ...shared.validate_modalities import validate_input_modalities
 
 # Anthropic beta features
@@ -84,6 +85,16 @@ _BETA_CONTEXT_1M = "context-management-2025-06-27"
 # 账户没充 usage credits 时 Anthropic 会 429（"Usage credits are
 # required for fast mode"）——如实透传给界面，不代表模型不支持。
 _BETA_FAST = "fast-mode-2026-02-01"
+# Loading a searched tool by ``tool_reference`` (the "anthropic-reference"
+# form, settings/tool_search_spec.py). Claude Code sends the first on the
+# first-party API and the second on Vertex and Bedrock.
+_BETA_TOOL_SEARCH = "advanced-tool-use-2025-11-20"
+_BETA_TOOL_SEARCH_3P = "tool-search-tool-2025-10-19"
+#: The text beside a result made only of tool_reference blocks: a user
+#: message may not end in one (Claude Code ``messages.ts``). Sent on every
+#: request, so the bytes never change once sent.
+TOOL_LOADED_TEXT = "Tool loaded."
+_TOOL_SEARCH = "tool_search"
 
 
 def _wants_1m(model_id: str) -> bool:
@@ -111,6 +122,26 @@ def _anthropic_strict_on(model: "Model", is_oauth: bool) -> bool:
         return False
     from openprogram.models.providers.schema import wants_strict_flag
     return wants_strict_flag(getattr(model, "api", None), getattr(model, "id", None))
+
+
+def _observe_api_key_limits(model: Any, ant_stream: Any, *, is_oauth: bool,
+                            base_url: Optional[str], account: Optional[str], api_key: str) -> None:
+    """Keep the ``anthropic-ratelimit-*`` headroom of an official API-key reply.
+
+    Only the official API with an API key: a sign-in token's limits and an
+    Anthropic-compatible host's headers are not read.
+    """
+    if is_oauth or model.provider != "anthropic":
+        return
+    host = (base_url or "https://api.anthropic.com").rstrip("/")
+    if host not in ("https://api.anthropic.com", "https://api.anthropic.com/v1"):
+        return
+    response = getattr(ant_stream, "response", None)
+    headers = getattr(response, "headers", None)
+    if headers is None:
+        return
+    from openprogram.models.usage.quota import observe_headers
+    observe_headers(model.provider, api_key, headers, account=account)
 
 
 def _is_oauth_token(api_key: str) -> bool:
@@ -192,6 +223,7 @@ def _build_client(
     is_oauth_override: bool | None = None,
     base_url_override: str | None = None,
     fast: bool = False,
+    tool_search: bool = False,
 ) -> tuple[_anthropic.AsyncAnthropic, bool]:
     """
     Build the Anthropic async client with appropriate headers.
@@ -235,6 +267,8 @@ def _build_client(
         beta_features.append(_BETA_CONTEXT_1M)
     if fast:
         beta_features.append(_BETA_FAST)
+    if tool_search:
+        beta_features.append(_tool_search_beta(base_url))
 
     # SDK-level retry budget: Anthropic SDK retries 429/5xx/transport
     # errors with its own exponential backoff. Default is 2; we raise
@@ -266,6 +300,66 @@ def _build_client(
     return client, is_oauth
 
 
+def _tool_search_beta(base_url: str | None) -> str:
+    """The tool-search beta for this endpoint: Vertex takes the third-party
+    name, the first-party API the other (``CC/utils/betas.ts``)."""
+    host = (base_url or "").lower()
+    if "aiplatform.googleapis.com" in host or "vertex" in host:
+        return _BETA_TOOL_SEARCH_3P
+    return _BETA_TOOL_SEARCH
+
+
+def _uses_references(model: Model, context: Context) -> bool:
+    """Whether this request loads searched tools by ``tool_reference``: the
+    model takes the "anthropic-reference" form and the request offers the
+    loader."""
+    from openprogram.models.providers.settings.tool_search_spec import model_tool_search_form
+
+    return model_tool_search_form(model) == "anthropic-reference" and any(
+        getattr(t, "name", None) == _TOOL_SEARCH for t in (context.tools or ()))
+
+
+def _reference_records(msg: Any) -> list[dict[str, Any]]:
+    """The load records a tool result sends as ``tool_reference`` blocks: a
+    ``tool_search`` result that loaded something. Any other result (no
+    match, an error, a stopped call, a guide's old record) is sent as text."""
+    if not isinstance(msg, ToolResultMessage) or msg.tool_name != _TOOL_SEARCH or msg.is_error:
+        return []
+    from openprogram.models.providers.shared.tool_loads import load_records
+
+    return load_records(msg.details)
+
+
+def _deferred_tools(context: Context) -> Context:
+    """``context`` with the tools its searches loaded sent as deferred items.
+
+    Each tool a ``tool_search`` result references is appended after the
+    others with ``defer_loading``, in the order the history first loaded
+    it, with the definition its load record kept: the array only grows at
+    its end, and an entry never changes once sent. A tool a compaction
+    summary carries stays an ordinary item (the first request after a
+    summary is where the array may take a new shape).
+    """
+    from openprogram.models.providers.shared.tool_loads import carried_records
+    from openprogram.models.providers.types import Tool as _Tool
+
+    referenced: dict[str, dict[str, Any]] = {}
+    carried: set[str] = set()
+    for msg in context.messages:
+        if getattr(msg, "role", None) in ("user", "assistant"):
+            carried.update(entry["name"] for entry in carried_records(msg))
+        for entry in _reference_records(msg):
+            referenced.setdefault(entry["name"], entry["definition"])
+    deferred = {name: definition for name, definition in referenced.items() if name not in carried}
+    if not deferred:
+        return context
+    tools = [t for t in (context.tools or []) if t.name not in deferred]
+    tools += [_Tool(name=name, description=definition.get("description") or "",
+                    parameters=dict(definition.get("parameters") or {}), defer_loading=True)
+              for name, definition in deferred.items()]
+    return context.model_copy(update={"tools": tools})
+
+
 def _shared_http_client(base_url: str | None = None):
     """A per-event-loop shared httpx client for the Anthropic SDK.
 
@@ -295,8 +389,22 @@ def _shared_http_client(base_url: str | None = None):
     )
 
 
-def _convert_tool_result_block(tr_msg: ToolResultMessage, is_oauth: bool = False) -> dict[str, Any]:
-    """Convert a single ToolResultMessage to an Anthropic tool_result block."""
+def _convert_tool_result_block(tr_msg: ToolResultMessage, is_oauth: bool = False,
+                               references: bool = False) -> dict[str, Any]:
+    """Convert a single ToolResultMessage to an Anthropic tool_result block.
+
+    With ``references`` a search that loaded tools is sent as
+    ``tool_reference`` blocks only, never with text in the same result; its
+    text stays on the node for the page and for a model without the form.
+    """
+    records = _reference_records(tr_msg) if references else []
+    if records:
+        return {
+            "type": "tool_result",
+            "tool_use_id": tr_msg.tool_call_id,
+            "content": [{"type": "tool_reference", "tool_name": entry["name"]} for entry in records],
+            "is_error": False,
+        }
     cblocks: list[dict[str, Any]] = []
     for block in tr_msg.content:
         if isinstance(block, TextContent):
@@ -375,10 +483,12 @@ def _build_messages(
     context: Context,
     is_oauth: bool = False,
     cache_control: dict | None = None,
+    references: bool = False,
 ) -> list[dict[str, Any]]:
     """
     Convert Context messages to Anthropic API format.
     Batches consecutive toolResult messages into a single user message.
+    ``references`` sends a search's loads as ``tool_reference`` blocks.
     """
     result: list[dict[str, Any]] = []
     all_msgs = context.messages
@@ -386,15 +496,12 @@ def _build_messages(
 
     while i < len(all_msgs):
         msg = all_msgs[i]
-        is_last = i == len(all_msgs) - 1
 
         if isinstance(msg, UserMessage):
             if isinstance(msg.content, str):
                 text = _sanitize_surrogates(msg.content)
                 if text.strip():
                     block: dict[str, Any] = {"type": "text", "text": text}
-                    if is_last and cache_control:
-                        block["cache_control"] = cache_control
                     result.append({"role": "user", "content": [block]})
             else:
                 content_blocks: list[dict[str, Any]] = []
@@ -418,13 +525,6 @@ def _build_messages(
                         if getattr(block, "cache_control", None):
                             iblock["cache_control"] = block.cache_control
                         content_blocks.append(iblock)
-                # Provider-default breakpoint on the last block of the final
-                # user turn. Only apply it when the caller did not already mark
-                # a breakpoint somewhere in this message, so an explicit
-                # caller-supplied prefix breakpoint is not silently shadowed.
-                caller_marked = any("cache_control" in b for b in content_blocks)
-                if is_last and cache_control and content_blocks and not caller_marked:
-                    content_blocks[-1] = {**content_blocks[-1], "cache_control": cache_control}
                 if content_blocks:
                     result.append({"role": "user", "content": content_blocks})
 
@@ -467,12 +567,26 @@ def _build_messages(
 
         elif isinstance(msg, ToolResultMessage):
             # Batch consecutive toolResult messages into a single user message
-            tool_results: list[dict[str, Any]] = [_convert_tool_result_block(msg, is_oauth)]
+            tool_results: list[dict[str, Any]] = [_convert_tool_result_block(msg, is_oauth, references)]
 
             j = i + 1
             while j < len(all_msgs) and isinstance(all_msgs[j], ToolResultMessage):
-                tool_results.append(_convert_tool_result_block(all_msgs[j], is_oauth))
+                tool_results.append(_convert_tool_result_block(all_msgs[j], is_oauth, references))
                 j += 1
+            # The instructions those calls brought along go after the
+            # results, in the same user message (``tool_attachments``).
+            while j < len(all_msgs) and isinstance(all_msgs[j], AttachmentMessage):
+                for block in all_msgs[j].content:
+                    if isinstance(block, TextContent) and block.text.strip():
+                        tblock = {"type": "text", "text": sanitize_surrogates(block.text)}
+                        if getattr(block, "cache_control", None):
+                            tblock["cache_control"] = block.cache_control
+                        tool_results.append(tblock)
+                j += 1
+            if (any(_has_reference(block) for block in tool_results)
+                    and not any(block.get("type") == "text" for block in tool_results)):
+                # A message may not end in a result of references alone.
+                tool_results.append({"type": "text", "text": TOOL_LOADED_TEXT})
 
             result.append({"role": "user", "content": tool_results})
             i = j
@@ -480,7 +594,89 @@ def _build_messages(
 
         i += 1
 
+    result = _merge_adjacent_user_messages(result)
+    _mark_final_message(result, cache_control)
     return result
+
+
+def _merge_adjacent_user_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """One user message for two that follow each other with no reply between.
+
+    A reply stopped before it said anything is not sent (``context.render``),
+    so the person's next message follows the one it answered; the API wants
+    the roles to alternate. The blocks keep their order; a message holding
+    tool results is left as it is.
+    """
+    merged: list[dict[str, Any]] = []
+    for message in messages:
+        previous = merged[-1] if merged else None
+        if (previous is not None and previous.get("role") == "user" and message.get("role") == "user"
+                and not _has_tool_result(previous) and not _has_tool_result(message)):
+            merged[-1] = {**previous, "content": [*previous["content"], *message["content"]]}
+            continue
+        merged.append(message)
+    return merged
+
+
+def _has_reference(block: Any) -> bool:
+    return (isinstance(block, dict) and block.get("type") == "tool_result"
+            and any(isinstance(item, dict) and item.get("type") == "tool_reference"
+                    for item in block.get("content") or []))
+
+
+def _has_tool_result(message: dict[str, Any]) -> bool:
+    return any(isinstance(b, dict) and b.get("type") == "tool_result" for b in message.get("content") or [])
+
+
+# Anthropic rejects a request with more than four cache breakpoints.
+_MAX_BREAKPOINTS = 4
+
+
+def _mark_final_message(messages: list[dict[str, Any]], cache_control: dict | None) -> None:
+    """Put the provider-default breakpoint on the last block of the request.
+
+    The final message is a user turn: the person's message on the first
+    round of a turn, a batch of tool results on every later round. Marking it
+    every time caches the whole history, so the next round reads everything up
+    to here and pays only for what it adds. A message the caller already
+    marked keeps its own breakpoint."""
+    if not cache_control or not messages or messages[-1].get("role") != "user":
+        return
+    content = messages[-1]["content"]
+    if not content or any(isinstance(b, dict) and "cache_control" in b for b in content):
+        return
+    last = content[-1]
+    if isinstance(last, dict) and last.get("type") in ("text", "image", "tool_result", "document"):
+        content[-1] = {**last, "cache_control": cache_control}
+
+
+def _cap_breakpoints(system: list[dict[str, Any]] | None, tools: list[dict[str, Any]] | None,
+                     messages: list[dict[str, Any]]) -> None:
+    """Make the breakpoints a request Anthropic accepts, whoever placed them.
+
+    The request's own order is the cache prefix order (tools, system,
+    messages). At most four breakpoints: the earliest message breakpoints are
+    dropped first, so the final one, which covers the most, stays. A 1h
+    breakpoint may not follow a 5m one: once a 5m breakpoint appears (a
+    caller's mark, say), every later one takes the 5m lifetime too."""
+    marked = [b for b in (tools or []) if "cache_control" in b]
+    marked += [b for b in (system or []) if "cache_control" in b]
+    in_messages = [b for m in messages for b in m.get("content") or []
+                   if isinstance(b, dict) and "cache_control" in b]
+    excess = len(marked) + len(in_messages) - _MAX_BREAKPOINTS
+    for block in in_messages[:max(0, excess)]:
+        if block is not in_messages[-1]:
+            del block["cache_control"]
+    short_seen = False
+    for block in marked + in_messages:
+        control = block.get("cache_control")
+        if not control:
+            continue
+        if control.get("ttl") != "1h":
+            short_seen = True
+        elif short_seen:
+            # A new dict: the caller's own cache_control stays untouched.
+            block["cache_control"] = {k: v for k, v in control.items() if k != "ttl"}
 
 
 def _build_tools(
@@ -513,6 +709,8 @@ def _build_tools(
         }
         if strict and wants_strict_flag(api, mid, tool.parameters):
             entry["strict"] = True
+        if getattr(tool, "defer_loading", False):
+            entry["defer_loading"] = True
         # Pass through a tool-level cache breakpoint (set by cache_policy or the
         # caller). Anthropic accepts cache_control on a tool definition.
         if getattr(tool, "cache_control", None):
@@ -608,10 +806,12 @@ async def stream_simple(
     # 高速档：composer 的 fast 开关随消息带 service_tier；模型声明了
     # fast 才透传（Claude 线上形态 = speed:"fast" + fast-mode beta 头）。
     _fast = getattr(opts, "service_tier", None) in ("priority", "fast") and bool(getattr(model, "fast", False))
+    _references = _uses_references(model, context)
     client, is_oauth = _build_client(
         model, api_key,
         interleaved_thinking=True,
         fast=_fast,
+        tool_search=_references,
         options_headers=_merged_headers or None,
         is_oauth_override=is_oauth,
         base_url_override=base_url,
@@ -624,6 +824,8 @@ async def stream_simple(
         messages=transformed_msgs,
         tools=context.tools,
     )
+    if _references:
+        transformed_context = _deferred_tools(transformed_context)
 
     # Auto cache-breakpoint policy (opencode port): mark the last tool + latest
     # user message, preserving any caller-placed markers, within the 4-breakpoint
@@ -633,15 +835,19 @@ async def stream_simple(
         from openprogram.models.providers.settings.cache_policy import apply_cache_policy
         transformed_context = apply_cache_policy(
             transformed_context, "anthropic",
-            ttl_seconds=3600 if retention == "long" else None,
+            # Same lifetime as the system and final breakpoints: a 1h marker
+            # after a 5m one is rejected, and only some endpoints take 1h.
+            ttl_seconds=3600 if cache_control.get("ttl") == "1h" else None,
         )
 
-    messages = _build_messages(transformed_context, is_oauth=is_oauth, cache_control=cache_control)
+    messages = _build_messages(transformed_context, is_oauth=is_oauth, cache_control=cache_control,
+                               references=_references)
     tools = _build_tools(
         transformed_context, is_oauth=is_oauth, model=model,
         strict=_anthropic_strict_on(model, is_oauth),
     )
     system = _build_system(transformed_context, is_oauth=is_oauth, cache_control=cache_control)
+    _cap_breakpoints(system, tools, messages)
 
     max_tokens = opts.max_tokens if opts.max_tokens is not None else (model.max_tokens or 4096)
 
@@ -728,24 +934,6 @@ async def stream_simple(
         f = getattr(_signal, "is_set", None)
         return bool(_signal is not None and callable(f) and f())
 
-    # Cache-aware Microcompact: server-side clearing of old tool_result
-    # blocks without breaking the prompt cache prefix. A request's own
-    # ``opts.cache_edits`` wins; otherwise the producer the runtime
-    # registered (openprogram.models.cache_edits) decides when an edit
-    # fires. The context_management parameter is accepted only under the
-    # context-management beta header, which the client sets for
-    # [1m]-suffixed models — plain models must skip the injection or every
-    # request 400s.
-    from openprogram.models.cache_edits import default_cache_edits
-    _cache_edits = opts.get("cache_edits") or default_cache_edits()
-    if _cache_edits is not None and _wants_1m(model.id):
-        _ce = _cache_edits()
-        if _ce is not None:
-            # context_management is not in the SDK's stream() signature —
-            # a top-level kwarg raises TypeError. extra_body goes straight
-            # into the request body past signature validation.
-            params["extra_body"] = {**params.get("extra_body", {}), **_ce}
-
     # Apply on_payload callback (mirrors TS: const nextParams = await options?.onPayload?.(params, model))
     if opts.get("on_payload"):
         modified = opts["on_payload"](params, model)
@@ -755,10 +943,15 @@ async def stream_simple(
         if modified is not None:
             params = modified
 
+    from ...recording.capture import ANTHROPIC, capture_request
+    capture_request(model, params, wire=ANTHROPIC)
+
     yield EventStart(type="start", partial=partial)
 
     try:
         async with client.messages.stream(**params) as ant_stream:
+            _observe_api_key_limits(model, ant_stream, is_oauth=is_oauth, base_url=base_url,
+                                    account=_pooled[2] if _pooled else None, api_key=api_key)
             # <=250ms cancel poll — do not wait for the next token.
             async for event in iter_until_cancelled(ant_stream, _cancelled):
                 # Dispatch on the SSE protocol field, NOT the Python class

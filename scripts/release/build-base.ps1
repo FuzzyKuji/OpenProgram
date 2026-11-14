@@ -168,10 +168,17 @@ if (Test-Pin git $GitPin) {
 } else {
     Install-Git (Join-Path $Dest "git")
 }
+# The Git above is dugite-native. When its archive carries a bash, a machine
+# without Git for Windows runs commands in it rather than in PowerShell; the
+# command shell probe reads this field (relative to <base>\git, or null).
+$GitBash = $null
+foreach ($Candidate in @("bin\bash.exe", "usr\bin\bash.exe")) {
+    if (Test-Path -LiteralPath (Join-Path (Join-Path $Dest "git") $Candidate) -PathType Leaf) { $GitBash = $Candidate; break }
+}
 Copy-Item -LiteralPath $ProductConfig -Destination (Join-Path $Dest "product-runtime.json")
 Copy-Item -LiteralPath (Join-Path $RepoRoot "uv.lock") -Destination (Join-Path $Dest "product-uv.lock")
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot "verify-product-runtime.py") -Destination (Join-Path $Dest "bin\verify-product-runtime.py")
 
-@{ schema = "1"; python = $PythonPin; uv = $UvPin; playwright = $PlaywrightPin; node = $NodePin; npm = $NpmPin; git = $GitPin } |
+@{ schema = "1"; python = $PythonPin; uv = $UvPin; playwright = $PlaywrightPin; node = $NodePin; npm = $NpmPin; git = $GitPin; gitBash = $GitBash } |
     ConvertTo-Json | Set-Content -LiteralPath (Join-Path $Dest "base.json") -Encoding ascii
 Write-Host "Prepared base at $Dest"

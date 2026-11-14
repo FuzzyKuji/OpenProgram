@@ -20,7 +20,7 @@ const pdf = {
   id: "example.pdf-editor", title: "PDF editor", description: "Reads and edits the project's PDFs.", icon: "file-pdf",
   version: "3.1.0", scope: "project", enabled: true, source: "/src/pdf_editor", digest: "d", ui: { root: "ui", entry: "index.html" },
 };
-const browser = { id: "browser", enabled: true, loaded: true, entries: ["web_use"], title: "Browser", description: "The built-in web browser.", icon: "browser" };
+const browser = { id: "browser", enabled: true, loaded: true, entries: [], title: "Browser", description: "The built-in web browser.", icon: "browser" };
 
 await build({
   absWorkingDir: web,

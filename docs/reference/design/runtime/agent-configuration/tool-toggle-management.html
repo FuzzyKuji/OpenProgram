@@ -1,18 +1,18 @@
 <title>Tool toggles and toolsets</title>
-<meta name="description" content="How a turn's toolset is decided: Agent configuration, session intent, and deferred loading.">
+<meta name="description" content="How a turn's toolset is decided: Agent configuration, branch intent, and deferred loading.">
 <h1>Tool toggles and toolsets</h1>
-<p>The Agent decides which tools a session may call. A session stores only intent, never an expanded list, so a new tool reaches every old session.</p>
+<p>The selected Agent decides which tools a branch may call. Each branch stores only intent, never an expanded list, so new tools remain available through the Agent template. Branches inherit intent once and then change independently.</p>
 
 <h2 id="who-chooses">Who chooses</h2>
 <table class="stack">
 <thead><tr><th scope="col">Where</th><th scope="col">Sets</th><th scope="col">Stored in</th></tr></thead>
 <tbody>
 <tr><th scope="row">Agents → Capabilities → Programs</th><td>Scope: all, selected, named Access preset, or none. Plus disabled names and a <code translate="no">web_search</code> default.</td><td>Agent profile, <code translate="no">tools: {mode, allowed, preset, disabled, web_search}</code></td></tr>
-<tr><th scope="row">Composer Web Search switch</th><td>Layers <code translate="no">web_search</code> on or off over the Agent's set</td><td>Session meta, <code translate="no">web_search</code></td></tr>
-<tr><th scope="row"><code translate="no">/skill &lt;name&gt;</code> with <code translate="no">allowed-tools</code></th><td>Narrows the turn to the skill's allowlist</td><td>Session meta, <code translate="no">tools_override</code> (<code translate="no">list[str]</code>)</td></tr>
+<tr><th scope="row">Composer Web Search switch</th><td>Layers <code translate="no">web_search</code> on or off over the Agent's set</td><td>Branch configuration, <code translate="no">web_search</code></td></tr>
+<tr><th scope="row"><code translate="no">/skill &lt;name&gt;</code> with <code translate="no">allowed-tools</code></th><td>Narrows the turn to the skill's allowlist</td><td>Branch configuration, <code translate="no">tools_override</code> (<code translate="no">list[str]</code>)</td></tr>
 </tbody>
 </table>
-<p class="note">No composer Tools switch or per-chat preset. A chat without tools uses an Agent with Programs set to none. The chat action reads only <code translate="no">web_search</code> from a message, never <code translate="no">tools</code> or <code translate="no">tools_profile</code>.</p>
+<p class="note">No composer Tools switch or per-chat preset. A chat without tools uses an Agent with Programs set to none. The chat action reads only <code translate="no">web_search</code> from a message, never <code translate="no">tools</code> or <code translate="no">tools_profile</code>. A message without <code translate="no">web_search</code> (the CLI, the TUI) leaves the stored intent as it is.</p>
 
 <h2 id="priority-chain">Priority chain</h2>
 <p><code translate="no">resolve_tools(agent_profile, override, source)</code> in <code translate="no">runtime/conversation/model_tools.py</code>; <code translate="no">tools_override_from_config(cfg)</code> in <code translate="no">session_config.py</code> produces the override.</p>
@@ -36,7 +36,7 @@
 <tr><th scope="row">Disabled or hidden</th><td>No</td><td>No</td><td>No</td></tr>
 </tbody>
 </table>
-<p class="note">The catalog gives names only, at most 80 and then a count, so it stays small however many tools are deferred.</p>
+<p class="note">The catalog names built-in deferred tools one by one and gives an MCP server or application one namespace line, within 4 KiB and then a count, so it stays small however many tools are deferred (<a href="../../function/deferred-tools.html#catalog">Deferred tools</a>).</p>
 
 <table class="stack fixed">
 <thead class="sr"><tr><th scope="col">Group</th><th scope="col">Members</th></tr></thead>
@@ -44,7 +44,7 @@
 <tr><th scope="row">Resident</th><td><code translate="no">DEFAULT_TOOLS</code> minus <code translate="no">DEFERRED_DEFAULT_TOOLS</code>, plus <code translate="no">tool_search</code> and <code translate="no">job_output</code>. <code translate="no">tool_search</code> never defers: it is the only loader.</td></tr>
 <tr><th scope="row"><code translate="no">DEFERRED_DEFAULT_TOOLS</code></th><td>Memory tools, <code translate="no">scheduler</code>, <code translate="no">exit_plan_mode</code> (the plan-mode prompt names it), <code translate="no">send_message</code>, <code translate="no">skill</code>, <code translate="no">save_routine</code>. Available by default, large and rarely called.</td></tr>
 <tr><th scope="row">Other exposed tools</th><td>Everything in <code translate="no">full</code> outside <code translate="no">DEFAULT_TOOLS</code></td></tr>
-<tr><th scope="row">Application entries</th><td>Deferred; resident while their application is open in a window</td></tr>
+<tr><th scope="row">Application entries</th><td>Deferred, also while their application is open in a window: opening it loads nothing</td></tr>
 <tr><th scope="row">Explicit web search</th><td>A copy promoted to resident, so it ships without <code translate="no">tool_search</code>. The shared registry is untouched.</td></tr>
 <tr><th scope="row">Tool list by name</th><td>Without <code translate="no">tool_search</code> in it, every tool ships resident</td></tr>
 </tbody>
@@ -56,15 +56,12 @@
 <thead class="sr"><tr><th scope="col">Part</th><th scope="col">Behaviour</th></tr></thead>
 <tbody>
 <tr><th scope="row"><code translate="no">apply_default_deferral()</code></th><td>Runs once at import in <code translate="no">programs/__init__.py</code> and gives every entry its default tier. Idempotent. Entries registered later get theirs at registration.</td></tr>
-<tr><th scope="row"><code translate="no">split_tools_for_dispatch(tools)</code></th><td>Partitions into <code translate="no">(provider_tools, catalog)</code> by tier and the loaded set</td></tr>
-<tr><th scope="row">Loaded set</th><td>A ContextVar seeded per session (<code translate="no">install_loaded_deferred</code>), extended from inside <code translate="no">tool_search</code> (<code translate="no">mark_deferred_loaded</code>)</td></tr>
-<tr><th scope="row"><code translate="no">freeze_turn_tools</code></th><td>Captures deferred membership at each turn boundary. Only explicit discovery extends it within the turn.</td></tr>
-<tr><th scope="row">Discovery</th><td><code translate="no">tool_search</code> adds allowed names to the loaded set and that turn's shared membership, so the next provider request carries real schemas. Schema as tool-result text alone is not enough for providers that accept only tools in the request array.</td></tr>
-<tr><th scope="row">In-place mutation</th><td>Tool workers inherit ContextVar values; replacing a worker's value would not reach the provider coroutine</td></tr>
+<tr><th scope="row"><code translate="no">split_tools_for_dispatch(tools, loaded)</code></th><td>Partitions into <code translate="no">(provider_tools, catalog)</code> by tier and the request's loaded set</td></tr>
+<tr><th scope="row">Loaded set</th><td>Not stored anywhere. Each request reads it from its own messages (<code translate="no">loaded_tools(messages)</code> in <code translate="no">shared/tool_loads.py</code>): the load records of its tool results (<code translate="no">details.loads</code>) and the names a compaction summary among them carries (<code translate="no">carried_tool_names</code>). A nested run reads its own messages, a branch its own history, an edited-and-resent turn the history before the edit.</td></tr>
+<tr><th scope="row">Discovery</th><td><code translate="no">tool_search</code> writes a load record on its result (<code translate="no">record_loads</code>), so the next provider request carries real schemas. A guide or an opened application names the tools and how to load them; it loads nothing. Schema as tool-result text alone is not enough for providers that accept only tools in the request array.</td></tr>
 <tr><th scope="row">Execution</th><td>Uses the turn's resolved, permission-wrapped tools, not a new registry lookup. Without discovery the array is stable; discovery may change the cached prefix.</td></tr>
-<tr><th scope="row">Checkpoints</th><td>Each durable safe point records <code translate="no">loaded_deferred_tools</code>, which must belong to the resolved tool contract. Continuation validates the unchanged contract, then restores names without replaying searches. Older checkpoints restore an empty set. Tool-result text is never read as authorization or loading state.</td></tr>
-<tr><th scope="row">Outside a turn</th><td><code translate="no">release_turn_tools()</code> reads the live loaded set</td></tr>
-<tr><th scope="row">Catalog</th><td>Context component <code translate="no">deferred_catalog</code> (<code translate="no">_build_deferred_catalog</code> in <code translate="no">runtime/context/components.py</code>), so the budgeted string is the one that ships. Empty when nothing is deferred.</td></tr>
+<tr><th scope="row">Checkpoints</th><td>A continuation needs no loaded names: the resumed request reads them from the messages it resumes with. The journal's old <code translate="no">loaded_deferred_tools</code> field is no longer written or read for loading. Tool-result text is never read as authorization or loading state.</td></tr>
+<tr><th scope="row">Catalog</th><td>A conversation's own turn sends it as the <code translate="no">turn_context</code> section <code translate="no">deferred_catalog</code> beside the user message: in full with no baseline, then only what was added or removed. A call with its own system prompt (an Agent method, <code translate="no">runtime.exec</code>) keeps it inline there (<code translate="no">_build_deferred_catalog</code> in <code translate="no">runtime/context/components.py</code>). Empty when nothing is deferred.</td></tr>
 <tr><th scope="row"><code translate="no">_estimate_one_tool</code></th><td>In <code translate="no">runtime/context/budget.py</code>. Resident: description, parameters and a small wrapper. Deferred: bare name plus a newline. The two errors point in opposite directions, so <code translate="no">test_budget.py</code> checks each half against a real tokenized payload, within 15%.</td></tr>
 </tbody>
 </table>
@@ -117,7 +114,7 @@
 <tr><th scope="row"><code translate="no">interfaces/server/ws_actions/chat/turn.py</code></th><td><code translate="no">tools_flag</code> starts <code translate="no">None</code>; a <code translate="no">/skill</code> sets it; a new Agent conversation clears both. Nothing expands here.</td></tr>
 <tr><th scope="row"><code translate="no">runtime/conversation/model_tools.py</code></th><td><code translate="no">_overlay_web_search</code> in the dict branch of <code translate="no">resolve_tools</code> (web_search is not in <code translate="no">DEFAULT_TOOLS</code>)</td></tr>
 <tr><th scope="row"><code translate="no">programs/_host/runtime.py</code></th><td>Deferred machinery above, <code translate="no">tool_search</code>, <code translate="no">deferred_catalog_text</code></td></tr>
-<tr><th scope="row"><code translate="no">runtime/agent/loop/</code></th><td>Calls <code translate="no">freeze_turn_tools</code> per turn; resolves calls by name against the full list, so a mid-turn load dispatches</td></tr>
+<tr><th scope="row"><code translate="no">runtime/agent/loop/</code></th><td>Reads each request's loaded set from its messages (<code translate="no">streaming.py</code>); resolves calls by name against the full list, so a mid-turn load dispatches</td></tr>
 </tbody>
 </table>
 <table class="stack fixed">

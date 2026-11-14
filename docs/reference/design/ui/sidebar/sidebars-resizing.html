@@ -6,7 +6,7 @@
 <thead><tr><th scope="col">State</th><th scope="col">Width</th><th scope="col">Behavior</th></tr></thead>
 <tbody>
 <tr><th scope="row">Left expanded</th><td>180–480px, and at most 30% of a window wider than 900px</td><td>Drag from the right edge; stops at the limit. A narrower window limits what is drawn, not the stored width, so widening it brings the width back</td></tr>
-<tr><th scope="row">Right expanded</th><td>240–720px, and at most 45% of a window wider than 900px</td><td>Drag from the left edge; stops at the limit. A narrower window limits what is drawn, not the stored width, so widening it brings the width back</td></tr>
+<tr><th scope="row">Right expanded</th><td>240–800px, and at most 50% of a window wider than 900px</td><td>Drag from the left edge; stops at the limit. A narrower window limits what is drawn, not the stored width, so widening it brings the width back</td></tr>
 <tr><th scope="row">Collapsed</th><td>62px: a 46px card inside the 8px gutters</td><td>Same 200ms width animation on both sides</td></tr>
 <tr><th scope="row">Expand again</th><td>The valid width from before collapse</td><td>Same animation; keeps the most recently adjusted width</td></tr>
 </tbody>
@@ -19,7 +19,8 @@
 <tbody>
 <tr><th scope="row">Handle</th><td><code translate="no">.rail-resize-handle</code>, hit area about 8px either side of the divider, no effect on layout width. The shell permits its overflow; the inner content stays clipped.</td></tr>
 <tr><th scope="row">Drag</th><td>Primary button only; touch panning and text selection on the handle disabled. Hovering shows the same short grip as a split's divider, centred in the 8px gap between the cards; dragging makes it solid, and it turns the accent colour while the width rests on the default.</td></tr>
-<tr><th scope="row">Back to the default</th><td>Either rail: a double-click on the handle, or Enter with the handle focused, returns to 288px over 280ms, easing out. The width is walked a frame at a time, as in a drag, so what is inside the rail moves with its edge. A drag within 8px of 288px lands on it. At the default nothing is stored.</td></tr>
+<tr><th scope="row">Back to the default</th><td>Either rail: a double-click on the handle, or Enter with the handle focused, returns to 288px over 280ms, easing out. The width is walked a frame at a time, as in a drag, so what is inside the rail moves with its edge. At the default nothing is stored.</td></tr>
+<tr><th scope="row">Snaps</th><td>A drag within 8px of a snap rests on it, and the handle turns blue. The left rail's only snap is 288px. The right rail's are 288, 544 and 800px, where one, two and three columns of the <a href="../chat/activity-panel.html#agent-chart">Activity time chart</a> fit whole.</td></tr>
 <tr><th scope="row">Drag ends</th><td>Release, pointer cancel or window blur. Window-level end events back up the captured handle events; a move that sees a released button also ends it. The collapse animation is restored each time.</td></tr>
 </tbody>
 </table>

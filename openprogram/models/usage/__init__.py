@@ -7,6 +7,7 @@ Public API:
                                   stream.py chokepoint; rarely called directly)
   default_ledger.query(...)       aggregate recorded usage for panels/CLI
   register_usage_hook(fn)         subscribe to events (budget/alerting)
+  prefix_fingerprint.expect_break announce a prompt-cache break made on purpose
 
 See docs/design/usage-metering.md.
 """
@@ -21,7 +22,7 @@ from .context import (
 )
 from .event import UsageEvent
 from .ledger import AggregateRow, UsageLedger, default_ledger
-from .recorder import record_message, register_usage_hook
+from .recorder import record_failed_request, record_message, register_usage_hook
 
 __all__ = [
     "UsageEvent",
@@ -34,5 +35,6 @@ __all__ = [
     "AggregateRow",
     "default_ledger",
     "record_message",
+    "record_failed_request",
     "register_usage_hook",
 ]

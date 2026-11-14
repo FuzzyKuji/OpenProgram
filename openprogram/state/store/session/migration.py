@@ -15,6 +15,7 @@ from openprogram.state.store.session.placement import (
     external_recovery_dir,
     is_deleted,
     legacy_project_session_dir,
+    move_session_folder,
     nested_session_dir,
     session_looks_present,
 )
@@ -436,7 +437,7 @@ def _migrate_locked(store, root, journal, row, source: Path, dest: Path) -> str:
         _verify_inventory(dest, inventory)
     else:
         dest.parent.mkdir(parents=True, exist_ok=True)
-        os.rename(staged / "session", dest)
+        move_session_folder(staged / "session", dest)
     row["stage"] = "publish"
     update_journal_row(root, session_id, row)
     _fsync_dir(dest.parent)
@@ -445,7 +446,7 @@ def _migrate_locked(store, root, journal, row, source: Path, dest: Path) -> str:
         if recovery_dest.exists():
             _verify_inventory(recovery_dest, recovery_inventory)
         elif staged_recovery.exists():
-            os.rename(staged_recovery, recovery_dest)
+            move_session_folder(staged_recovery, recovery_dest)
         else:
             raise RuntimeError("external recovery publication is missing")
         _fsync_dir(recovery_dest.parent)

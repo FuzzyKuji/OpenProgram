@@ -39,13 +39,14 @@
 <tr><th scope="row">未结束回复的其他字段</th><td>不含 content 和文本块的 <code translate="no">row_patch</code></td></tr>
 <tr><th scope="row">终态回复</th><td>一个 <code translate="no">row_upsert</code>，含重新加载给出的每个字段</td></tr>
 <tr><th scope="row">非未结束行的任何其他变化（章节固定、<code translate="no">reverted</code>、执行效果重写、迟到的工具行）</th><td>来自投影的一个 <code translate="no">row_upsert</code>，位置保持</td></tr>
-<tr><th scope="row">带 <code translate="no">covers_ids</code> 的摘要、<code translate="no">node.delete</code>、rewound 或 structural 补丁、最后一轮之外的重挂</th><td><code translate="no">window_stale { reason: structure }</code></td></tr>
+<tr><th scope="row">带 <code translate="no">covers_ids</code> 的摘要（写入或补丁）、<code translate="no">node.delete</code>、rewound 或 structural 补丁、最后一轮之外的重挂</th><td><code translate="no">window_stale { reason: structure }</code></td></tr>
 </tbody>
 </table>
 <table class="stack fixed">
 <thead><tr><th scope="col">部分</th><th scope="col">规则</th></tr></thead>
 <tbody>
 <tr><th scope="row">派生字段</th><td>当顶层行加入已持有轮次或成员的 predecessor 变化时，发布器对照已存表重算整个轮次的顺序、<code translate="no">steeringReplyId</code>、<code translate="no">continuedBy</code> 和 <code translate="no">continues</code>，并为每个变化的行发 <code translate="no">row_patch</code>。成员顺序的变化超出单次插入时发 <code translate="no">turn_upsert</code>。</td></tr>
+<tr><th scope="row">版本箭头</th><td>视图没有显示的分支上有一轮结束时，已画出的分叉行的箭头指向会变，版本数也可能变。发布器发 <code translate="no">row_patch</code>，带上变化的 <code translate="no">siblingIndex</code>、<code translate="no">siblingTotal</code>、<code translate="no">prevSiblingId</code> 和 <code translate="no">nextSiblingId</code>。变化从还没有被更新回应的最早一次读取算起，所以后来的读取即使已经带着新箭头，先读的持有者也照样收到补丁。</td></tr>
 <tr><th scope="row">大小</th><td>超过 512 KiB 的单个 <code translate="no">transcript_update</code> 被替换为 <code translate="no">transcript_gap</code>，因为读取会分片而更新不会。</td></tr>
 <tr><th scope="row">目标标注</th><td>只在读取、新轮次和终态行上运行。</td></tr>
 </tbody>
@@ -63,7 +64,9 @@
 <thead><tr><th scope="col">部分</th><th scope="col">规则</th></tr></thead>
 <tbody>
 <tr><th scope="row">发布器</th><td>文本帧仍由 <code translate="no">_broadcast_chat_response</code> 把关，它保持停止后的静默。在发布器中，当 <code translate="no">is_cancelled(session, execution_id=&lt;row's execution&gt;)</code> 成立时，该执行的行上的非终态变化被丢弃，因为终态行会覆盖它们。终态 <code translate="no">row_upsert</code> 绝不被扣留。同一会话的后台作业行继续更新。</td></tr>
-<tr><th scope="row">覆盖层与证明</th><td>浏览器设置带 <code translate="no">until_terminal</code> 的 Stop 覆盖层，加上指明取消命令 id 的 <code translate="no">until_command_rejected</code>。如果一次拒绝的 <code translate="no">latest_snapshot</code> 证明执行仍在运行，并通过 <code translate="no">handleExecutionCommandUpdated</code> 里的检查（同一会话、没有被更新的执行替换、<code translate="no">status_version</code> 不比任务的新），就发出 <code translate="no">overlay_command_rejected</code> 清除覆盖层，并恢复运行槽。确认之前按下的 Stop，在确认给出执行时设置同样的覆盖层。</td></tr>
+<tr><th scope="row">覆盖层与证明</th><td>浏览器设置带 <code translate="no">until_terminal</code> 的 Stop 覆盖层，加上指明取消命令 id 的 <code translate="no">until_command_rejected</code>。如果一次拒绝的 <code translate="no">latest_snapshot</code> 证明执行仍在运行，并通过 <code translate="no">handleExecutionCommandUpdated</code> 里的检查（同一会话、没有被更新的执行替换），就发出 <code translate="no">overlay_command_rejected</code> 清除覆盖层，并恢复运行槽，除非运行槽已以更新的版本持有这一轮。</td></tr>
+<tr><th scope="row">只发一次</th><td>停止只发一次（<code translate="no">lib/execution/cancel-execution.ts</code>）。Worker 按当前版本受理，旧版本不算拒绝。已结束的一轮返回 <code translate="no">already_terminal</code>。"Stopped." 跟随执行的已取消帧。</td></tr>
+<tr><th scope="row">确认之前</th><td>确认之前按下的 Stop 设置同样的覆盖层，确认一给出执行就发出取消，不论有没有版本。</td></tr>
 <tr><th scope="row">行状态</th><td>然后该行显示其服务端状态，因为覆盖层从未改变行。</td></tr>
 <tr><th scope="row">其他情况</th><td>没有该证明的拒绝让覆盖层留到终态行。覆盖层下丢弃的文本帧留下空缺，下一帧的 <code translate="no">offset &gt; length</code> 在视图锚点读取一次来修复。</td></tr>
 </tbody>

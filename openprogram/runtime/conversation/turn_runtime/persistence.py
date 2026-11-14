@@ -124,8 +124,6 @@ def persist_assistant_message(
     assistant_msg.update(stamp(req))
     if usage.get("service_tiers"):
         assistant_msg["usage"] = dict(usage)
-    if hasattr(req, "_loaded_deferred_tools"):
-        assistant_msg["loaded_deferred_tools"] = list(req._loaded_deferred_tools)
     if req.structured_output_mode is not None:
         assistant_msg.update({
             "structured_output": req.structured_output,
@@ -196,7 +194,7 @@ def persist_assistant_message(
                         # input/result; no local tool call holds them.
                         blocks.append(dict(blk))
                         continue
-                    blocks.append({
+                    tool_block = {
                         "type": "tool",
                         "tool": blk.get("tool") or _tc.get("tool"),
                         "tool_call_id": _tid,
@@ -211,7 +209,18 @@ def persist_assistant_message(
                             if _tc.get("is_error") is not None
                             else blk.get("is_error")
                         ),
-                    })
+                    }
+                    full_output = _tc.get("full_output") or blk.get("full_output")
+                    if full_output:
+                        # The card's line saying how long the whole output is.
+                        tool_block["full_output"] = full_output
+                    if blk.get("round_start"):
+                        # Where a provider response began (context/render.py).
+                        tool_block["round_start"] = True
+                    if _tc.get("outcome") == "cancelled":
+                        # Running when the turn was stopped.
+                        tool_block["outcome"] = "cancelled"
+                    blocks.append(tool_block)
                 else:
                     blocks.append(dict(blk))
         else:
@@ -223,25 +232,28 @@ def persist_assistant_message(
                     "input": t.get("input"),
                     "result": t.get("result"),
                     "is_error": t.get("is_error"),
+                    **({"full_output": t["full_output"]} if t.get("full_output") else {}),
                 }
                 for t in tool_calls
             ]
+        if cancel_event is not None and cancel_event.is_set():
+            _close_stopped_calls(db, req, assistant_msg_id, blocks, _agentic_tool_names)
         assistant_msg["extra"] = json.dumps(
             {"tool_calls": tool_calls, "blocks": blocks},
             default=str,
         )
-    # What the render policy did when this call's prompt was built —
-    # replaying with it reproduces the exact bytes the model saw, even
-    # after the aging constants move (dag/overview.md §8).
-    try:
-        from openprogram.runtime.context.aging import last_manifest
-        _mf = last_manifest()
-        if _mf:
-            assistant_msg["render_manifest"] = _mf
-    except Exception:
-        # Without the manifest an exact replay of this prompt is not
-        # reproducible, but the turn itself is unaffected.
-        _log.debug("render manifest capture failed", exc_info=True)
+    if cancel_event is not None and cancel_event.is_set():
+        # A stopped reply keeps what was shown: its text is the text of its
+        # blocks, the cut response's included (``loop_runner``), and the
+        # next turn is told it was cut (``interruption``, read by ``prep``).
+        shown = "".join(
+            b.get("text") or "" for b in blocks
+            if b.get("type") == "text" and isinstance(b.get("text"), str)
+        ).strip()
+        if shown and shown != (final_text or "").strip():
+            from openprogram.programs.tools.interaction.send_file import with_attachments
+            assistant_msg["content"] = with_attachments(shown, _tool_calls_all, req.session_id)
+        assistant_msg["interruption"] = stopped_reply_interruption(blocks)
     if _placeholder_inserted:
         # Update the placeholder row in place — same id, now with
         # final content + tool_calls/blocks. Writes Call fields
@@ -282,3 +294,75 @@ def persist_assistant_message(
         db.append_message(req.session_id, assistant_msg)
 
     return assistant_msg, blocks, tool_calls, usage
+
+
+def stopped_reply_interruption(blocks: list[dict]) -> dict:
+    """What the next turn is told about a reply that was stopped.
+
+    ``phase`` says whether tools were running; ``cut_tools`` whether a call
+    was stopped or never ran, so the note warns it may have partly run
+    (``turn_context.interruption_note``).
+    """
+    from openprogram.runtime.execution.run_control.stop_reasons import current_stop_reason
+
+    cut = any(
+        b.get("type") == "tool" and not b.get("provider_executed")
+        and b.get("outcome") in ("cancelled", "not_started")
+        for b in blocks
+    )
+    return {
+        "reason_code": current_stop_reason(),
+        "phase": "tools" if cut else "streaming",
+        "cut_tools": cut,
+    }
+
+
+def _close_stopped_calls(db, req, assistant_msg_id: str, blocks: list[dict], agentic: set) -> None:
+    """Give every call of a stopped reply a result.
+
+    A call that was running already has its stopped result (``tool_dispatch``)
+    and is marked ``cancelled``; one the model issued whole that never
+    started gets ``Not run`` here, on its card and as its tool node, so
+    every call a later request sends has its result (Codex
+    ``aborted before dispatch``).
+    """
+    from openprogram.runtime.execution.run_control.stop_reasons import NOT_RUN_TEXT
+    from openprogram.state.memory.policy import stamp as _memory_stamp
+    from openprogram.state.store import SessionNodeWriter
+    from openprogram.state.store.session.nodes import Call, ROLE_CODE
+
+    for block in blocks:
+        if block.get("type") != "tool" or block.get("provider_executed"):
+            continue
+        tool_call_id = block.get("tool_call_id")
+        if not tool_call_id:
+            continue
+        if block.get("result") is not None:
+            continue
+        block.update(result=NOT_RUN_TEXT, is_error=True, outcome="not_started")
+        if (block.get("tool") or "") in agentic:
+            continue
+        node_id = f"{assistant_msg_id}_t_{tool_call_id}"
+        try:
+            if db.message_exists(req.session_id, node_id):
+                continue
+            SessionNodeWriter(db, req.session_id).append(Call(
+                id=node_id,
+                created_at=time.time(),
+                role=ROLE_CODE,
+                name=block.get("tool") or "",
+                input=block.get("input") or {},
+                output=NOT_RUN_TEXT,
+                caller=assistant_msg_id,
+                metadata={
+                    **_memory_stamp(req),
+                    "tool_call_id": tool_call_id,
+                    "is_error": True,
+                    "outcome": "not_started",
+                    "status": "cancelled",
+                },
+            ))
+        except Exception:
+            # Without the node the call is left out of later requests
+            # (``context.render``), as before; the card still says it.
+            _log.warning("result of a call that never ran not stored", exc_info=True)

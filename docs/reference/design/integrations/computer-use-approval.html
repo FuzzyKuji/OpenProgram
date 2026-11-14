@@ -93,7 +93,7 @@
 <tr><th scope="row">Withdrawn</th><td>A grant withdrawn during the turn fails the step in the backend (<code translate="no">_frameworks</code> names the Accessibility setting).</td></tr>
 </tbody>
 </table>
-<p>The tool is in <code translate="no">DEFAULT_TOOLS</code> and resident: its schema is short, so it is not deferred. When the conversation has Pages, <code translate="no">_configure_web_use_tools</code> keeps it and removes the independent browser tools; <code translate="no">web_use</code> is never offered to the model. <code translate="no">unsafe_in</code> hides it in WeChat and Telegram channels and in plan mode.</p>
+<p>The tool is in <code translate="no">DEFAULT_TOOLS</code> and resident: its schema is short, so it is not deferred. When the conversation has Pages, <code translate="no">_configure_browser_tool</code> adds it to a turn whose tools did not include it; a turn whose tools are named gets it only when the list names it. <code translate="no">unsafe_in</code> hides it in WeChat and Telegram channels and in plan mode.</p>
 
 <h2 id="implementation-status">Implementation status</h2>
 

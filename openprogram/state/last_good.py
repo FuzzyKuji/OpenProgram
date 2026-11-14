@@ -29,6 +29,7 @@ import tempfile
 import time
 from pathlib import Path
 from typing import Any
+from openprogram.host._platform.filesystem import replace_file
 
 log = logging.getLogger(__name__)
 
@@ -85,7 +86,7 @@ def keep_previous(path: Path) -> None:
             with os.fdopen(descriptor, "wb") as handle:
                 handle.write(raw)
             shutil.copymode(path, temporary)
-            os.replace(temporary, backup)
+            replace_file(temporary, backup)
         finally:
             Path(temporary).unlink(missing_ok=True)
     except OSError as exc:

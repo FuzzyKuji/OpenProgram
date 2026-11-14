@@ -132,7 +132,7 @@ def test_sync_spawn_default_keeps_agent_live(parent_turn, monkeypatch):
 
 def test_async_spawn_passes_archive_flag_to_runner(parent_turn):
     out = _agent_impl("do it", run_in_background=True, archive_when_done=True)
-    assert "[agent spawned async]" in out
+    assert out.startswith("[agent started in background]")
     kw = parent_turn.async_calls[-1]
     assert kw["archive_when_done"] is True
 
@@ -398,17 +398,9 @@ def test_send_message_to_archived_branch_errors(parent_turn):
     assert parent_turn.async_calls == []
 
 
-def test_agent_to_dispatch_to_archived_branch_errors(parent_turn):
-    _archive_agent_impl("p1:a0")
-    out = _agent_impl("do this", to="p1:a0")
-    assert "[agent error] agent p1:a0 is archived" in out
-    assert parent_turn.async_calls == []
-
-
-def test_agent_to_with_archive_when_done_errors(parent_turn):
+def test_agent_to_is_refused_and_points_at_send_message(parent_turn):
     out = _agent_impl("do this", to="p1:a0", archive_when_done=True)
-    assert "[agent error]" in out
-    assert "archive_when_done" in out
+    assert "[agent error]" in out and "send_message" in out
     assert parent_turn.async_calls == []
 
 
@@ -428,7 +420,7 @@ def test_fork_from_archived_node_still_works(parent_turn):
     _archive_agent_impl("p1:a0")
     out = _agent_impl("continue from here", start_from="p1:a0",
                       run_in_background=True)
-    assert "[agent spawned async]" in out
+    assert out.startswith("[agent started in background]")
     kw = parent_turn.async_calls[-1]
     assert kw["session_id"] == "p1"
     assert kw["branch_from"] == "a0"

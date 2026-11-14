@@ -62,10 +62,12 @@ def normalize(refs: Any) -> list[dict[str, str]]:
 def resolve(refs: Any) -> list[dict[str, Any]]:
     """Resolve refs against the current workspace on every call."""
     from .policy import check
-    check()
     normalized = normalize(refs)
     if not normalized:
+        # Nothing to read: a task without memory refs needs no memory
+        # access, so it is not refused while the Agent's memory is off.
         return []
+    check()
     current_workspace = store.workspace_id()
     foreign = [
         ref for ref in normalized if ref["workspace_id"] != current_workspace

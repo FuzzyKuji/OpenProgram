@@ -48,6 +48,25 @@ if (process.platform === "darwin" && !overlaySurface && typeof window !== "undef
   window.addEventListener("resize", syncWindowChrome);
 }
 
+// The OS appearance as the main process reads it. "Auto" follows this, not the
+// page's prefers-color-scheme: a debugger attached to the page can override the
+// media query (Playwright forces "light" on every page it adopts) but not this.
+// Read on first use, then kept current by the main process.
+let systemDark;
+function readSystemDark() {
+  if (typeof systemDark !== "boolean") {
+    try {
+      systemDark = ipcRenderer.sendSync("theme:system-dark");
+    } catch (_error) {
+      /* The page falls back to its media query. */
+    }
+  }
+  return typeof systemDark === "boolean" ? systemDark : undefined;
+}
+ipcRenderer.on("theme:system-changed", (_event, dark) => {
+  if (typeof dark === "boolean") systemDark = dark;
+});
+
 contextBridge.exposeInMainWorld("openprogramDesktop", {
   isDesktop: true,
   writeClipboardText: (text) => ipcRenderer.invoke("clipboard:write-text", text),
@@ -62,6 +81,14 @@ contextBridge.exposeInMainWorld("openprogramDesktop", {
     finish: (result) => ipcRenderer.send("recording:finish", result),
     onFinished: (cb) => fanOut("recording:finished", cb),
   } : undefined,
+  // Video of one pane of this page: `arm` lets the page's next request for
+  // its own display stream through; the rest writes the encoded file.
+  paneRecording: {
+    arm: () => ipcRenderer.invoke("pane-recording:arm"),
+    open: (id, filePath) => ipcRenderer.invoke("pane-recording:open", id, filePath),
+    write: (id, chunk) => ipcRenderer.invoke("pane-recording:write", id, chunk),
+    close: (id, discard) => ipcRenderer.invoke("pane-recording:close", id, discard),
+  },
   selfUpdateCapture: (nonce) => ipcRenderer.invoke("self-update:ui-capture", nonce),
   selfUpdateReopen: {
     getState: () => ipcRenderer.invoke("self-update:reopen-state"),
@@ -120,7 +147,6 @@ contextBridge.exposeInMainWorld("openprogramDesktop", {
     onPopup: (cb) => fanOut("webtab:popup", cb),
     onFindResult: (cb) => fanOut("webtab:find-result", cb),
     onCommand: (cb) => fanOut("webtab:command", cb),
-    onHumanInput: (cb) => fanOut("webtab:human-input", cb),
   },
   // Native OS menus return only the selected action ID to this renderer.
   contextMenu: {
@@ -222,6 +248,8 @@ contextBridge.exposeInMainWorld("openprogramDesktop", {
   theme: {
     setChrome: (payload) => ipcRenderer.send("theme:set-chrome", payload),
     trace: (payload) => ipcRenderer.send("theme:trace", payload),
+    systemDark: readSystemDark,
+    onSystemChange: (cb) => subscribe("theme:system-changed")(cb),
   },
   terminal: {
     start: (request) => ipcRenderer.invoke("terminal:start", request),

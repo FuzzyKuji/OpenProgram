@@ -8,7 +8,29 @@ from typing import Mapping
 import hashlib
 import json
 import time
+from openprogram.runtime.jobs import handoff
 from openprogram.runtime.jobs.runner import shared
+
+
+def _name_job_branch(job: shared.Job, *, creates_agent: bool) -> None:
+    """A new agent's branch carries its task's label from admission on.
+
+    The run's reply, ``<job>_user_reply``, is the branch's tip for as long
+    as the run lasts, so the label is recorded there before the run writes
+    anything: the agent list and Activity name the branch while it runs,
+    not only after its first reply. A Job that continues a branch (a
+    message to an agent, a later hop of one) keeps that branch's name.
+    """
+    if (not job.label or not creates_agent or job.target_branch_head_id
+            or shared._continued_job(job)):
+        return
+    try:
+        from openprogram.runtime.context.session_db import default_db
+        default_db().name_spawned_branch(
+            job.parent_session_id, f"{job.id}{shared._JOB_REPLY_SUFFIX}", str(job.label))
+    except Exception:
+        # The branch is named after its first reply instead.
+        shared._log.warning("branch label not recorded for job %s", job.id, exc_info=True)
 
 
 def _scheduled_permission_snapshot(job: shared.Job) -> dict[str, shared.Any] | None:
@@ -56,7 +78,8 @@ class AdmissionOperations:
                          permission_snapshot: Mapping[str, shared.Any] | None = None,
                          usage_goal: Mapping[str, shared.Any] | None = None,
                          automation: str | None = None,
-                         detached: bool = False) -> tuple[str, str, dict[str, shared.Any]]:
+                         detached: bool = False,
+                         asks_through: Mapping[str, shared.Any] | None = None) -> tuple[str, str, dict[str, shared.Any]]:
         from openprogram.runtime.jobs.input import JobAgentInputV1
 
         immutable = JobAgentInputV1.from_job(job, run_id=run_id,
@@ -64,7 +87,8 @@ class AdmissionOperations:
                                             permission_snapshot=permission_snapshot,
                                             usage_goal=usage_goal,
                                             automation=automation,
-                                            detached=detached).to_dict()
+                                            detached=detached,
+                                            asks_through=asks_through).to_dict()
         payload = json.dumps(
             immutable,
             ensure_ascii=False,
@@ -112,8 +136,11 @@ class AdmissionOperations:
             if record is None:
                 raise RuntimeError(f"canonical execution identity conflict: {job.id}")
             return
-        from openprogram.runtime.permissions.lifecycle import spawn_permission_snapshot
+        from openprogram.runtime.permissions.lifecycle import spawn_permission_snapshot, spawn_question_route
         permission_snapshot = spawn_permission_snapshot(self._execution_store, parent, job)
+        detached = _started_by_detached_turn()
+        asks_through = None if detached else spawn_question_route(
+            self._execution_store, parent, job, permission_snapshot)
         if parent is None and permission_snapshot is None:
             permission_snapshot = _scheduled_permission_snapshot(job)
         if job.source == "self_update_continue":
@@ -141,7 +168,7 @@ class AdmissionOperations:
             job, run_id=run_id, parent_execution_id=parent.execution_id if parent else None,
             permission_snapshot=permission_snapshot, usage_goal=usage_goal,
             automation=inherited_automation(get_turn_request()),
-            detached=_started_by_detached_turn(),
+            detached=detached, asks_through=asks_through,
         )
         revision = self._execution_store.create_revision(
             revision_id=f"job-revision-{input_hash[:24]}",
@@ -292,6 +319,7 @@ class AdmissionOperations:
         )
         if not decision.accepted:
             raise AdmissionRejected(decision)
+        _name_job_branch(job, creates_agent=creates_agent)
         # The legacy admission row remains a read projection during this
         # cutover, but every Job also records the cross-authority hand-off.
         # Replaying it is harmless: Governor admission is fenced by the same
@@ -406,6 +434,11 @@ class AdmissionOperations:
                 return job_id
         if resume_deferred and existing is None:
             raise ValueError(f"deferred job {job_id!r} not found")
+        published = getattr(self._governor, "dispatch_published", None)
+        if resume_deferred and published is not None and published(existing.id):
+            # A drain that crashed after publishing left its inbox entry
+            # behind; delivering it again is the same hand-off, already done.
+            return existing.id
         borrowed_claim = (
             self._current_borrowable_claim(session_id)
             if borrow_current_claim else None
@@ -471,6 +504,7 @@ class AdmissionOperations:
             deferred_inbox=deferred_inbox,
             status=shared.JobStatus.PENDING,
             created_at=existing.created_at if existing is not None else time.time(),
+            submitter=(existing.submitter if existing is not None else handoff.this_process()),
         )
         admission = nullcontext()
         if parent_job_id:
@@ -510,6 +544,9 @@ class AdmissionOperations:
                     on_accepted is not None
                     and borrowed_claim is None
                 )
+                if hold_for_accepted:
+                    # Until publish, recovery leaves this held Job to us.
+                    handoff.begin_accept(job.id)
                 decision = self.admit_job_entity(
                     job,
                     creates_agent=creates_agent,
@@ -542,6 +579,7 @@ class AdmissionOperations:
                     self._update_attach_card(
                         updated, error_text="accepted job side effect failed",
                     )
+                handoff.end_accept(job.id)
                 raise
         if borrowed_claim is not None:
             self._run_borrowed_job(job, borrowed_claim)
@@ -549,9 +587,11 @@ class AdmissionOperations:
         if idempotent:
             with self._lock:
                 if job.id in self._jobs:
+                    handoff.end_accept(job.id)
                     return job.id
             job = shared._store_load(session_id, job.id) or job
         if defer_dispatch:
+            handoff.end_accept(job.id)
             return job.id
         if not idempotent:
             self._broadcast_job_status(job)
@@ -606,7 +646,9 @@ class AdmissionOperations:
                     self._jobs.pop(job.id, None)
                     self._done_events.pop(job.id, None)
                 done_ev.set()
+                handoff.end_accept(job.id)
                 raise RuntimeError(error)
+        handoff.end_accept(job.id)
         self._dispatch_wake.set()
 
         return job.id

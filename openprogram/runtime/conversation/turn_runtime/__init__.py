@@ -46,6 +46,7 @@ from openprogram.runtime.conversation.turn_runtime.runtime_attach import _wrap_a
 #   error_path.py   — the except branch
 from openprogram.runtime.conversation.turn_runtime.prep import prepare_turn
 from openprogram.runtime.conversation.turn_runtime.turn_context import TurnBindings
+from openprogram.runtime.conversation.turn_runtime.turn_writer import beside_conversation
 from openprogram.runtime.conversation.turn_runtime.stream_tap import final_blocks, make_stream_tap, naming_reply_row
 from openprogram.runtime.conversation.turn_runtime.error_path import handle_turn_error
 from openprogram.runtime.conversation.turn_runtime.finalize import finalize_turn
@@ -66,6 +67,7 @@ from openprogram.runtime.conversation.turn_runtime.loop_runner import (
 # ---------------------------------------------------------------------------
 
 from openprogram.runtime.conversation import plan_mode as _plan_mode
+from openprogram.runtime.conversation.run_control import run_slot as _run_slot
 
 
 def _memory_write(session_id: str) -> None:
@@ -78,8 +80,18 @@ def _memory_write(session_id: str) -> None:
     out of the session store, which is durable and ordered. Without the
     session id it can do nothing at all: that is what identifies the
     thread whose turns are being counted. Best-effort, memory never
-    takes a turn down with it."""
+    takes a turn down with it.
+
+    Not in a process that holds side work (``side_work.held``, an
+    ``openprogram --print`` run): a batch that crosses the threshold is a
+    model run, which would be model work the command did not ask for and
+    could be cut off mid-write when the command leaves. The idle watcher
+    of the next worker folds the conversation in instead."""
     if not session_id:
+        return
+    from openprogram.runtime.conversation import side_work
+
+    if not side_work.allowed():
         return
     from openprogram.state.memory import (
         MemoryWriteFailureCode,
@@ -314,7 +326,7 @@ def execute_continuation(
     context = execution_context if execution_context is not None else {}
     # Resume is not a new admission: keep the original user node, assistant
     # placeholder, and assistant id. Bind the same per-turn identity the
-    # first attempt used so web_use owner tokens stay valid across pause.
+    # first attempt used.
     _bindings = TurnBindings.bind(
         req=req, assistant_msg_id=assistant_msg_id, db=db,
         snapshot_project_baseline=False,
@@ -404,6 +416,7 @@ def execute_continuation(
     # them) ends here, not in _process_turn_once.
     if turn_committed:
         _release_prepared_update(req.session_id, assistant_msg_id)
+    _run_slot.finishing(req.session_id, user_msg_id)
     on_event({"type": "chat_response", "data": {
         "type": "result", "session_id": req.session_id,
         "msg_id": user_msg_id, "assistant_msg_id": assistant_msg_id,
@@ -423,6 +436,29 @@ def execute_continuation(
         last_round_text=req.last_round_text,
         usage=usage,
     )
+
+
+def _bind_usage_branch(db, session_id: str, branch_id: str | None = None) -> None:
+    """Name the branch the turn runs on in the usage context, once its user
+    message is stored: the prompt-cache check compares a request with the
+    last one on its own branch (``models/usage/prefix_fingerprint.py``) and
+    the usage tracker files the turn's occupancy under it
+    (``context/usage.py``). The branch is the one frozen at admission; the
+    selected branch only for a request admitted without one."""
+    try:
+        from dataclasses import replace as _replace
+        from openprogram.models.usage.context import _current as _usage_cur
+
+        branch = branch_id
+        if branch is None:
+            meta = db.get_session(session_id) or {}
+            branch = meta.get("active_branch_id") if isinstance(meta, dict) else None
+        current = _usage_cur.get()
+        if current.branch_id != branch:
+            _usage_cur.set(_replace(current, branch_id=branch))
+    except Exception:
+        # Observability only: without it the turn is compared across branches.
+        _log.debug("usage branch binding failed", exc_info=True)
 
 
 @_memory_execution
@@ -464,7 +500,10 @@ def _process_turn_once(
     # User slash actions are still durable Agent turns. Keep their existing
     # DAG-specific behavior behind the same dispatcher/driver lifecycle so
     # public transports do not start a separate slash-action thread.
-    if req.interaction in {"spawn", "merge"}:
+    from openprogram.runtime.agent.turn_request import slash_action_of
+
+    slash_action = slash_action_of(req)
+    if slash_action is not None:
         try:
             from openprogram.runtime.conversation.turn_runtime.slash_actions import (
                 run_merge as _run_merge,
@@ -472,7 +511,7 @@ def _process_turn_once(
             )
 
             action_payload = dict(req.structured_output or {})
-            if req.interaction == "spawn":
+            if slash_action == "spawn":
                 action_ok = _run_spawn(
                     session_id=req.session_id,
                     msg_id=user_msg_id,
@@ -485,6 +524,7 @@ def _process_turn_once(
                     msg_id=user_msg_id,
                     kwargs=action_payload,
                     agent_id=req.agent_id,
+                    branch_id=getattr(req, "branch_id", None),
                 )
             return TurnResult(
                 final_text="",
@@ -514,9 +554,14 @@ def _process_turn_once(
             current_usage_context, _current as _usage_cur,
         )
         _cur = current_usage_context()
+        # A turn that runs with other instructions than the conversation's
+        # own is compared for prompt-cache breaks with its own kind only.
+        _lane = "goal_verification" if req.goal_verification else (
+            req.source if (req.source or "").startswith("self_update_") else None)
         if _cur.call_kind is None:
             _usage_cur.set(_replace(_cur,
-                call_kind="chat", agent_id=req.agent_id, session_id=req.session_id))
+                call_kind="chat", agent_id=req.agent_id, session_id=req.session_id,
+                prefix_lane=_lane))
         else:
             # Keep the outer source (exec/subagent) but fill in this turn's
             # session/agent so nested compaction/summary calls attribute right.
@@ -524,6 +569,7 @@ def _process_turn_once(
                 _cur,
                 agent_id=_cur.agent_id or req.agent_id,
                 session_id=_cur.session_id or req.session_id,
+                prefix_lane=_lane,
             ))
     except Exception:
         # Usage metering is observability, never a reason to fail a turn;
@@ -560,6 +606,7 @@ def _process_turn_once(
         if not admitted:
             from openprogram.operations.self_update.control.held_turns import HELD_MESSAGE, HELD_REASON, hold
             if hold(req, locked=True):
+                _run_slot.finishing(req.session_id, user_msg_id)
                 on_event({"type": "chat_response", "data": {
                     "type": "result", "session_id": req.session_id, "msg_id": user_msg_id,
                     "assistant_msg_id": assistant_msg_id, "content": HELD_MESSAGE, "blocks": [],
@@ -605,12 +652,14 @@ def _process_turn_once(
             session, history = prepare_turn(
                 db=db, req=req, writer=_writer,
                 user_msg_id=user_msg_id, on_event=on_event,
+                assistant_msg_id=assistant_msg_id,
             )
         # The admission lock is released only after quiescence can observe us.
         # A background turn runs beside the conversation and leaves its
         # status to the turns the owner sees.
-        if not getattr(req, "background", False):
+        if not beside_conversation(req):
             db.update_session(req.session_id, status="running")
+    _bind_usage_branch(db, req.session_id, getattr(req, "branch_id", None))
 
     # 事件层：用户轮已落盘，agent loop 即将启动。
     from openprogram.runtime.events import emit_safe as _emit_safe
@@ -697,41 +746,6 @@ def _process_turn_once(
                 ordered_blocks_out=_ordered_blocks,
                 execution_context=execution_context,
             )
-        except Exception as _loop_exc:
-            from openprogram.runtime.context.compaction.reactive import is_overflow_error, reactive_compact
-            # A background or clean turn never compacts the owner's conversation:
-            # its overflow ends the turn, and the failure path records why.
-            if is_overflow_error(_loop_exc) and not req.background and req.history_override is None:
-                from copy import deepcopy
-                _agent_profile = (
-                    deepcopy(req.profile_snapshot) if req.profile_snapshot is not None
-                    else _load_agent_profile(req.agent_id)
-                )
-                _compacted = reactive_compact(
-                    agent_profile=_agent_profile,
-                    session_id=req.session_id,
-                    model=_resolve_model(_agent_profile, req.model_override),
-                    on_event=_on_event_persist,
-                )
-                if _compacted is not None:
-                    # Same set object the stream tap consults — clear in
-                    # place so the retry run refills it.
-                    _agentic_tool_names.clear()
-                    _ordered_blocks = []
-                    final_text, usage, tool_calls = _run_loop_blocking(
-                        req=req,
-                        history=_compacted,
-                        on_event=_on_event_persist,
-                        cancel_event=cancel_event,
-                        assistant_msg_id=assistant_msg_id,
-                        agentic_tool_names_out=_agentic_tool_names,
-                        ordered_blocks_out=_ordered_blocks,
-                        execution_context=execution_context,
-                    )
-                else:
-                    raise
-            else:
-                raise
         finally:
             _on_event_persist.flush()
     except Exception as e:
@@ -862,7 +876,7 @@ def _process_turn_once(
     # Mark session idle/done now that the turn completed successfully.
     session_finished = False
     try:
-        if not getattr(req, "background", False):
+        if not beside_conversation(req):
             mark_session_finished(db, req.session_id, quiet=bool(getattr(req, "quiet_finish", False)))
         session_finished = True
     except Exception:
@@ -892,7 +906,10 @@ def _process_turn_once(
     #    (content plus the ordered blocks a reload would show), so a client
     #    that missed stream frames can replace the row instead of keeping
     #    a partial one. Without final blocks the row keeps the ones the
-    #    stream tap wrote.
+    #    stream tap wrote. The slot learns first that the turn is only
+    #    finishing up, so a message sent on seeing this frame waits for
+    #    the slot instead of being refused (run_slot.finishing).
+    _run_slot.finishing(req.session_id, user_msg_id)
     on_event({"type": "chat_response",
               "data": {"type": "result", "session_id": req.session_id,
                        "msg_id": user_msg_id,

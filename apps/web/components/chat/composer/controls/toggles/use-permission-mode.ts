@@ -11,6 +11,7 @@ import {
   useBoundComposerSettings,
   useBoundSetComposerSettings,
 } from "../../state/use-composer-settings";
+import { branchTarget } from "@/lib/agents/branch-target";
 import { wsRequest } from "@/lib/net/ws/ws-request";
 import { useSessionScope } from "@/lib/session-store/session-scope";
 import { permissionSnapshotPatch } from "@/lib/session-store/permission-state";
@@ -78,6 +79,7 @@ export function usePermissionMode(): PermissionModeHook {
   // Bound to this composer subtree's session scope.
   const settings = useBoundComposerSettings();
   const sid = useSessionScope((s) => s.sid);
+  const branchId = settings.active_branch_id ?? null;
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const generation = useRef(0);
@@ -111,13 +113,13 @@ export function usePermissionMode(): PermissionModeHook {
     setError(null);
     setPending(false);
     void wsRequest<{ mode?: unknown; version?: unknown; error?: string }>(
-      "set_permission", { session_id: sid }, "permission_changed", { requestId: true },
+      "set_permission", { session_id: sid, ...branchTarget(branchId) }, "permission_changed", { requestId: true },
     ).then((data) => {
       if (!active) return;
       if (data && !data.error) apply(data);
     });
     return () => { active = false; };
-  }, [sid, apply]);
+  }, [sid, branchId, apply]);
   const set = useCallback((m: PermissionMode) => {
     if (pending) return;
     setError(null);
@@ -128,7 +130,7 @@ export function usePermissionMode(): PermissionModeHook {
       // A confirmed version is sufficient for the atomic update. Send it now,
       // without delaying the change behind another settings read.
       const current = expectedVersion !== undefined ? { version: expectedVersion } : await wsRequest<{ mode?: unknown; version?: number; error?: string }>(
-        "set_permission", { session_id: sid }, "permission_changed", { requestId: true },
+        "set_permission", { session_id: sid, ...branchTarget(branchId) }, "permission_changed", { requestId: true },
       );
       if (operationGeneration !== generation.current) return;
       if (current?.error === "session_not_found") {
@@ -140,7 +142,7 @@ export function usePermissionMode(): PermissionModeHook {
         return;
       }
       const result = await wsRequest<{ mode?: unknown; version?: unknown; error?: string }>(
-        "set_permission", { session_id: sid, mode: m, expected_version: expectedVersion ?? current.version },
+        "set_permission", { session_id: sid, ...branchTarget(branchId), mode: m, expected_version: expectedVersion ?? current.version },
         "permission_changed", { requestId: true },
       );
       if (operationGeneration !== generation.current) return;
@@ -151,6 +153,6 @@ export function usePermissionMode(): PermissionModeHook {
     })().finally(() => {
       if (operationGeneration === generation.current) setPending(false);
     });
-  }, [pending, sid, setComposerSettings, apply, text]);
+  }, [pending, sid, branchId, setComposerSettings, apply, text]);
   return { mode, options, menuOpen, setMenuOpen, set, pending, error };
 }

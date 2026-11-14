@@ -123,7 +123,11 @@ def test_size_sort_uses_complete_totals_with_unknown_last(project_root):
     for name, size in [('small', 2), ('large', 40)]:
         (project_root / name).mkdir()
         (project_root / name / 'file').write_bytes(b'x' * size)
-        result = _run(ws_files.handle_project_folder_size, {'project_id': 'p1', 'path': name, 'operation': 'start'})['data']
+        size_cmd = {'project_id': 'p1', 'path': name}
+        result = _run(ws_files.handle_project_folder_size, {**size_cmd, 'operation': 'start'})['data']
+        # A scan works in 50 ms slices; on a loaded machine one slice may not finish.
+        while result['state'] == 'partial':
+            result = _run(ws_files.handle_project_folder_size, {**size_cmd, 'operation': 'continue', 'token': result['token']})['data']
         assert result['state'] == 'complete'
     cmd = {'project_id': 'p1', 'path': '', 'sort': 'size:desc:folders:hidden:ignored'}
     result = _run(ws_files.handle_project_file_tree, cmd)['data']

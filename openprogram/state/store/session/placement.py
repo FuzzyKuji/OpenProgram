@@ -117,6 +117,39 @@ def iter_session_dirs(root: Path) -> Iterator[tuple[str, Path]]:
                 yield child.name, child
 
 
+class SessionFolderBusy(PermissionError):
+    """Another program held a conversation folder for longer than the retry."""
+
+
+def move_session_folder(source: Path, target: Path) -> None:
+    """Rename a conversation folder, or leave it exactly where it was.
+
+    Windows refuses to rename a directory while any file inside it is open:
+    a reader folding the log in another process, an indexer, an antivirus
+    scan, or a command still running in the conversation's work folder.
+    This process keeps no file inside a conversation folder open between
+    operations, so there is nothing of its own to close first. The refusal
+    is retried for the platform seam's bound and then raised as
+    :class:`SessionFolderBusy`. A rename either happens whole or not at
+    all, and the folder is never copied instead.
+    """
+    from openprogram.host._platform.filesystem import (
+        filesystem_path, is_sharing_violation, retry_sharing_violation,
+    )
+    import os
+
+    native_source, native_target = filesystem_path(source), filesystem_path(target)
+    try:
+        retry_sharing_violation(lambda: os.rename(native_source, native_target))
+    except OSError as error:
+        if not is_sharing_violation(error):
+            raise
+        raise SessionFolderBusy(
+            f"the conversation folder {source} is in use by another program and was not moved; "
+            "close what has files in it open, then try again"
+        ) from error
+
+
 def target_dir_for_project(
     root: Path, session_id: str, *, project_id: str | None, is_default: bool,
 ) -> Path:

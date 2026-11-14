@@ -1,11 +1,13 @@
 <title>轮次占用</title>
-<meta name="description" content="每个会话一个进行中的轮次：停止、队列和会话槽如何释放和排序。">
+<meta name="description" content="每个分支一个进行中的轮次：停止、队列和会话槽如何释放和排序。">
 <h1>轮次占用</h1>
-<p>一个会话只允许一个进行中的轮次。运行时输入进入队列。停止是打断：占用在取消意图发出时释放，不等旧轮次线程结束。</p>
+<p>对话的一个分支只允许一个进行中的轮次。输入框占用的是当前选中分支的槽，所以运行时输入进入队列；另一个分支上的轮次占用那个分支自己的槽（<a href="../../runtime/execution/control.zh.html#branch-run-slots">两个分支同时运行</a>）。</p>
+<p>切换分支从不等待：之后输入框占用进入分支的槽，离开的那一轮在自己的槽里继续运行（<a href="../../runtime/execution/control.zh.html#branch-switch">切换分支</a>）。</p>
+<p>停止是打断：占用在取消意图发出时释放，不等旧轮次线程结束。</p>
 
 <h2 id="stop">停止</h2>
 <ol>
-<li>为规范执行发送 <code translate="no">execution.cancel</code>（<code translate="no">use-chat-submit.ts</code> 的 <code translate="no">stopSession</code>）。</li>
+<li>为规范执行发送 <code translate="no">execution.cancel</code>（<code translate="no">use-chat-submit.ts</code> 的 <code translate="no">stopSession</code>）。确认消息给出这一轮的 id 之前，停止改为按 <code translate="no">session_id</code> 和 <code translate="no">client_request_id</code> 指明这次发送；<code translate="no">/compact</code> 或回退用 <code translate="no">operation.cancel</code> 停止（<a href="../../runtime/execution/control.zh.html#branch-operations">每个分支一个前台操作</a>）。</li>
 <li>用 Stop 覆盖层（<code translate="no">stopOverlay</code>）把进行中的回复画成 <code translate="no">cancelled</code>，保留已流出的文字。覆盖层盖在行上，从不改写行：服务端的行到达已结束状态，或服务端拒绝这次取消的命令 id 时，它就结束。</li>
 <li><code translate="no">setRunningTaskFor(sessionId, null, "always")</code>：队列在 0ms 排空，发送可用。不因旧轮次收尾禁用发送。</li>
 </ol>
@@ -29,9 +31,28 @@
 <ol>
 <li>把已接纳的 <code translate="no">execution_id</code> 对应到 <code translate="no">session_id</code> 和 <code translate="no">msg_id</code>。</li>
 <li><code translate="no">_finish_owned_run(session_id, msg_id)</code> 移除传输槽。<code translate="no">msg_id</code> 不匹配时不做事，所以新预留安全，被取消轮次的 <code translate="no">finally</code> 也无害。</li>
-<li>广播 <code translate="no">running_task_clear</code>，指明结束的轮次。</li>
+<li>广播槽位状态。执行还在收尾时，这一帧是状态为 <code translate="no">cancelling</code> 的 <code translate="no">running_task</code>；轮次结束时广播 <code translate="no">running_task_clear</code>，指明结束的轮次。槽位已被别的占用者拿走时，这一帧仍是这条清除，不会为新占用者发 <code translate="no">running_task</code>。</li>
 </ol>
 <p class="note">下一次 <code translate="no">_try_reserve_run</code> 不等旧驱动线程。只有与槽位执行匹配的 clear 才生效；停止并发送后的无范围 clear 已过期。</p>
+
+<h2 id="finishing">轮次刚结束时发出的消息</h2>
+<p>一轮的终止帧（<code translate="no">result</code> 或 <code translate="no">error</code>）发出时，槽位还没空：这一轮还要写完执行记录和上下文数字，大约十分之一秒后才发 <code translate="no">running_task_clear</code>。看到“完成”就发出的消息，以前会在这段间隙被拒绝 <code translate="no">run_active</code>，而只有网页会重发被拒绝的消息。</p>
+<table class="stack">
+<caption>请求到达时占着该分支槽位的是什么</caption>
+<thead><tr><th scope="col">占用者</th><th scope="col">请求</th></tr></thead>
+<tbody>
+<tr><th scope="row">已发出终止帧的轮次</th><td>不持锁等待槽位交还，然后占用；最多 5 秒（<code translate="no">FINISHING_WAIT_SECONDS</code>），超过后照旧拒绝</td></tr>
+<tr><th scope="row">仍在运行的轮次、其他操作</th><td>立即拒绝，<code translate="no">run_active</code></td></tr>
+<tr><th scope="row">同一个请求（同一个键）</th><td>按重复请求处理（<a href="../../runtime/execution/control.zh.html#branch-operations">每个分支一个前台操作</a>），从不等待</td></tr>
+</tbody>
+</table>
+<ul>
+<li><strong>标记</strong>：轮次运行时在发出这一帧之前调用 <code translate="no">run_slot.finishing</code>，所以没人能在槽位不知情时看到“完成”。标记的是这一轮的消息 id 占着的槽位，切换分支把它移到哪里就标哪里（<code translate="no">mark_run_finishing</code>）。</li>
+<li><strong>所有入口</strong>：发送、发往未选中分支的发送、<code translate="no">reserve_operation</code>（重试、编辑、函数运行）以及运行时自己发起的轮次（所有者轮次、渠道、经 Worker 的 <code translate="no">--print --resume</code>）都同样等待。</li>
+<li><strong>为什么不先释放槽位</strong>：收尾要写这个分支的执行记录和数字，这时准入的轮次会和它同时写。Codex 的做法与此相同：发 <code translate="no">TurnComplete</code> 之前把活动轮次标为 <code translate="no">finishing</code>，期间到达的输入等它结束（<code translate="no">codex-rs/core/src/tasks/mod.rs</code> 的 <code translate="no">on_task_finished</code>，<code translate="no">session/inject.rs</code>）。</li>
+<li><strong>为什么不放在客户端</strong>：终端客户端、<code translate="no">--print</code>、渠道和脚本都得各写一套重试。</li>
+<li><strong>测试</strong>：<code translate="no">tests/component/webui/chat/test_send_after_result.py</code> 在第一轮的 <code translate="no">result</code> 广播的那一刻经真实的聊天处理器发送。</li>
+</ul>
 
 <h2 id="run-state-frames-are-ordered-by-run_seq">运行状态帧按 <code translate="no">run_seq</code> 排序</h2>
 <p><code translate="no">running_task</code>、<code translate="no">running_task_clear</code>、<code translate="no">run_state</code> 和 <code translate="no">session_loaded</code>（<code translate="no">run_active</code>、<code translate="no">run_task</code>）都带它：服务端递增数（<code translate="no">server._next_run_seq()</code>，微秒墙钟时间，跨 worker 重启仍递增，在 JSON 里精确），在读取该帧运行状态之前取得。</p>

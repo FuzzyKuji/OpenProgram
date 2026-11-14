@@ -5,13 +5,15 @@
  *  - a background-agent notice (``source: "job_followup"``): its
  *    ``notice`` items name each agent that finished, and each item's part
  *    of the notice text (agent/job/notices.py ``notice_text``) holds the
- *    reply to show when the row opens;
+ *    reply to show when the row opens, inside the result block
+ *    ``<agent …>`` … ``</agent>`` (runtime/jobs/agent_result.py ``render``)
+ *    that notices written before it lack;
  *  - a message delivered to a branch: it starts with the receipt line
  *    ``[message|task from SID:HEAD (sender)]`` (send_message/delivery.py).
  */
 import type { NoticeItem } from "../../session-store/types";
 
-const KINDS = new Set(["report", "reply", "idle"]);
+const KINDS = new Set(["report", "reply", "idle", "stalled"]);
 
 export function readNotice(raw: unknown): NoticeItem[] | undefined {
   if (!Array.isArray(raw)) return undefined;
@@ -33,9 +35,25 @@ export function readNotice(raw: unknown): NoticeItem[] | undefined {
 const FOOTER = "Carry on with the user's request from here";
 const CONTINUE = "To continue with it, use send_message(";
 
+const BLOCK_OPEN = /^<agent\s[^>]*>$/;
+const BLOCK_CLOSE = "</agent>";
+
+/** The text inside a result block, without its tags and the ``files:`` and
+ *  ``usage:`` lines the block ends with; null when ``lines`` has no block. */
+function blockText(lines: string[]): string[] | null {
+  const open = lines.findIndex((l) => BLOCK_OPEN.test(l));
+  const close = lines.lastIndexOf(BLOCK_CLOSE);
+  if (open < 0 || close <= open) return null;
+  const inner = lines.slice(open + 1, close);
+  if (inner.length && inner[inner.length - 1].startsWith("usage: ")) inner.pop();
+  if (inner.length && inner[inner.length - 1].startsWith("files: ")) inner.pop();
+  return inner;
+}
+
 /** What the row for ``items[index]`` shows when it opens: the branch's
- *  reply for a reply or idle item, the task it was given for a report
- *  (the report itself is in the agent's context, not the notice). */
+ *  reply for a reply or idle item, the task it was given for a report or a
+ *  stalled agent (the report itself is in the agent's context, not the
+ *  notice). */
 export function noticeDetail(content: string, items: NoticeItem[], index: number): string {
   const lines = content.split("\n");
   const starts = new Set(items.map((it) => it.line));
@@ -47,13 +65,14 @@ export function noticeDetail(content: string, items: NoticeItem[], index: number
   while (block.length && !block[block.length - 1].trim()) block.pop();
   if (block.length && block[block.length - 1].startsWith(CONTINUE)) block.pop();
   const item = items[index];
-  if (item.kind === "report") {
+  if (item.kind === "report" || item.kind === "stalled") {
     const task = block.find((l) => l.startsWith("Task: "));
     return task ? task.slice("Task: ".length) : "";
   }
   const marker = item.kind === "idle" ? "Its latest reply:" : `Reply from branch ${item.address}:`;
   const at = block.indexOf(marker);
-  return (at >= 0 ? block.slice(at + 1) : block).join("\n").trim();
+  const after = at >= 0 ? block.slice(at + 1) : block;
+  return (blockText(after) ?? after).join("\n").trim();
 }
 
 export interface Receipt {

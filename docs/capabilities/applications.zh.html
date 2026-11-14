@@ -16,7 +16,7 @@
 <ul>
 <li><strong>卸载</strong>先询问，并保留应用数据。<strong>从来源更新</strong>显示来源目录并打开预填的安装表单，提交前请审查来源。</li>
 <li>安装表单要求对 Python 后端和 <code translate="no">files.project.write</code> 明确信任。</li>
-<li>已安装包内的应用是该包的子文件夹，如 <code translate="no">auto_research/app</code>。它的调用逻辑是其注册的 Agent 入口的并集，例如 <code translate="no">browser</code> 的 <code translate="no">web_use</code>。</li>
+<li>已安装包内的应用是该包的子文件夹，如 <code translate="no">auto_research/app</code>。它的调用逻辑是其注册的 Agent 入口的并集。</li>
 <li>Agent 不能调用的应用用一行说明：纯界面应用只作为窗口打开；只导出 Python 函数给其他 Program 的包是 Python 库。</li>
 <li>新标签页在获得焦点时和每十秒刷新应用列表。</li>
 </ul>
@@ -47,7 +47,7 @@
 <table class="stack">
 <thead><tr><th scope="col">内置应用</th><th scope="col">作用</th><th scope="col">禁用后失去</th></tr></thead>
 <tbody>
-<tr><th scope="row"><code translate="no">browser</code></th><td>浏览器服务和 <code translate="no">web_use</code></td><td>这两者</td></tr>
+<tr><th scope="row"><code translate="no">browser</code></th><td><code translate="no">computer_use_agent</code> 操作的内置浏览器</td><td>浏览器目标；桌面目标照常工作</td></tr>
 <tr><th scope="row"><code translate="no">workflow_recording</code></th><td><a href="workflows/recording.zh.html">录制 Workflow</a>；其窗口不经输入框就能开始录制</td><td>输入框的<strong>录制 Workflow</strong> 和相关路由</td></tr>
 <tr><th scope="row"><code translate="no">office_editor</code>（<strong>ONLYOFFICE</strong>）</th><td>在文件窗口打开 Word、Excel 和 PowerPoint；其窗口在当前项目顶层新建空白文件并列出已有 Office 文档</td><td>这些文件只提供原文件下载</td></tr>
 <tr><th scope="row"><code translate="no">meeting</code></th><td><a href="meetings.zh.html">会议</a>：录制通话、转写，在新对话中总结</td><td>会议</td></tr>
@@ -202,7 +202,7 @@ print(status(job["id"]))</code></pre>
 <tbody>
 <tr><th scope="row">名称</th><td><code translate="no">&lt;id&gt;__&lt;operation&gt;</code>，字母、数字、<code translate="no">_</code>、<code translate="no">-</code> 以外的字符替换为 <code translate="no">_</code>：<code translate="no">local_notes__summarize</code></td></tr>
 <tr><th scope="row">输入</th><td>操作输入放在 <code translate="no">input</code>，项目作用域加 <code translate="no">project_id</code>。等待运行并返回。等待提问的运行返回其 id，供 <code translate="no">status</code>、<code translate="no">answer</code> 或 <code translate="no">cancel</code> 使用。</td></tr>
-<tr><th scope="row">暴露</th><td>和 <code translate="no">resource</code> 一样需要审批。deferred：模型只看到名称，需要时用 <code translate="no">tool_search</code> 加载 schema。应用在会话中打开期间，入口在该会话常驻。</td></tr>
+<tr><th scope="row">暴露</th><td>和 <code translate="no">resource</code> 一样需要审批。deferred：模型只看到名称，需要时用 <code translate="no">tool_search</code> 加载 schema。应用在会话中打开也不加载：目录注明它已打开，由模型按名字加载入口。</td></tr>
 <tr><th scope="row"><code translate="no">agent: false</code></th><td>没有入口</td></tr>
 </tbody>
 </table>

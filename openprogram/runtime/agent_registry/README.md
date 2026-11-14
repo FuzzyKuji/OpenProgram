@@ -32,6 +32,7 @@ Layout on disk:
 ## Files in this directory
 
 - **`builtin_agents.py`** — The built-in Agents: the saved Agents every instance starts with
+- **`delegation.py`** — Which saved Agents other agents may start, and how
 - **`manager.py`** — Agent registry + on-disk storage
 - **`runtime_registry.py`** — Per-agent runtime cache
 - **`session_aliases.py`** — Session aliases

@@ -943,6 +943,9 @@ def _tools_handed_to_agent_loop(req, tool_names):
     import openprogram.runtime.conversation.turn_runtime.loop_runner as _lr
     # By name: the package attribute `loop` can be the function, not the module.
     _al = importlib.import_module("openprogram.runtime.agent.loop")
+    # The driver binds agent_loop by name when first imported; imported under
+    # the patch below it would keep the fake loop for the rest of the process.
+    importlib.import_module("openprogram.runtime.agent.loop.driver")
     from openprogram.runtime.conversation import turn_runtime as _dispatcher
 
     captured: list = []
@@ -983,7 +986,12 @@ def test_dispatcher_installs_gate_on_every_turn(tmp_path, monkeypatch):
                       history_override=[],
                       permission_rules=PermissionRules(deny=["bash"]))
     tools, probes = _tools_handed_to_agent_loop(req, ["bash", "read"])
-    assert set(tools) == {"bash", "read"}
+    # The screen tool stays listed (refused) when no Page is open, so the
+    # tools array never changes; the usable tools are the resolved ones.
+    usable = {name for name, tool in tools.items()
+              if getattr(tool, "_unavailable_reason", None) is None}
+    assert usable == {"bash", "read"}
+    assert set(tools) - usable <= {"computer_use_agent"}
 
     # An explicit deny still applies to an owner-delegated bypass turn.
     result = asyncio.run(tools["bash"].execute(
@@ -1060,6 +1068,18 @@ def test_plan_beats_an_allow_rule_but_not_a_deny_rule(owner):
     assert 'your deny rule "bash" matches' in decision.refusal.text
 
 
+def test_legacy_workspace_mismatch_does_not_override_normal_permissions(owner, monkeypatch):
+    from openprogram.runtime.permissions.policy import permission_decision
+    from openprogram.runtime.permissions import session_facts
+    monkeypatch.setattr(session_facts.facts(), "files_await_decision", lambda _sid: True, raising=False)
+    for name, args in (("edit", {"file_path": "/tmp/a.py"}), ("bash", {"command": "git status"}),
+                       ("computer_use_agent", {"target": "browser"}), ("send_file", {"path": "/tmp/a.py"})):
+        tool, _ = _make_tool(name)
+        assert permission_decision(tool, _owner_request("bypass"), args).outcome == "allow"
+    tool, _ = _make_tool("edit")
+    assert permission_decision(tool, _owner_request("plan"), {}).outcome == "deny"
+
+
 def test_a_turn_no_one_can_answer_is_refused_and_never_asks(owner):
     from openprogram.runtime.permissions.policy import can_approve, permission_decision
     tool, _ran = _make_tool("bash")
@@ -1077,13 +1097,13 @@ def test_a_turn_no_one_can_answer_is_refused_and_never_asks(owner):
 def test_a_program_gets_its_pages_under_unrestricted(owner, monkeypatch):
     from openprogram.runtime.permissions import session_facts
     from openprogram.runtime.permissions.policy import permission_decision, surface_grant_applies
-    tool, _ran = _make_tool("web_use")
-    list_pages = {"command": "list_pages"}
-    monkeypatch.setattr(type(session_facts.facts()), "web_use_available", lambda self, context: True)
+    tool, _ran = _make_tool("computer_use_agent")
+    list_pages = {"target": "browser", "action": "tabs"}
+    monkeypatch.setattr(type(session_facts.facts()), "browser_pages_available", lambda self, context: True)
 
     decision = permission_decision(tool, _owner_request("bypass"), list_pages)
     assert (decision.outcome, decision.code) == ("allow", "MODE_UNRESTRICTED")
-    assert surface_grant_applies("web_use", _owner_request("bypass"), list_pages)
+    assert surface_grant_applies("computer_use_agent", _owner_request("bypass"), list_pages)
 
 
 def test_a_malformed_call_goes_back_to_the_model_without_a_card(owner, monkeypatch):

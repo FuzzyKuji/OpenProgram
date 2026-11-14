@@ -112,6 +112,7 @@
 <thead class="sr"><tr><th scope="col">引用</th><th scope="col">校验依据</th><th scope="col">实测</th></tr></thead>
 <tbody>
 <tr><th scope="row">命令和 flag</th><td>以 <code translate="no">openprogram</code> 开头的行，用 <code translate="no">shlex</code> 切分，沿 <code translate="no">build_parser()</code> 逐级走</td><td>505 条命令</td></tr>
+<tr><th scope="row">被删的动词和 flag</th><td>本次范围删掉的动词或 flag，整段写在一个代码片段里。别的命令还保留的 flag，只在提到它所属命令的页面上算。顶层动词只在页面写了 <code translate="no">openprogram</code> 加它、或把它和两个以上其他顶层动词列在一起时才算，因为这样的词常常同时是应用名或目标名。</td><td>只在改动了解析器的范围里出现</td></tr>
 <tr><th scope="row">仓库路径</th><td>已跟踪的文件或目录；被 git 忽略的构建产物也算；通配模式跳过</td><td>1004 个</td></tr>
 <tr><th scope="row">部分路径和裸文件名</th><td>产品页上，带源码后缀且顶层段已知的必须能解析到。任何页面上，改动前能解析、改动后不能解析的都算。</td><td>1310 和 1080；规则前产品页 7 处、工程记录 229 处解析不到</td></tr>
 <tr><th scope="row">模块</th><td>解析到文件或其属性的 <code translate="no">openprogram.*</code>；排除域名</td><td>134 个</td></tr>

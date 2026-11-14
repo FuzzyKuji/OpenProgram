@@ -194,6 +194,50 @@ def test_text_frames_name_their_item_and_utf16_offset(store):
     ]
 
 
+def _stored_blocks(store):
+    node = next(n for n in store.get_nodes("s") if n.id == "u_reply")
+    extra = (node.metadata or {}).get("extra") or "{}"
+    return json.loads(extra)["blocks"] if isinstance(extra, str) else extra["blocks"]
+
+
+def test_a_restarted_response_leaves_the_row_before_the_new_one_arrives(store):
+    sent = []
+    tap = _tap(store, sent.append)
+    tap(_frame({"type": "text", "text": "first answer"}))
+    tap(_frame({"type": "tool_use", "tool": "read", "tool_call_id": "t1", "input": {}}))
+    tap(_frame({"type": "tool_result", "tool": "read", "tool_call_id": "t1", "result": "ok"}))
+    # The next response streams reasoning and text, stalls, and is sent again.
+    tap(_frame({"type": "thinking", "text": "Inspecting"}))
+    tap(_frame({"type": "text", "text": "I will"}))
+    tap(_frame({"type": "retry", "attempt": 2, "reason": "transport", "restart": True}))
+
+    assert [b["type"] for b in tap.blocks] == ["text", "tool"]
+    assert _stored_text(store) == "first answer"
+    assert [b["type"] for b in _stored_blocks(store)] == ["text", "tool"]
+
+    tap(_frame({"type": "text", "text": "done"}))
+    assert [b.get("text") for b in tap.blocks if b["type"] == "text"] == ["first answer", "done"]
+    # The new text starts its block: nothing is appended to the dropped one.
+    assert (sent[-1]["data"]["item_index"], sent[-1]["data"]["offset"]) == (2, 0)
+    assert _stored_text(store) == "first answerdone"
+
+
+def test_a_restart_cuts_only_the_response_being_sent_again(store):
+    tap = _tap(store, lambda env: None)
+    # A response that ran out of output is continued by the next one, which
+    # adds to the same text block; a restart of the second keeps the first.
+    tap(_frame({"type": "text", "text": "part one"}))
+    tap(_frame({"type": "retry", "attempt": 2, "reason": "output_limit"}))
+    tap(_frame({"type": "text", "text": ", part tw"}))
+    tap(_frame({"type": "retry", "attempt": 2, "reason": "transport", "restart": True}))
+    assert [b["text"] for b in tap.blocks] == ["part one"]
+
+    # A reconnect before any content (no ``restart``) cuts nothing.
+    tap(_frame({"type": "text", "text": ", part two"}))
+    tap(_frame({"type": "retry", "attempt": 2, "reason": "transport"}))
+    assert [b["text"] for b in tap.blocks] == ["part one, part two"]
+
+
 def test_a_frame_of_a_child_row_gets_no_item_fields(store):
     sent = []
     _tap(store, sent.append)(_frame({"type": "text", "text": "x"}, msg_id="child", session_id="other"))
@@ -256,8 +300,12 @@ def test_queued_text_merges_only_when_contiguous():
 
 # ---- final blocks ----------------------------------------------------
 
+# The loop's ordered blocks win, on a Stop too: they hold the cut response
+# (``loop_runner._keep_stopped_response``). The tap's trace stands in only
+# when they hold nothing.
 @pytest.mark.parametrize("cancelled,ordered,expected", [
-    (True, [{"type": "text", "text": "done"}], "done and partial"),
+    (True, [{"type": "text", "text": "done"}], "done"),
+    (True, [], "done and partial"),
     (False, [{"type": "text", "text": "done"}], "done"),
     (False, [], "done and partial"),
 ])
@@ -281,22 +329,30 @@ def test_a_stop_after_a_finished_message_stores_the_partial_text(store):
     stop = threading.Event()
     stop.set()
     req = TurnRequest(session_id="s", user_text="hi", agent_id="main", source="web", user_msg_id="u")
+    # What the loop holds after the Stop: the finished response, then the cut
+    # one's text as one last unsigned response.
+    ordered = [
+        {"type": "text", "text": "finished"},
+        {"type": "text", "text": "partial", "partial": True, "round_start": True},
+    ]
 
-    _msg, blocks, _tools, _usage = persist_assistant_message(
+    msg, blocks, _tools, _usage = persist_assistant_message(
         db=store, req=req, session=store.get_session("s"), usage={}, final_text="finished",
-        history=[], tool_calls=[], _ordered_blocks=final_blocks(tap, [{"type": "text", "text": "finished"}], stop),
+        history=[], tool_calls=[], _ordered_blocks=final_blocks(tap, ordered, stop),
         _agentic_tool_names=set(), _placeholder_inserted=True, cancel_event=stop,
         assistant_msg_id="u_reply", user_msg_id="u",
     )
 
     assert [b.get("text") for b in blocks if b["type"] == "text"] == ["finished", "partial"]
+    # The stored text is what was shown, the cut text included.
+    assert "partial" in msg["content"]
 
 
 # ---- ids and origin --------------------------------------------------
 
 def _chat_request(cmd):
     return SimpleNamespace(
-        text="typed", cmd=cmd, user_attachments=None, recording_meta=None,
+        text="typed", cmd=cmd, user_attachments=None, attachments=None, recording_meta=None,
     )
 
 

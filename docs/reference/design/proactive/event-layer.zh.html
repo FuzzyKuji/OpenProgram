@@ -86,6 +86,7 @@ class Event:
 
 <pre translate="no"><code>{"hooks": {"turn.stop": [{"command": "python check_done.py", "timeout": 30}]}}</code></pre>
 <p class="note"><code translate="no">config.json</code> 顶层的 <code translate="no">hooks</code> 键。<code translate="no">install_config_hooks()</code> 把 gate 类注册为同步 shell gate，notify 类注册为后台运行器（守护线程，忽略退出码）。修改在 worker 下次重启时生效。</p>
+<p class="note">命令在 macOS 和 Linux 上由 <code translate="no">/bin/sh</code> 运行，在 Windows 上由 bash 运行，没有 bash 时改用 PowerShell 并提示一次。条目可以写 <code translate="no">"shell": "powershell"</code>，或给出 <code translate="no">args</code>，不经 shell 直接运行 <code translate="no">command</code>（<a href="../distribution/windows-command-shell.zh.html#hook-shell">hook 用哪个 shell</a>）。事件以 UTF-8 JSON 从标准输入送入。</p>
 
 <details>
 <summary><code translate="no">turn.stop</code> 续跑循环</summary>

@@ -17,6 +17,10 @@ from openprogram.programs._host.runtime import function
         "here when it belongs here."
     ),
     toolset=["always_on"],
+    # send_message took its place for the model: it reaches an Agent by
+    # name, and its reply waits as a notice without a timeout. Kept for
+    # the handoffs already stored (always_on/handoff.py replays them).
+    expose=False,
 )
 def handoff(to: str, message: str) -> str:
     """Send ``message`` to the conversation ``to`` names (id, title, Agent or SID:HEAD)."""

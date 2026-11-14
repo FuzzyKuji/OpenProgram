@@ -17,6 +17,7 @@ class _StreamFnProvider:
     def __init__(
         self, stream_fn, stream_simple_fn, *,
         supports_idempotency_key=False, supports_web_search=False,
+        bounds_own_stream_idle=False,
     ):
         self._stream = stream_fn
         self._stream_simple = stream_simple_fn
@@ -24,6 +25,10 @@ class _StreamFnProvider:
         # The request builder adds the provider's own server-side web search
         # tool when ``web_search=True`` (docs/reference/design/providers/web-search.html).
         self.supports_web_search = supports_web_search
+        # The adapter reads every attempt under its own idle bound, inside its
+        # retry loop, so the stream chokepoint does not bound it again
+        # (utils/stream_idle.py).
+        self.bounds_own_stream_idle = bounds_own_stream_idle
 
     def stream(self, model, context, options=None):
         return self._stream(model, context, options)
@@ -68,6 +73,7 @@ def _load_builtin_providers() -> dict[str, _StreamFnProvider]:
         "openai-completions": _StreamFnProvider(
             openai_completions.stream_simple, openai_completions.stream_simple,
             supports_idempotency_key=True,
+            bounds_own_stream_idle=True,
         ),
         "google-generative-ai": _StreamFnProvider(
             google.stream_simple, google.stream_simple,
@@ -87,6 +93,7 @@ def _load_builtin_providers() -> dict[str, _StreamFnProvider]:
         "openai-codex": _StreamFnProvider(
             stream_openai_codex_responses, stream_simple_openai_codex_responses,
             supports_web_search=True,
+            bounds_own_stream_idle=True,
         ),
         "gemini-subscription": _StreamFnProvider(
             stream_google_gemini_cli, stream_simple_google_gemini_cli,
@@ -97,6 +104,9 @@ def _load_builtin_providers() -> dict[str, _StreamFnProvider]:
             # tools, so the runtime keeps the local web_search tool. The
             # builder still honours web_search=True on a request without
             # function tools (shared/google.py google_search_applies).
+            # Its own retry loop waits silently between attempts, so it
+            # bounds each attempt's read itself.
+            bounds_own_stream_idle=True,
         ),
         "bedrock-converse-stream": _StreamFnProvider(
             stream_bedrock, stream_simple_bedrock,

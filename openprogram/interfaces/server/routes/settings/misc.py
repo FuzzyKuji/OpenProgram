@@ -98,6 +98,12 @@ def register(app):
         from openprogram.host.system_access import report
         return JSONResponse(report(), headers={"Cache-Control": "no-store"})
 
+    @app.get("/api/system/features")
+    def system_features_api():
+        """Which platform-dependent features this worker's computer has."""
+        from openprogram.interfaces.server.host_features import report
+        return JSONResponse(report(), headers={"Cache-Control": "no-store"})
+
     @app.get("/api/system/access/waits")
     def system_access_waits_api(request: Request, session_id: str | None = None):
         """Return owner-authorized durable desktop access waits for reconnect."""

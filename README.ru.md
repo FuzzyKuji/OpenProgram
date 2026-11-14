@@ -50,7 +50,7 @@
 curl -fsSL https://openprogram.io/install | sh
 ```
 
-В Windows (начиная с v1.1.0): `irm https://openprogram.io/install.ps1 | iex`. Настольное приложение для macOS — DMG на [странице релизов](https://github.com/FuzzyKuji/OpenProgram/releases); приложения для Linux и Windows появятся в v1.1.0. Если openprogram.io не отвечает: `curl -fsSL https://raw.githubusercontent.com/FuzzyKuji/OpenProgram/main/docs/_static_root/install.sh | sh`. Другие варианты — в [руководстве по установке](https://openprogram.io/docs/install/install.html) (на английском).
+В Windows (начиная с v1.2.0): `irm https://openprogram.io/install.ps1 | iex`. Настольное приложение для macOS — DMG на [странице релизов](https://github.com/FuzzyKuji/OpenProgram/releases); приложение для Linux доступно там же в виде deb и AppImage, а приложение для Windows появится в v1.1.1. Если openprogram.io не отвечает: `curl -fsSL https://raw.githubusercontent.com/FuzzyKuji/OpenProgram/main/docs/_static_root/install.sh | sh`. Другие варианты — в [руководстве по установке](https://openprogram.io/docs/install/install.html) (на английском).
 
 ## Быстрый старт
 
@@ -101,7 +101,7 @@ class SupportAgent(Agent):
 
 | | |
 |---|---|
-| **[Настольный и веб-интерфейс](https://openprogram.io/docs/reference/design/ui/README.html)** | Приложение на macOS, а начиная с v1.1.0 и на Linux и Windows; веб-интерфейс — на любой из этих систем или на сервере. |
+| **[Настольный и веб-интерфейс](https://openprogram.io/docs/reference/design/ui/README.html)** | Приложение на macOS и Linux, а начиная с v1.2.0 и на Windows; веб-интерфейс — на любой из этих систем или на сервере. |
 | **[Разделённые панели](https://openprogram.io/docs/reference/design/ui/workspace/center-tabs-and-split-layout.html)** | Чаты, файлы, терминалы и веб-страницы рядом. |
 | **[Встроенный браузер](https://openprogram.io/docs/reference/design/ui/browser/built-in-browser.html)** | Браузер, который агент читает и которым управляет у вас на глазах. |
 | **[Встроенный терминал](https://openprogram.io/docs/reference/design/ui/workspace/integrated-terminal.html)** | Терминалы в рабочем пространстве, общие с агентом. |

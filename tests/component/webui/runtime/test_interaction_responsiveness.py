@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import threading
 
 import pytest
 
 from openprogram.state.store.session.graph.builder import build_session_graph
+from openprogram.runtime.conversation.session_config import SessionRunConfig
 from openprogram.interfaces.server.ws_actions.chat import _persist_attachments_async
 from openprogram.interfaces.server.ws_actions.session import _session_io
 from openprogram.interfaces.server.ws_actions.session import handle_load_session
@@ -106,7 +108,7 @@ def test_session_store_read_keeps_event_loop_heartbeat(tmp_path):
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("phase", ["read", "aggregate", "runtime", "page"])
+@pytest.mark.parametrize("phase", ["read", "aggregate", "runtime", "page", "page_snapshot"])
 def test_handle_load_session_offloads_slow_history_and_keeps_new_head(
     tmp_path, monkeypatch, phase
 ):
@@ -138,6 +140,7 @@ def test_handle_load_session_offloads_slow_history_and_keeps_new_head(
             "aggregate": ("openprogram.interfaces.server.persistence", "aggregate_tool_messages"),
             "runtime": ("openprogram.interfaces.server.ws_actions.session.transcript", "_rebuild_runtime_cards"),
             "page": ("openprogram.interfaces.server.transcript.reader", "first_read"),
+            "page_snapshot": ("openprogram.interfaces.server.transcript.reader", "first_read"),
         }[phase]
         module = import_module(module_name)
         original_phase = getattr(module, name)
@@ -145,7 +148,14 @@ def test_handle_load_session_offloads_slow_history_and_keeps_new_head(
         def slow_phase(*args, **kwargs):
             started.set()
             assert release.wait(2)
-            return original_phase(*args, **kwargs)
+            result = original_phase(*args, **kwargs)
+            if phase == "page_snapshot":
+                # The publisher refreshes this same cached view after the page
+                # captured its window, before the event loop serializes it.
+                from openprogram.interfaces.server.transcript.turn_index import get_view
+                assert get_view(store, "s") is args[1]
+                assert args[1].head_id == "new"
+            return result
 
         monkeypatch.setattr(module, name, slow_phase)
     monkeypatch.setattr(
@@ -160,11 +170,7 @@ def test_handle_load_session_offloads_slow_history_and_keeps_new_head(
     })
     monkeypatch.setattr(
         "openprogram.runtime.conversation.session_config.load_session_run_config",
-        lambda _sid: type("Cfg", (), {
-            "tools_override": None,
-            "thinking_effort": None, "permission_mode": None,
-            "additional_working_dirs": [], "sandbox_enabled": None,
-        })(),
+        lambda _sid: SessionRunConfig(),
     )
     monkeypatch.setattr(
         "openprogram.runtime.conversation.session_config.project_defaults",
@@ -197,6 +203,9 @@ def test_handle_load_session_offloads_slow_history_and_keeps_new_head(
         from openprogram.interfaces.server.transcript import publisher
         from openprogram.interfaces.server.transcript.turn_index import forget_views
 
+        # No publisher from a previous test owns this read. The snapshot case
+        # below advances its shared view at a deterministic handoff instead.
+        publisher.stop()
         forget_views()
         ws = WS()
         task = asyncio.create_task(handle_load_session(ws, {"session_id": "s"}))
@@ -215,12 +224,11 @@ def test_handle_load_session_offloads_slow_history_and_keeps_new_head(
         store.set_head("s", "new")
         release.set()
         await task
-        # A publisher left running by another test may also send this socket
-        # an update for the new head; the read itself answers for "a".
-        [loaded] = [frame for frame in ws.frames if '"type": "session_loaded"' in frame]
+        frames = [json.loads(frame) for frame in ws.frames]
+        [loaded] = [frame["data"] for frame in frames if frame["type"] == "session_loaded"]
         assert server._sessions["s"]["head_id"] == "newer"
-        assert '"head_id": "a"' in loaded
-        assert '"head_id": "new"' not in loaded
+        assert loaded["window"]["head_id"] == "a"
+        assert loaded["head_id"] == loaded["window"]["head_id"]
         publisher.release(ws)
 
     asyncio.run(scenario())

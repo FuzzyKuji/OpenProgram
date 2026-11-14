@@ -15,12 +15,15 @@ class StorageOperations:
 
 
     def _session_lock(self, session_id: str):
-        with self._lock:
-            lock = self._session_locks.get(session_id)
-            if lock is None:
-                lock = shared.threading.RLock()
-                self._session_locks[session_id] = lock
-            return lock
+        """This process's lock for the conversation (see ``session_lock``).
+
+        The same lock the conversation's flock takes first, so a thread
+        holding the flock always holds this one too, and the two are
+        always taken in one order.
+        """
+        return shared.conversation_lock(
+            session_id, self.root_path if self._explicit_root else None,
+        )
 
 
     @shared.contextmanager
@@ -289,13 +292,19 @@ class StorageOperations:
         return reader(pair[1]) if pair else None
 
 
+    def _conversation_write_lock(self, session_id: str, *, timeout: shared.Optional[float] = None):
+        """The conversation's write lock: its process lock, then its flock."""
+        return shared.session_interprocess_lock(
+            session_id, timeout=timeout,
+            root=self.root_path if self._explicit_root else None,
+        )
+
+
     @shared.contextmanager
     def _head_file_lock(self, session_log: shared.SessionLog):
         """Serialize durable writers by session id, then re-read placement."""
         session_id = session_log.path.name
-        with shared.session_interprocess_lock(
-            session_id, root=self.root_path if self._explicit_root else None,
-        ):
+        with self._conversation_write_lock(session_id):
             if shared.is_deleted(self.root_path, session_id):
                 raise RuntimeError(f"session deleted: {session_id}")
             current = self._session_dir(session_id)
@@ -306,13 +315,72 @@ class StorageOperations:
 
     def _persist_meta(self, session_log: shared.SessionLog, idx: shared.SessionMemoryIndex) -> None:
         """Sync the in-memory meta back to the session log. Called whenever
-        title / head_id / extra / branches change."""
+        title / head_id / extra change. Branch records are not written
+        from the cache (``_meta_for_write``); ``_update_meta`` writes them."""
         with self._head_file_lock(session_log):
             with idx._persist_lock:
-                with idx._lock:
-                    meta = dict(idx.meta)
-                    meta["head_id"] = idx.head_id
+                session_log.write_meta(self._meta_for_write(session_log, idx))
+
+
+    def _meta_for_write(self, session_log: shared.SessionLog, idx: shared.SessionMemoryIndex,
+                        durable: shared.Optional[dict] = None) -> dict:
+        """The cached meta to write back whole, with the branch records
+        as they are on disk.
+
+        The caller holds the session write lock and ``idx._persist_lock``.
+        Branch records (``BRANCH_RECORD_KEYS``) are written only on the
+        record read inside that lock (``_update_meta`` and the other
+        read-modify-write paths), so the durable copy is never older than
+        the cached one; taking it here
+        keeps a cache that missed another process's write (or a write
+        that landed after this one's caller read it) from putting an
+        old copy of the records back. A caller that has just changed the
+        records on the record it read inside the lock passes it as
+        ``durable``.
+        """
+        if durable is None:
+            durable = session_log.read_meta()
+        with idx._lock:
+            shared.take_durable_branch_records(idx.meta, durable)
+            meta = dict(idx.meta)
+            meta["head_id"] = idx.head_id
+        return meta
+
+
+    def _update_meta(
+        self,
+        session_log: shared.SessionLog,
+        idx: shared.SessionMemoryIndex,
+        mutate,
+        *,
+        keys: tuple[str, ...] = ("branches",),
+    ) -> shared.Any:
+        """Read-modify-write the durable session meta under the write lock.
+
+        ``mutate(meta)`` changes the fields it owns in the meta read from
+        disk inside the lock and returns ``(write, value)``; nothing is
+        written when ``write`` is false. The written ``keys`` are then
+        copied into the cached meta (``head_id`` moves the cached head),
+        leaving the rest of the cache alone. Every branch-record writer
+        goes through here, so a writer never replaces a record with a
+        copy it read earlier.
+        """
+        with self._head_file_lock(session_log):
+            with idx._persist_lock:
+                meta = session_log.read_meta()
+                write, value = mutate(meta)
+                if not write:
+                    return value
                 session_log.write_meta(meta)
+                with idx._lock:
+                    for key in keys:
+                        if key == "head_id":
+                            idx.head_id = meta.get("head_id")
+                        if key in meta:
+                            idx.meta[key] = meta[key]
+                        else:
+                            idx.meta.pop(key, None)
+                return value
 
 
     def session_workdir(self, session_id: str) -> shared.Optional[shared.Path]:
@@ -335,8 +403,5 @@ class StorageOperations:
         session_log, idx = pair
         with self._head_file_lock(session_log):
             with idx._persist_lock:
-                with idx._lock:
-                    meta = dict(idx.meta)
-                    meta["head_id"] = idx.head_id
-                session_log.write_meta(meta)
+                session_log.write_meta(self._meta_for_write(session_log, idx))
             return None

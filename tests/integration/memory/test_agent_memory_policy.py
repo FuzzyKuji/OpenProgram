@@ -20,7 +20,9 @@ def runtime(tmp_path, monkeypatch):
     db = SessionDB(tmp_path / 'sessions')
     monkeypatch.setattr('openprogram.runtime.context.session_db.default_db', lambda: db)
     profile = {'id': 'private', 'memory': {'mode': 'off', 'read_spaces': ['self'], 'write_space': 'self', 'required': False}, 'memory_policy_epoch': 1}
-    monkeypatch.setattr(manager, 'get', lambda _id: SimpleNamespace(**profile))
+    # A registry spec carries the model, tools and effort a branch inherits.
+    monkeypatch.setattr(manager, 'get', lambda _id: SimpleNamespace(**{
+        'model': SimpleNamespace(provider='openai', id='stub'), 'tools': None, 'thinking_effort': None, **profile}))
     monkeypatch.setattr(D, '_load_agent_profile', lambda _id: dict(profile))
     monkeypatch.setattr(D, '_resolve_model', lambda *_: Model(id='stub', name='stub', api='completion', provider='openai', base_url='https://invalid.example'))
     monkeypatch.setattr(D, '_run_loop_blocking', lambda **_: ('PRIVATE_REPLY', {'input_tokens': 1, 'output_tokens': 1}, []))
@@ -111,7 +113,8 @@ def test_required_backend_failure_stops_before_model_and_optional_reports(runtim
     monkeypatch.setattr('openprogram.state.memory.get_backend', lambda: backend)
     monkeypatch.setattr(D, '_run_loop_blocking', lambda **_: pytest.fail('required memory failure invoked a model'))
     _, result = _turn(runtime)
-    assert result.failed and result.error_reason == 'MEMORY_UNAVAILABLE'
+    assert result.failed and result.error_reason == 'unknown'
+    assert result.error_kind == 'memory_unavailable'
     profile['memory']['required'] = False
     monkeypatch.setattr(D, '_run_loop_blocking', lambda **_: ('ok', {}, []))
     req, result = _turn(runtime, session_id='optional')
@@ -373,7 +376,8 @@ def test_memory_prompt_read_failure_stops_required_before_provider(runtime, monk
     if required:
         assert result.failed
         assert 'Required memory access failed' in result.error
-        assert result.error_reason == 'MEMORY_UNAVAILABLE'
+        assert result.error_reason == 'unknown'
+        assert result.error_kind == 'memory_unavailable'
         assert result.error_retryable is False
         assert 'provider' not in calls
         assert db.get_session('s').get('status') != 'running'

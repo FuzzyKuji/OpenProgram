@@ -296,6 +296,95 @@ async function checkExtraction() {
   }
 }
 
+// Windows' tar writes a link under the build's root as `C:/…` while the seed
+// records that root as `C:\…`; a symbolic link there needs a privilege most
+// accounts lack, so a directory becomes a junction and a file a second name.
+async function checkWindowsLinks() {
+  const windows = (target, member = "C:\\Users\\u\\rt\\versions\\v1\\venv\\Scripts\\python.exe") => seedModule.resolveLink({
+    root: "C:\\Users\\u\\rt", member, target, builtRoot: "D:\\a\\seed\\store\\runtime", paths: path.win32,
+  });
+  assert.equal(windows("D:/a/seed/store/runtime/bases/x/python.exe"), "C:\\Users\\u\\rt\\bases\\x\\python.exe");
+  assert.equal(windows("d:\\A\\seed\\store\\runtime\\bases\\x"), "C:\\Users\\u\\rt\\bases\\x");
+  assert.equal(windows("..\\..\\..\\..\\bases\\x"), "C:\\Users\\u\\rt\\bases\\x");
+  assert.equal(windows("../../../../../outside"), null);
+  assert.equal(windows("D:/a/seed/store/runtime-other/x"), null);
+  assert.equal(windows("D:/a/seed/store/runtime/../x"), null);
+  assert.equal(windows("C:/Windows/System32/cmd.exe"), null);
+  assert.equal(windows("\\\\server\\share\\x"), null);
+
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "thin-links-"));
+  const seedDirectory = path.join(directory, "seed");
+  fs.mkdirSync(path.join(seedDirectory, "bootstrap"), { recursive: true });
+  fs.writeFileSync(path.join(seedDirectory, "bootstrap", "install_seed.py"), "");
+  fs.writeFileSync(path.join(seedDirectory, "seed.json"), JSON.stringify({
+    schema: 1, version: "v1", base: BASE, commit: "a".repeat(40), built_root: "D:\\a\\seed\\store\\runtime",
+  }));
+  archive(path.join(seedDirectory, "base.tar.zst"), [
+    tarEntry(`bases/${BASE}/python/python.exe`, "0", Buffer.from("MZ")),
+    tarEntry(`bases/${BASE}/python/again.exe`, "2", Buffer.alloc(0), { link: "alias.exe" }),
+    tarEntry(`bases/${BASE}/python/alias.exe`, "2", Buffer.alloc(0), { link: "python.exe" }),
+    tarEntry(`bases/${BASE}/tools`, "2", Buffer.alloc(0), { link: "python" }),
+  ]);
+  archive(path.join(seedDirectory, "version.tar.zst"), [
+    tarEntry("versions/v1/version.json", "0", Buffer.from("{}")),
+    tarEntry("versions/v1/python.exe", "2", Buffer.alloc(0), {
+      link: `D:/a/seed/store/runtime/bases/${BASE}/python/python.exe`,
+    }),
+     tarEntry("pristine-frontend/abc.zip", "0", Buffer.from("zip")),
+  ]);
+  const root = path.join(directory, "state", "runtime");
+  const calls = [];
+  await seedModule.seed({ root, seedDirectory, platform: "win32", spawnProcess: fakeInstaller(root, calls) });
+  assert.equal(calls[0].command, path.join(root, "bases", BASE, "python", "python.exe"));
+  assert.deepEqual(calls[0].args.slice(0, 5),
+    ["-I", "-B", "-X", "utf8", path.join(seedDirectory, "bootstrap", "install_seed.py")],
+    "Windows runs the installer in UTF-8 mode, as the launcher runs everything else");
+  const base = path.join(root, "bases", BASE);
+  for (const file of [path.join(base, "python", "alias.exe"), path.join(base, "python", "again.exe"),
+    path.join(root, "versions", "v1", "python.exe")]) {
+    assert.equal(fs.lstatSync(file).isSymbolicLink(), false, "a file link is a second name, not a symbolic link");
+    assert.equal(fs.readFileSync(file, "utf8"), "MZ");
+  }
+  assert.equal(fs.statSync(path.join(base, "python", "python.exe")).nlink, 4);
+  // Off Windows a junction is made as a plain link; either way it holds the final place.
+  assert.equal(fs.realpathSync(path.join(base, "tools")), fs.realpathSync(path.join(base, "python")));
+  assert.equal(fs.existsSync(path.join(root, ".seed-links")), false);
+
+  // Interrupted after the move into place: the next run still makes the links.
+  const interrupted = path.join(directory, "interrupted", "runtime");
+  let stopped = false;
+  await assert.rejects(seedModule.seed({
+    root: interrupted, seedDirectory, platform: "win32", spawnProcess: fakeInstaller(interrupted, []),
+    onProgress(percent) {
+      // Everything is unpacked at 92; a file where a later directory goes stops the move after the base.
+      if (percent >= 92 && !stopped) {
+        stopped = true;
+        fs.writeFileSync(path.join(interrupted, "pristine-frontend"), "in the way");
+      }
+    },
+  }));
+  assert.ok(fs.existsSync(path.join(interrupted, "bases", BASE, "python", "python.exe")), "the base was moved");
+  assert.equal(fs.existsSync(path.join(interrupted, "bases", BASE, "tools")), false);
+  fs.rmSync(path.join(interrupted, "pristine-frontend"));
+  await seedModule.seed({
+    root: interrupted, seedDirectory, platform: "win32", spawnProcess: fakeInstaller(interrupted, []),
+  });
+  assert.equal(fs.realpathSync(path.join(interrupted, "bases", BASE, "tools")),
+    fs.realpathSync(path.join(interrupted, "bases", BASE, "python")));
+  assert.equal(fs.readFileSync(path.join(interrupted, "bases", BASE, "python", "again.exe"), "utf8"), "MZ");
+
+  // A link whose target is not in the seed stops the install by name.
+  archive(path.join(seedDirectory, "version.tar.zst"), [
+    tarEntry("versions/v1/version.json", "0", Buffer.from("{}")),
+    tarEntry("versions/v1/dangling", "2", Buffer.alloc(0), { link: "nothing-here" }),
+  ]);
+  const dangling = path.join(directory, "dangling", "runtime");
+  await assert.rejects(
+    seedModule.seed({ root: dangling, seedDirectory, platform: "win32", spawnProcess: fakeInstaller(dangling, []) }),
+    (error) => error instanceof seedModule.SeedError && /points at nothing: versions\/v1\/dangling/.test(error.message),
+  );
+}
+
 function fakeSeed() {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "thin-seed-"));
   fs.mkdirSync(path.join(directory, "bootstrap"));
@@ -344,7 +433,7 @@ async function checkSeed() {
   assert.ok(fs.existsSync(path.join(root, "pristine-frontend", "abc.zip")));
   assert.equal(fs.existsSync(path.join(root, ".seed-work")), false);
   assert.equal(calls[0].command, path.join(root, "bases", BASE, "python", "bin", "python3"));
-  assert.deepEqual(calls[0].args.slice(0, 2), ["-I", "-B"]);
+  assert.deepEqual(calls[0].args.slice(0, 3), ["-I", "-B", path.join(seedDirectory, "bootstrap", "install_seed.py")]);
   assert.deepEqual([...progress].sort((a, b) => a - b), progress, "progress only moves forward");
   assert.equal(progress.at(-1), 100);
 
@@ -721,6 +810,23 @@ async function checkLoader() {
     await settle();
     assert.match(first.windows[0].file, /setup\.html$/);
 
+    // On Windows every window of the App, the setup page included, carries the
+    // installer's application id, or toasts are dropped and a pin doubles.
+    const identities = [];
+    const onWindows = fakeElectron();
+    onWindows.electron.app.setAppUserModelId = (id) => identities.push(id);
+    assert.equal(runShell(onWindows.electron, { shiftHeld: noShift, platform: "win32" }).phase, "setup");
+    await settle();
+    const appId = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8")).build.appId;
+    assert.deepEqual(identities, [appId], "the id is the one the NSIS shortcut is written with");
+    for (const other of ["darwin", "linux"]) {
+      const elsewhere = fakeElectron();
+      elsewhere.electron.app.setAppUserModelId = (id) => identities.push(`${other}:${id}`);
+      runShell(elsewhere.electron, { shiftHeld: noShift, platform: other });
+      await settle();
+    }
+    assert.equal(identities.length, 1, "macOS and Linux have no application id to set");
+
     // A second instance leaves.
     writeVersion(root, "v2");
     writeVersion(root, "v1");
@@ -878,6 +984,7 @@ function checkVersionCarriesItsOwnCode() {
   checkVersionCarriesItsOwnCode();
   await checkExtraction();
   await checkSeed();
+  await checkWindowsLinks();
   await checkSeedSafeguards();
   checkIdentityRefresh();
   checkRelaunchPaths();

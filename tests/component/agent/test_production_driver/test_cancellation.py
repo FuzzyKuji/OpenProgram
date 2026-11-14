@@ -3,6 +3,10 @@ from __future__ import annotations
 import pytest
 import time
 from openprogram.runtime.execution.model import CommandStatus, ExecutionStatus
+from types import SimpleNamespace
+
+from openprogram.runtime.execution import ExecutionStore
+
 from ._support import AttemptStore, _admitted, _prepare_long_turn, asyncio, sqlite3, threading
 
 
@@ -186,7 +190,7 @@ def test_cancel_during_a_running_tool_is_final(tmp_path):
             "role": "assistant",
             "content": [{
                 "type": "toolCall", "id": "call-cancel",
-                "name": "web_use", "arguments": {"n": "cancel"},
+                "name": "page_tool", "arguments": {"n": "cancel"},
             }],
             "api": "fake", "provider": "fake", "model": "fake",
         },
@@ -228,3 +232,154 @@ def test_cancel_during_a_running_tool_is_final(tmp_path):
             expected_version=finished.execution.status_version,
             actor={"surface": "test"},
         ))
+
+
+def test_cancel_between_lease_and_activation_ends_the_turn_cancelled(tmp_path):
+    """A stop that lands after the attempt is leased, before it runs, ends the turn.
+
+    The Worker acks a chat before its run thread leases and activates the
+    attempt. A cancel in between moves the execution to cancelling under that
+    lease, where no driver is bound to hear it; activation then finds a newer
+    version. The turn is settled as cancelled instead of staying cancelling.
+    """
+    from openprogram.runtime.conversation.production_driver import AgentProductionDriver, CanonicalAgentEntry
+
+    store = ExecutionStore(tmp_path / "executions.sqlite3")
+    ran = threading.Event()
+
+    def run_turn(*, request, cancel_event):
+        ran.set()
+        return SimpleNamespace(failed=False, error=None)
+
+    driver = AgentProductionDriver(executions=store, turn_runner=run_turn)
+    entry = CanonicalAgentEntry(store, driver)
+    admission = entry.admit(
+        session_id="cancel-before-activation",
+        turn_payload={"version": 1, "kind": "chat", "request": {
+            "user_text": "work", "agent_id": "default", "source": "web"}},
+        trusted_actor={"subject": "user-1"}, config_snapshot_ref="config:test",
+        user_message_id="u", assistant_message_id="a",
+    )
+    lease = entry.control.attempts.lease
+
+    def lease_then_cancel(*args, **kwargs):
+        leased = lease(*args, **kwargs)
+        current = store.get_execution(admission.execution_id)
+        outcome = []
+        stopper = threading.Thread(target=lambda: outcome.append(asyncio.run(entry.control.request_cancel(
+            command_id="cancel-before-activation",
+            execution_id=admission.execution_id,
+            expected_version=current.status_version,
+            actor={"surface": "test"},
+            reason_code="cancel.user",
+        ))))
+        stopper.start()
+        stopper.join()
+        assert outcome[0].execution.status is ExecutionStatus.CANCELLING
+        return leased
+
+    entry.control.attempts.lease = lease_then_cancel
+    assert asyncio.run(entry.activate(admission)) is None
+    assert not ran.is_set()
+    ended = store.get_execution(admission.execution_id)
+    assert ended.status is ExecutionStatus.CANCELLED
+    assert ended.reason_code == "cancel.user"
+    assert ended.current_attempt_id is None
+    assert store.get_command("cancel-before-activation").status is CommandStatus.APPLIED
+
+
+def test_cancel_before_the_lease_ends_activation_quietly(tmp_path):
+    """A turn cancelled while queued is not leased: activation returns nothing to run."""
+    from openprogram.runtime.conversation.production_driver import AgentProductionDriver, CanonicalAgentEntry
+
+    store = ExecutionStore(tmp_path / "executions.sqlite3")
+    ran = threading.Event()
+    driver = AgentProductionDriver(
+        executions=store, turn_runner=lambda **_kw: ran.set() or SimpleNamespace(failed=False, error=None))
+    entry = CanonicalAgentEntry(store, driver)
+    admission = entry.admit(
+        session_id="cancel-before-lease",
+        turn_payload={"version": 1, "kind": "chat", "request": {
+            "user_text": "work", "agent_id": "default", "source": "web"}},
+        trusted_actor={"subject": "user-1"}, config_snapshot_ref="config:test",
+        user_message_id="u", assistant_message_id="a",
+    )
+    cancelled = asyncio.run(entry.control.request_cancel(
+        command_id="cancel-before-lease", execution_id=admission.execution_id,
+        expected_version=admission.status_version, actor={"surface": "test"},
+        reason_code="cancel.user",
+    ))
+    assert cancelled.execution.status is ExecutionStatus.CANCELLED
+    assert asyncio.run(entry.activate(admission)) is None
+    assert not ran.is_set()
+    assert store.get_execution(admission.execution_id).status is ExecutionStatus.CANCELLED
+
+
+def _entry(tmp_path, session_id: str):
+    from openprogram.runtime.conversation.production_driver import AgentProductionDriver, CanonicalAgentEntry
+
+    store = ExecutionStore(tmp_path / "executions.sqlite3")
+    ran = threading.Event()
+    driver = AgentProductionDriver(
+        executions=store, turn_runner=lambda **_kw: ran.set() or SimpleNamespace(failed=False, error=None))
+    entry = CanonicalAgentEntry(store, driver)
+    admission = entry.admit(
+        session_id=session_id,
+        turn_payload={"version": 1, "kind": "chat", "request": {
+            "user_text": "work", "agent_id": "default", "source": "web"}},
+        trusted_actor={"subject": "user-1"}, config_snapshot_ref="config:test",
+        user_message_id="u", assistant_message_id="a",
+    )
+    return store, entry, admission, ran
+
+
+def test_a_pause_before_activation_gives_way_through_the_one_yield_check(tmp_path, monkeypatch):
+    """The starter's lease loses to a pause of the queued turn; the starter
+    reads the execution again and gives way, writing nothing."""
+    store, entry, admission, ran = _entry(tmp_path, "pause-before-lease")
+    paused = asyncio.run(entry.control.request_pause(
+        command_id="pause-before-lease", execution_id=admission.execution_id,
+        expected_version=admission.status_version, actor={"surface": "test"},
+    ))
+    assert paused.execution.status is ExecutionStatus.PAUSED
+    checked = []
+    original = entry._yields_to_control_intent
+    monkeypatch.setattr(entry, "_yields_to_control_intent", lambda *a: checked.append(a) or original(*a))
+
+    assert asyncio.run(entry.activate(admission)) is None
+
+    assert not ran.is_set()
+    assert len(checked) == 1
+    after = store.get_execution(admission.execution_id)
+    assert after.status is ExecutionStatus.PAUSED
+    assert after.status_version == paused.execution.status_version
+    assert after.current_attempt_id is None
+
+
+def test_a_driver_refusal_under_a_stop_gives_way_through_the_one_yield_check(tmp_path, monkeypatch):
+    """The stop lands after the attempt is active, before a driver is bound:
+    the driver refuses, the starter reads the execution again and the
+    execution ends cancelled with the stop applied."""
+    store, entry, admission, ran = _entry(tmp_path, "stop-at-driver")
+    checked = []
+    original = entry._yields_to_control_intent
+    monkeypatch.setattr(entry, "_yields_to_control_intent", lambda *a: checked.append(a) or original(*a))
+    real_activate = entry.control._activate
+
+    async def stop_then_activate(active, *args, **kwargs):
+        await entry.control.request_cancel(
+            command_id="stop-at-driver", execution_id=active.execution_id,
+            actor={"surface": "test"}, reason_code="cancel.user",
+        )
+        return await real_activate(active, *args, **kwargs)
+
+    monkeypatch.setattr(entry.control, "_activate", stop_then_activate)
+
+    assert asyncio.run(entry.activate(admission)) is None
+
+    assert not ran.is_set()
+    assert len(checked) == 1 and checked[0][1] is not None
+    ended = store.get_execution(admission.execution_id)
+    assert ended.status is ExecutionStatus.CANCELLED
+    assert ended.current_attempt_id is None
+    assert store.get_command("stop-at-driver").status is CommandStatus.APPLIED

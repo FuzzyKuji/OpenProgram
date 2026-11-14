@@ -21,15 +21,16 @@ from ._host.runtime import (
     AgentTool,
     ToolReturn,
     all_tools as _all_agent_tools,
+    catalog_note,
+    deferred_catalog,
     deferred_catalog_text,
     filter_for as _filter_agent_tools,
-    freeze_turn_tools,
     function,
     get as _get_agent_tool,
     install_allowed_tool_names,
-    install_loaded_deferred,
-    release_turn_tools,
-    mark_deferred_loaded,
+    loaded_tools,
+    note_request_loaded,
+    schema_not_sent_hint,
     split_tools_for_dispatch,
     tool_requires_approval,
     tool_search,
@@ -165,7 +166,7 @@ DEFERRED_DEFAULT_TOOLS: set = {
 RESIDENT_TOOLS: set = (
     (set(DEFAULT_TOOLS) - DEFERRED_DEFAULT_TOOLS)
     | {"tool_search"}
-    | {"job_output"}
+    | {"read_conversation"}
 )
 
 
@@ -564,12 +565,13 @@ __all__ = [
     "list_registered_agent_tools",
     "tool_requires_approval",
     # Layer 6 — deferred loading helpers
+    "catalog_note",
+    "deferred_catalog",
     "deferred_catalog_text",
-    "freeze_turn_tools",
     "install_allowed_tool_names",
-    "install_loaded_deferred",
-    "mark_deferred_loaded",
-    "release_turn_tools",
+    "loaded_tools",
+    "note_request_loaded",
+    "schema_not_sent_hint",
     "split_tools_for_dispatch",
     "tool_search",
     # Exposure tiers
@@ -586,8 +588,8 @@ def default_tier(tool) -> "Tier":
     """The tier a registered entry starts in (program-model.md §5).
 
     An application entry (built-in or installed application, external
-    harness, user package) is deferred; it becomes resident for a session
-    while its application is open in a window. A tool is resident when it
+    harness, user package) is deferred, open in a window or not: the model
+    loads it with ``tool_search``. A tool is resident when it
     is in ``RESIDENT_TOOLS``, deferred otherwise. A hidden entry stays hidden.
     """
     from openprogram.programs._host.runtime import Tier, owner_kind, tool_owner, tool_tier

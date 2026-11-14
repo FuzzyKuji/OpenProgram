@@ -8,13 +8,13 @@ from __future__ import annotations
 
 import json
 
-from openprogram.runtime.conversation.surface_context import web_use_available
+from openprogram.runtime.conversation.surface_context import browser_pages_available
 
 
 def render_for_model(
-    context: dict | None, *, web_use_enabled: bool | None = None,
+    context: dict | None, *, browser_enabled: bool | None = None,
 ) -> str:
-    available = web_use_available(context) if web_use_enabled is None else web_use_enabled
+    available = browser_pages_available(context) if browser_enabled is None else browser_enabled
     usage = (
         'Operate the App\'s browser tabs with computer_use_agent(target="browser"): tabs lists the ones this conversation opened, '
         "open(url) opens one, read returns the page with a ref on each element, and actions name "
@@ -72,5 +72,5 @@ def pages_section(_agent) -> str:
 
     turn = turn_inputs()
     return render_for_model(
-        turn.get("surface_context"), web_use_enabled=turn.get("web_use_enabled"),
+        turn.get("surface_context"), browser_enabled=turn.get("browser_enabled"),
     )

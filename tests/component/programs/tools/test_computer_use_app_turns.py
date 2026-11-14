@@ -95,3 +95,13 @@ def test_a_stopped_turn_stops_waiting_for_the_application(desk, monkeypatch):
     # The application is free again for the next call.
     monkeypatch.setattr(base, "check_cancelled", lambda: None)
     assert not app_target.run([("click", {"element_index": 3})], {"app": "Notes"}, "b").is_error
+
+
+def test_batch_can_end_with_a_tree_observation(desk):
+    result = app_target.run(
+        [("click", {"element_index": 1}), ("get_app_state", {"include": "tree"})],
+        {"app": "Notes"}, "b",
+    )
+    assert not result.is_error
+    assert desk.log == [("b", "click", 1), ("b", "state", None)]
+    assert "tree" in result.text

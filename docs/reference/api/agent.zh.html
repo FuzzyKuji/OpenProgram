@@ -161,9 +161,7 @@ f = _example_agent.f</code></pre>
 <tr><th scope="row"><code translate="no">check_fn</code></th><td><code translate="no">Callable</code></td><td><code translate="no">None</code></td><td>分发前的单次门禁；假值阻止调用</td></tr>
 <tr><th scope="row"><code translate="no">requires_env</code></th><td><code translate="no">tuple</code></td><td><code translate="no">()</code></td><td>必须设置才提供此工具的环境变量</td></tr>
 <tr><th scope="row"><code translate="no">can_use</code></th><td><code translate="no">Callable</code></td><td><code translate="no">None</code></td><td>解析工具时的可用性判断</td></tr>
-<tr><th scope="row"><code translate="no">max_result_chars</code></th><td><code translate="no">int</code></td><td><code translate="no">None</code></td><td>结果截断上限，默认 <code translate="no">DEFAULT_MAX_RESULT_CHARS</code>（30,000）</td></tr>
-<tr><th scope="row"><code translate="no">persist_full</code></th><td><code translate="no">bool</code></td><td><code translate="no">False</code></td><td>把完整结果持久化到状态目录下的独立路径；后续保存不覆盖之前的引用；写入成功后才返回路径</td></tr>
-<tr><th scope="row"><code translate="no">head_ratio</code></th><td><code translate="no">float</code></td><td><code translate="no">None</code></td><td>截断时保留头部的比例，默认 <code translate="no">DEFAULT_HEAD_RATIO</code>（0.7）</td></tr>
+<tr><th scope="row"><code translate="no">max_result_weight</code></th><td><code translate="no">int</code></td><td><code translate="no">None</code></td><td>这个工具结果比模型上限更小的上限，按权重计（中日韩字符算 1，其余算 0.25）。工具从不自己截断：由 agent 循环截一次，完整文字存在对话的 <code translate="no">tool_results/</code></td></tr>
 <tr><th scope="row"><code translate="no">requires_approval</code></th><td>—</td><td><code translate="no">None</code></td><td>转给工具注册表，形式同 <code translate="no">@function</code></td></tr>
 <tr><th scope="row"><code translate="no">cache</code></th><td><code translate="no">bool</code></td><td><code translate="no">False</code></td><td>按 <code translate="no">(name, args)</code> 缓存工具分发调用</td></tr>
 <tr><th scope="row"><code translate="no">cache_ttl</code></th><td><code translate="no">float</code></td><td><code translate="no">300.0</code></td><td><code translate="no">cache=True</code> 时的秒数</td></tr>

@@ -216,6 +216,15 @@ class Job:
     # Who wrote this job's prompt, recorded on its user row. Set only for a
     # message another agent delivered to an existing branch.
     message_origin: Optional[str] = None
+    # The process that submitted this Job (``process_owner.identified_process``).
+    # A held spawn whose submitter is gone is finished by recovery, and a
+    # waited-on Job whose waiter is gone reports to its parent by notice
+    # (jobs/handoff.py).
+    submitter: Optional[dict[str, Any]] = None
+    # Set with the terminal write to the process that wrote it, cleared once
+    # the parent's notice is queued; recovery replays a mark whose writer is
+    # gone, so a crash between the two cannot lose the result.
+    notice_pending: Optional[dict[str, Any]] = None
 
     def __post_init__(self) -> None:
         # These execution inputs must survive jobs.json and must not retain

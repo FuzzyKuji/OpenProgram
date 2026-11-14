@@ -76,10 +76,10 @@ openprogram: running (PID 82472, port 18100, up 48m)
 <tbody>
 <tr><th scope="row">macOS</th><td>launchd, <code translate="no">~/Library/LaunchAgents/ai.openprogram.worker.plist</code></td><td><code translate="no">stop</code> unloads the job, so a crash restart does not bring it back</td></tr>
 <tr><th scope="row">Linux</th><td>systemd <code translate="no">--user</code></td><td>Each named <a href="../install/profiles.html">profile</a> gets its own unit</td></tr>
-<tr><th scope="row">Windows source checkout</th><td>Least-privilege per-user Task Scheduler entry</td><td>One task, <code translate="no">OpenProgram Worker</code>, serves all profiles</td></tr>
+<tr><th scope="row">Windows source checkout</th><td>Least-privilege per-user Task Scheduler entry</td><td><code translate="no">OpenProgram Worker</code>; each named profile gets its own task. <code translate="no">stop</code> also ends the task run, so its retry does not bring the worker back</td></tr>
 </tbody>
 </table>
-<p class="note">On macOS and Linux, <code translate="no">start</code>, <code translate="no">stop</code> and <code translate="no">restart</code> go through the service rather than creating a detached replacement. <code translate="no">start</code> and <code translate="no">restart</code> regenerate its plist or unit from the active CLI runtime, so an upgrade does not keep launching the old one.</p>
+<p class="note"><code translate="no">start</code>, <code translate="no">stop</code> and <code translate="no">restart</code> go through the service rather than creating a detached replacement. <code translate="no">start</code> and <code translate="no">restart</code> regenerate its plist, unit or task launcher from the active CLI runtime, so an upgrade does not keep launching the old one.</p>
 
 <p class="next"><a href="configuration.html">Configuration</a> · <a href="backup.html">Backup</a> · <a href="troubleshooting.html">Troubleshooting</a></p>
 

@@ -1,3 +1,4 @@
+import { pendingBranchSettings } from "@/lib/agents/branch-settings";
 import { flushTextFrames } from "@/lib/net/ws/text-frames";
 import { createSessionLoads, type SessionRead, type SessionReadStatus } from '@/lib/net/ws/session-load';
 import { useSessionStore } from '@/lib/session-store';
@@ -22,6 +23,11 @@ function owner(socket: WebSocket) {
   return value;
 }
 export function requestSessionLoad(payload: SessionRead, invalidate = false): boolean {
+  const pending = pendingBranchSettings(payload.session_id);
+  if (pending) {
+    void pending.then(() => requestSessionLoad(payload, invalidate));
+    return true;
+  }
   const socket = getSocket();
   if (!socket || socket.readyState !== WebSocket.OPEN) { status(payload.session_id, 'disconnected'); return false; }
   return owner(socket).request(payload, invalidate);
@@ -34,6 +40,13 @@ export function sendRuntimeCommand(payload: unknown): boolean {
   }
   const socket = getSocket();
   if (!socket || socket.readyState !== WebSocket.OPEN) return false;
+  if (request?.action === 'checkout_branch' && typeof request.session_id === 'string') {
+    const pending = pendingBranchSettings(request.session_id);
+    if (pending) {
+      void pending.then(() => { if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(payload)); });
+      return true;
+    }
+  }
   socket.send(JSON.stringify(payload));
   return true;
 }

@@ -148,7 +148,7 @@ def interaction_manifest(args: dict) -> dict | None:
     description=DESCRIPTION,
     parameters=_PARAMETERS,
     toolset=["core"],
-    max_result_chars=10_000,
+    max_result_weight=2_500,
 )
 def ask_user_question(questions: list | None = None, **kw: Any) -> str | ToolReturn:
     if not questions or not isinstance(questions, list):

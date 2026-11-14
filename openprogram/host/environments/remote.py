@@ -156,14 +156,35 @@ def _seen_key(env: Environment, path: str) -> tuple[str, str, str]:
     return current_session_id() or "", env.ssh_target, path
 
 
+def _env_key(env: Environment) -> str:
+    return f"ssh:{env.ssh_target}"
+
+
 def mark_seen(env: Environment, path: str, data: bytes) -> None:
+    """Record what was read on the remote host. Inside a turn the record
+    goes on the branch's history, as a local read's does
+    (``read_tracking.record_baseline``); outside one only this process
+    remembers it."""
+    digest = hashlib.sha256(data).hexdigest()
     with _seen_lock:
-        _seen[_seen_key(env, path)] = hashlib.sha256(data).hexdigest()
+        _seen[_seen_key(env, path)] = digest
+    from openprogram.state.execution_facts import current_session_id
+    from openprogram.state.store.snapshot.read_tracking import record_baseline
+    session_id = current_session_id()
+    if session_id:
+        record_baseline(session_id, _env_key(env), path, digest, len(data))
 
 
 def check_fresh(env: Environment, path: str, data: bytes) -> str:
-    with _seen_lock:
-        known = _seen.get(_seen_key(env, path))
+    from openprogram.state.execution_facts import current_session_id
+    from openprogram.state.store.snapshot.read_tracking import branch_baseline
+    session_id = current_session_id()
+    tracked, entry = branch_baseline(session_id, _env_key(env), path) if session_id else (False, None)
+    if tracked:
+        known = entry.get("hash") if entry is not None else None
+    else:
+        with _seen_lock:
+            known = _seen.get(_seen_key(env, path))
     if known is None:
         return NEVER_READ
     return FRESH if known == hashlib.sha256(data).hexdigest() else STALE

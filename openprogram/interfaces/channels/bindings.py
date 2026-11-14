@@ -44,6 +44,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from openprogram.host._platform import locking
+from openprogram.host._platform.filesystem import replace_file
 
 
 _FILE = "bindings.json"
@@ -109,7 +110,7 @@ def _write(bindings: list[dict[str, Any]]) -> None:
             json.dumps(payload, indent=2, sort_keys=True),
             encoding="utf-8",
         )
-        os.replace(tmp, path)
+        replace_file(tmp, path)
 
 
 def _normalize_match(match: dict[str, Any]) -> dict[str, Any]:

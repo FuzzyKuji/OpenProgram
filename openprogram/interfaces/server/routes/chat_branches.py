@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import logging
 import threading
-import time
 import uuid
 import json
 
@@ -66,10 +65,17 @@ def _fork_user_turn_and_run(
     """
     from openprogram.interfaces.server import server as _srv  # lazy — avoids circular import
 
-    # Reject while a run is active. The UI also greys the buttons, but
-    # defense in depth: forking mid-run would orphan the in-flight
-    # assistant reply against a HEAD that's about to move.
-    if _srv._is_run_active(session_id):
+    # Reject while the selected branch runs. The UI also greys the
+    # buttons, but defense in depth: forking mid-run would orphan the
+    # in-flight assistant reply against a HEAD that's about to move. A
+    # turn on another branch keeps running beside the retry.
+    # A turn that has already sent its terminal frame is only finishing up:
+    # an edit or retry fired on seeing that frame waits for the slot to be
+    # given back, as a send does.
+    from openprogram.interfaces.server.server_runtime.session_lifecycle import (
+        selected_run_blocks,
+    )
+    if selected_run_blocks(session_id):
         return {"__error__": (
             "a run is currently active — wait for it to finish or stop it first",
             409,
@@ -84,68 +90,25 @@ def _fork_user_turn_and_run(
         # off-chain, so look up against the full SessionDB DAG.
         from openprogram.runtime.context.session_db import default_db as _db_for_retry
         msgs = _db_for_retry().get_messages(session_id)
-        pivot = next((m for m in msgs if m.get("id") == pivot_id), None)
-        if pivot is None:
-            return {"__error__": ("unknown msg", 404)}
+        # Which message the new turn sends is decided in the runtime, so
+        # every surface (``--print`` too) forks the same way.
+        from openprogram.runtime.conversation.branch_fork import ForkError, plan_fork
+        from openprogram.runtime.permissions.authority import local_owner_authority
+        try:
+            plan = plan_fork(msgs, pivot_id, new_content, authority=local_owner_authority())
+        except ForkError as exc:
+            return {"__error__": (str(exc), exc.status)}
+        src_user, new_user, new_msg_id = plan.source, plan.message, plan.msg_id
+        has_assistant_child = plan.new_branch and new_content is None
 
-        # Walk up to the nearest user message. For retry clicked on
-        # an assistant reply, that's the user turn above it.
-        by_id = {m.get("id"): m for m in msgs}
-        cur = pivot
-        while cur is not None and cur.get("role") != "user":
-            cur = by_id.get(cur.get("predecessor"))
-        if cur is None:
-            return {"__error__": ("no user message to fork from", 400)}
-        src_user = cur
-
-        # If retry (not edit) and the previous turn never produced an
-        # assistant reply (timed out / errored / was force-stopped),
-        # rerun the SAME user message instead of forking a sibling. The
-        # "old branch" doesn't really exist — there's nothing on it but
-        # the user's question — so forking just litters the DAG with
-        # empty placeholder branches. Edit always forks because the
-        # user explicitly changed the prompt.
-        has_assistant_child = any(
-            m.get("predecessor") == src_user.get("id") and m.get("role") == "assistant"
-            for m in msgs
-        )
-        if new_content is None and not has_assistant_child:
-            new_msg_id = src_user.get("id")
-            new_user = src_user
-        else:
-            new_msg_id = uuid.uuid4().hex
-            new_user = {
-                "role": "user",
-                "id": new_msg_id,
-                "content": new_content if new_content is not None
-                           else src_user.get("content", ""),
-                "timestamp": time.time(),
-                # Sibling of src_user: same parent. A first-turn retry
-                # forks at ROOT explicitly — a ROOT-level node without
-                # a predecessor is rejected by the store (Decision 1).
-                "predecessor": src_user.get("predecessor") or "ROOT",
-                # Lineage breadcrumbs (future tooling / debugging).
-                "forked_from": src_user.get("id"),
-            }
-            origin = "person" if new_content is not None else src_user.get("origin")
-            if origin:
-                new_user["origin"] = origin
-            from openprogram.runtime.permissions.authority import local_owner_authority
-            new_user.update(local_owner_authority())
-            if src_user.get("display"):
-                new_user["display"] = src_user["display"]
-            if new_content is None and src_user.get("model_input"):
-                new_user["model_input"] = src_user["model_input"]
-            if new_content is not None:
-                new_user["edit_of"] = src_user.get("id")
-
-    # Reserve before any DAG/HEAD mutation. Admission and persistence both
-    # remain inside this ownership window.
-    if not _srv._try_reserve_run(session_id, new_msg_id):
-        return {"__error__": (
-            "a run is currently active — wait for it to finish or stop it first",
-            409,
-        )}
+    # Reserve the selected branch before any DAG/HEAD mutation. Admission
+    # and persistence both remain inside this ownership window.
+    refusal = _srv.reserve_operation(
+        session_id, "edit" if new_content is not None else "retry", new_msg_id,
+    )
+    if refusal is not None:
+        return {"__error__": (refusal["error"], 409), "code": refusal.get("code"),
+                "kind": refusal.get("kind")}
 
     # Retry/edit uses the same durable Agent admission as WS chat. The
     # forked message id is transport/DAG provenance only; execution_id is
@@ -153,16 +116,12 @@ def _fork_user_turn_and_run(
     try:
         from openprogram.runtime.permissions.authority import local_owner_authority
         from openprogram.runtime.conversation.production_driver import CanonicalAgentAdapter
-        from openprogram.runtime.agent.turn_request import TurnRequest
+        from openprogram.runtime.conversation.turn_input import build_turn_request
 
         adapter = CanonicalAgentAdapter(
             event_sink=lambda env: _srv._broadcast(json.dumps(env, default=str)),
         )
-        from openprogram.runtime.conversation.session_config import (
-            load_session_run_config, permission_from_config, project_defaults,
-            tools_override_from_config,
-        )
-        from openprogram.runtime.permissions.rule import load_merged_rules
+        from openprogram.runtime.conversation.session_config import load_session_run_config
 
         dispatch_attachments = None
         if attachments:
@@ -171,29 +130,46 @@ def _fork_user_turn_and_run(
                 session_id, attachments, str(new_user.get("content") or ""),
             )
             dispatch_attachments = _attachments_for_dispatch(attachments)
+            if dispatch_attachments:
+                # Kept so later requests send them again, after the text
+                # (``store.session.media``).
+                from openprogram.state.store.session.media import records_for_attachments
+                media = records_for_attachments(
+                    _db_for_retry()._session_dir(session_id), dispatch_attachments, 1)  # noqa: SLF001
+                if media:
+                    new_user["media"] = media
+        elif new_content is None and new_user.get("media"):
+            # A retry sends the pictures its message sent.
+            from openprogram.state.store.session.media import attachments_from_records
+            dispatch_attachments = attachments_from_records(
+                new_user["media"], _db_for_retry()._session_dir(session_id)) or None  # noqa: SLF001
         authority = local_owner_authority()
+        # A retry or an edit makes a new branch that starts with a copy of
+        # the settings the branch it leaves from has now (model, effort,
+        # permission, Sandbox, Agent), never the settings the old turn ran
+        # with: a permission tightened since then stays tightened.
         run_config = load_session_run_config(session_id)
-        provider = conv.get("provider_override")
-        model = conv.get("model_override")
-        model_override = f"{provider}/{model}" if provider and model else model
-        request = TurnRequest(
-            session_id=session_id,
-            user_text=str(new_user.get("model_input") or new_user.get("content") or ""),
-            agent_id=(conv.get("agent_id") or new_user.get("agent_id") or _srv._default_agent_id()),
+        from openprogram.state.store.session.branch_config import branch_identity
+        branch_fields = {}
+        if new_content is not None or has_assistant_child:
+            branch_fields = {"branch_id": branch_identity(session_id, new_msg_id),
+                             "branch_from": src_user.get("predecessor") or "ROOT"}
+        request = build_turn_request(
+            session_id,
+            str(new_user.get("model_input") or new_user.get("content") or ""),
+            # The Agent, model, effort, Fast, tools and permission are the
+            # branch's the retry starts from, filled at admission
+            # (freeze_branch_request); a new fork copies them once.
+            agent_id=None,
             source="web",
-            permission_mode=permission_from_config(
-                run_config, default=project_defaults(session_id).get("permission_mode"),
-            ),
-            permission_rules=load_merged_rules(session_id),
-            additional_working_dirs=run_config.additional_working_dirs,
-            tools_override=tools_override_from_config(run_config),
-            thinking_effort=run_config.thinking_effort,
-            model_override=model_override,
-            service_tier=conv.get("service_tier"),
-            user_msg_id=new_msg_id,
+            msg_id=new_msg_id,
+            authority=authority,
+            permission={"permission_mode": None},
+            run_config=("additional_working_dirs",),
+            run_cfg=run_config,
             user_already_persisted=True,
             attachments=dispatch_attachments,
-            **authority,
+            **branch_fields,
         )
         admission = adapter.admit(
             request,
@@ -230,10 +206,11 @@ def _fork_user_turn_and_run(
             _srv._emit_running_task_event(session_id)
 
         async def _activate():
-            _active, result = await adapter.activate(
+            activated = await adapter.activate(
                 admission, on_activated=_publish_activation,
             )
-            return result
+            # ``None``: a stop reached the retry before it ran; no result.
+            return activated[1] if activated is not None else None
 
         import asyncio
         try:
@@ -318,7 +295,8 @@ async def post_chat_retry(body: dict = None):
     )
     if "__error__" in result:
         msg, code = result["__error__"]
-        return JSONResponse(content={"error": msg}, status_code=code)
+        return JSONResponse(content={"error": msg, **{key: result[key] for key in ("code", "kind")
+                                                      if result.get(key)}}, status_code=code)
     return JSONResponse(content=result)
 
 
@@ -342,13 +320,22 @@ def _rewind_plan(session_id: str, msg_id: str, mode: str) -> dict:
     )}
 
 
-def _with_reserved_run(session_id: str, action) -> dict:
-    """Run a HEAD-moving action holding the session's run slot."""
+def _with_reserved_run(session_id: str, action, *, scope: str = "branch",
+                       key: str | None = None) -> dict:
+    """Run a rewind as the selected branch's foreground operation.
+
+    ``scope="conversation"`` for a rewind that restores files: refused while
+    another branch runs or waits on an approval, with ``blocking`` naming
+    that branch and the ids a Stop of it needs. A repeat carrying the
+    ``key`` of the rewind that holds the slot waits for it and then returns
+    its outcome (``reserve_operation``)."""
     from openprogram.interfaces.server import server as _srv
 
     reservation = f"rewind_{uuid.uuid4().hex}"
-    if not _srv._try_reserve_run(session_id, reservation):
-        return {"__error__": (_srv.RUN_ACTIVE_ERROR, 409)}
+    refusal = _srv.reserve_operation(session_id, "rewind", reservation, scope=scope, key=key)
+    if refusal is not None:
+        return {"__error__": (refusal["error"], 409),
+                **{key: refusal[key] for key in ("code", "kind", "blocking") if key in refusal}}
     try:
         return action()
     finally:
@@ -358,8 +345,8 @@ def _with_reserved_run(session_id: str, action) -> dict:
 def _apply_rewind(
     session_id: str, msg_id: str, plan_hash: str, idempotency_key: str, mode: str,
 ) -> dict:
-    """Do exactly the plan the user confirmed. Later messages stay in the
-    history: sending again forks beside them."""
+    """Do exactly the confirmed plan on the current branch; recovery history
+    is not exposed as a sibling when the user continues."""
     from openprogram.interfaces.server import server as _srv
     from openprogram.runtime.conversation.rewind import rewind_to
     from openprogram.runtime.conversation.rewind_marks import list_rewind_marks
@@ -384,7 +371,9 @@ def _apply_rewind(
         result["marks"] = list_rewind_marks(session_id)
         return result
 
-    return _with_reserved_run(session_id, apply)
+    from openprogram.interfaces.server.ws_actions.chat.rewind import rewind_scope, rewind_slot_key
+    return _with_reserved_run(session_id, apply, scope=rewind_scope(mode),
+                              key=rewind_slot_key(idempotency_key))
 
 
 def _switch_rewind(session_id: str, edge_id, expected_head_id, undo: bool) -> dict:
@@ -460,7 +449,12 @@ async def post_chat_rewind(body: dict = None):
     result = await run_in_threadpool(_apply_rewind, session_id, msg_id, plan_hash, idempotency_key, mode)
     if "__error__" in result:
         message, code = result["__error__"]
-        return JSONResponse(content={"error": message, "status": result.get("status")}, status_code=code)
+        # A refusal names what runs (``kind``) and, for a rewind that
+        # restores files, the branch in the way with the ids to stop it.
+        return JSONResponse(content={
+            "error": message, "status": result.get("status"),
+            **{key: result[key] for key in ("code", "kind", "blocking") if key in result},
+        }, status_code=code)
     return JSONResponse(content={
         "status": result.get("status"),
         "mode": result.get("mode") or mode,
@@ -549,9 +543,11 @@ async def post_chat_checkout(body: dict = None):
     ``< N / M >`` navigation to switch between sibling versions and by the
     graph view's checkout; a message sent next attaches under the new HEAD.
 
-    Refused (409) while a turn runs: that turn writes on the branch under
-    HEAD. The response carries ``previous_head_id``, the HEAD before the
-    move, so a caller can move back.
+    Switching is a view change: it is never refused because a turn or an
+    operation runs on the branch left or the branch entered. Each keeps
+    running on its own branch (``switch_branch``). The response carries
+    ``previous_head_id``, the HEAD before the move, so a caller can move
+    back, and ``active_branch_id``, the branch now selected.
     """
     from openprogram.interfaces.server import server as _srv
 
@@ -563,17 +559,17 @@ async def post_chat_checkout(body: dict = None):
         return JSONResponse(
             content={"error": "session_id and msg_id required"}, status_code=400,
         )
+    return await run_in_threadpool(_checkout, _srv, session_id, target_id, body)
+
+
+def _checkout(_srv, session_id: str, target_id: str, body: dict):
+    """Select the branch ending at ``target_id``."""
+    from openprogram.runtime.context.session_db import default_db
+    db = default_db()
     # Validate target_id against the FULL DAG, not the current linear
     # chain — that's the whole point of checkout. Looking it up in
     # conv["messages"] (which only holds the head's chain) means
     # off-branch clicks always 404'd.
-    if _srv._is_run_active(session_id):
-        return JSONResponse(
-            content={"error": "a run is currently active — wait for it to finish or stop it first"},
-            status_code=409,
-        )
-    from openprogram.runtime.context.session_db import default_db
-    db = default_db()
     if not db.message_exists(session_id, target_id):
         return JSONResponse(content={"error": "unknown msg"}, status_code=404)
     # Reject checkout to function-internal nodes — a node whose
@@ -600,23 +596,13 @@ async def post_chat_checkout(body: dict = None):
             content={"error": "function-internal node is not a checkout target"},
             status_code=400,
         )
-    previous_head_id = (db.get_session(session_id) or {}).get("head_id")
-    db.set_head(session_id, target_id)
-    with _srv._sessions_lock:
-        conv = _srv._sessions.get(session_id)
-        if conv is not None:
-            conv["head_id"] = target_id
-            # Refresh the in-memory transcript to the new branch's
-            # chain so the next read doesn't show the old head's view.
-            try:
-                conv["messages"] = db.get_branch(session_id) or []
-            except Exception:
-                # The head move already landed in the DB; a failed reload
-                # leaves the cached transcript on the old branch until the next
-                # load.
-                _log.warning(
-                    "transcript not reloaded after checkout for session %s", session_id, exc_info=True)
-    _srv._invalidate_messages(session_id)
+    session = db.get_session(session_id) or {}
+    hidden = set(session.get("rewind_hidden_nodes") or []) | set(session.get("rewind_hidden_heads") or [])
+    if target_id in hidden:
+        return JSONResponse(content={"error": "This version was withdrawn by Rewind; use Undo rewind to recover it."}, status_code=409)
+    switched = _srv.switch_branch(session_id, target_id, branch_id=body.get("branch_id"))
+    if not switched["ok"]:
+        return JSONResponse(content={"error": switched["error"], "code": switched["code"]}, status_code=409)
     _srv._save_session(session_id)
     # HEAD moved to another chain, so the context the next request carries
     # is a different set of nodes — re-estimate rather than keep showing the
@@ -625,7 +611,8 @@ async def post_chat_checkout(body: dict = None):
     return JSONResponse(content={
         "session_id": session_id,
         "head_id": target_id,
-        "previous_head_id": previous_head_id,
+        "previous_head_id": switched["previous_head_id"],
+        "active_branch_id": switched["active_branch_id"],
     })
 
 
@@ -646,7 +633,7 @@ async def post_chat_branch_session(body: dict = None):
 
     body = body or {}
     data = await run_in_threadpool(
-        run_branch_session, body.get("session_id"), body.get("msg_id"), body.get("title"),
+        run_branch_session, body.get("session_id"), body.get("msg_id"), body.get("title"), body.get("branch_id"),
     )
     if data.get("ok"):
         return JSONResponse(content=data)

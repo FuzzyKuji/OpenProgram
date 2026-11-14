@@ -17,6 +17,7 @@ import time
 from typing import Any
 
 from openprogram.host.security import safe_http
+from openprogram.host._platform.filesystem import replace_file
 
 
 _CATALOGUE_URL = "https://models.dev/api.json"
@@ -229,7 +230,7 @@ def _write_disk_cache(data: dict[str, Any]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(data), encoding="utf-8")
-        tmp.replace(path)
+        replace_file(tmp, path)
     except Exception:
         # Disk cache is best-effort; the next fetch rewrites it.
         _logger.debug("models.dev disk cache not written", exc_info=True)

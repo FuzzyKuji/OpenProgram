@@ -24,6 +24,7 @@ from typing import Any, Optional
 
 from openprogram.state import paths
 from openprogram.state.worktree.types import Worktree, WorktreeStatus
+from openprogram.host._platform.filesystem import replace_file
 
 
 _FILE_LOCK = threading.Lock()
@@ -64,7 +65,7 @@ def _write_raw(rows: dict[str, dict[str, Any]]) -> None:
     payload = {"version": 1, "worktrees": rows}
     tmp = path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(payload, ensure_ascii=False, default=str, indent=2), encoding="utf-8")
-    tmp.replace(path)
+    replace_file(tmp, path)
 
 
 def save_worktree(wt: Worktree) -> None:
@@ -125,17 +126,61 @@ def list_worktrees(
     return out
 
 
-def find_active_for_session(session_id: str) -> Optional[Worktree]:
-    """Convenience: the session's own ACTIVE worktree. (Manager keeps it
-    to at most one — see Part 5 #4.) A worktree bound to a job, such as a
-    self-update repair candidate, is that job's and never the session's
-    working directory, even though the session owns it."""
+_CURRENT = object()
+
+
+def current_branch_for(session_id: str) -> Optional[str]:
+    """The branch a worktree lookup is for: the running turn's own branch
+    when the turn is in this conversation, else the selected branch.
+    ``None`` when neither is known (no store, no branch recorded)."""
+    try:
+        from openprogram.state import execution_facts
+        branch = execution_facts.turn_branch(session_id)
+    except Exception:
+        branch = None
+    if branch:
+        return branch
+    try:
+        from openprogram.state.store.current import current_store
+        return (current_store().get_session(session_id) or {}).get("active_branch_id")
+    except Exception:
+        return None
+
+
+def find_active_for_session(session_id: str, branch_id: Any = _CURRENT) -> Optional[Worktree]:
+    """The ACTIVE worktree a branch of the session runs in.
+
+    A worktree created for one branch (``parent_branch``) serves that
+    branch only; a conversation-wide one (no ``parent_branch``) serves
+    every branch that has none of its own. ``branch_id`` defaults to the
+    current turn's branch, else the selected one. A worktree bound to a
+    job (a sub-agent's, a self-update repair candidate) is that job's and
+    never a branch's working directory, even though the session owns it."""
+    if branch_id is _CURRENT:
+        branch_id = current_branch_for(session_id)
     rows = list_worktrees(
         status_filter={WorktreeStatus.ACTIVE},
         parent_session=session_id,
     )
     rows = [wt for wt in rows if wt.parent_job is None]
-    return rows[0] if rows else None
+    if branch_id:
+        own = [wt for wt in rows if wt.parent_branch == branch_id]
+        if own:
+            return own[0]
+    shared = [wt for wt in rows if not wt.parent_branch]
+    return shared[0] if shared else None
+
+
+def active_at_path(path: Optional[str]) -> Optional[Worktree]:
+    """The ACTIVE worktree whose directory is ``path``, if any."""
+    if not path:
+        return None
+    import os
+    want = os.path.realpath(path)
+    for wt in list_worktrees(status_filter={WorktreeStatus.ACTIVE}):
+        if wt.worktree_path and os.path.realpath(wt.worktree_path) == want:
+            return wt
+    return None
 
 
 def find_for_job(job_id: str) -> Optional[Worktree]:
@@ -149,5 +194,7 @@ __all__ = [
     "delete_worktree",
     "list_worktrees",
     "find_active_for_session",
+    "current_branch_for",
+    "active_at_path",
     "find_for_job",
 ]

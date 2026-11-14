@@ -1,15 +1,16 @@
-"""agent(to=…) tracked-job dispatch.
+"""send_message as a tracked Job (it took over ``agent(to=…)``).
 
 All fake — no real LLM, no live task pool run (deliveries are captured
 at run_agent_turn_async, same technique as test_send_message.py):
 
   * addressing reuse (SID:HEAD → current tip, branch-name resolution)
-  * idle target → immediate dispatch with the task header + caller
+  * idle target → immediate delivery with the sender header + caller
     routing + depth inheritance
-  * to + start_from mutual exclusion, self-dispatch guard, depth guard
+  * ``agent(to=…)`` is refused with a pointer to send_message
+  * self-target guard, message budget, hop limit, hourly send limit
   * busy target → pending Job pre-created + inbox entry carrying its id
-  * drain: tracked entries deliver with the task header and reuse the
-    task id; withdrawn entries are dropped without delivering
+  * drain: entries deliver with the sender header and reuse the Job id;
+    withdrawn entries are dropped without delivering
 
 See docs/reference/design/runtime/collaboration/agent-collaboration.html.
 """
@@ -20,6 +21,9 @@ from types import SimpleNamespace
 import pytest
 
 from openprogram.programs.tools.agents.agent.agent.agent import _agent_impl
+from openprogram.programs.tools.agents.send_message.send_message.send_message import (
+    _send_message_impl as send,
+)
 
 
 @pytest.fixture
@@ -99,35 +103,40 @@ def parent_turn(tmp_path, monkeypatch, request):
     store_mod._current_turn_id.reset(turn_tok)
 
 
-# --- to= dispatch, idle target ---
+# --- idle target ---
 
-def test_to_dispatch_runs_immediately_on_target_tip(parent_turn):
-    out = _agent_impl("summarize the log", to="p1:a0")
-    assert "[job dispatched]" in out
-    assert "execution_id=" in out
+def test_send_runs_immediately_on_target_tip(parent_turn):
+    out = send("summarize the log", to="p1:a0")
+    assert out.startswith("[delivered]")
     assert "execution_id=t_fake" in out
     kw = parent_turn.async_calls[-1]
     assert kw["session_id"] == "p1"
     assert kw["branch_from"] == "a0"
     assert kw["context_mode"] == "inherit"
-    # Tracked-task receipt header + reply routing back to the dispatcher.
-    assert kw["prompt"].startswith("[task from p1:a1 (main conversation)]")
+    # Receipt header + reply routing back to the sender.
+    assert kw["prompt"].startswith("[message from p1:a1")
     assert "summarize the log" in kw["prompt"]
     assert kw["caller_session_id"] == "p1"
     assert kw["caller_msg_id"] == "a1"
     assert kw["chain_messages"] == 1
 
 
-def test_to_dispatch_creates_no_generation(parent_turn):
-    """agent(to=…) hands work to an agent that already exists, so it
-    spends a message and leaves the generation count alone — the target
-    and the reply turn both run at the dispatcher's count."""
+def test_agent_to_is_refused_with_a_pointer_to_send_message(parent_turn):
+    out = _agent_impl("summarize the log", to="p1:a0")
+    assert "send_message" in out
+    assert not parent_turn.async_calls
+
+
+def test_send_creates_no_generation(parent_turn):
+    """A message reaches an agent that already exists, so it spends a
+    message and leaves the generation count alone — the target and the
+    reply turn both run at the sender's count."""
     from openprogram.programs.tools.agents.send_message.send_message.depth import (
         set_chain_generations,
     )
     tok = set_chain_generations(1)
     try:
-        _agent_impl("summarize the log", to="p1:a0")
+        send("summarize the log", to="p1:a0")
     finally:
         tok.var.reset(tok)
     kw = parent_turn.async_calls[-1]
@@ -136,15 +145,13 @@ def test_to_dispatch_creates_no_generation(parent_turn):
 
 
 def test_same_session_dispatch_result_reaches_the_dispatcher(parent_turn, monkeypatch):
-    """A to= dispatch onto a branch in the SAME session creates no attach
+    """A message onto a branch in the SAME session creates no attach
     pointer (it spawns nothing), so its followup has to carry the reply
-    inline. It used to take the same-session spawn wording — "the whole
-    transcript is attached above" — with nothing attached, and the result
-    never reached the dispatcher."""
+    inline rather than say "the whole transcript is attached above"."""
     from openprogram.runtime.jobs import runner as runner_mod
     from openprogram.runtime.jobs.types import Job, JobStatus
 
-    _agent_impl("summarize the log", to="p1:a0", description="probe")
+    send("summarize the log", to="p1:a0")
     kw = parent_turn.async_calls[-1]
     task = Job(
         id="t_same1",
@@ -158,7 +165,6 @@ def test_same_session_dispatch_result_reaches_the_dispatcher(parent_turn, monkey
         head_id="h1",
         result_text="the summary",
     )
-    # The shape that made the notice lie: same session, no attach pointer.
     assert task.caller_session_id == task.parent_session_id
     assert task.attach_pointer_id is None
 
@@ -187,46 +193,42 @@ def test_same_session_dispatch_result_reaches_the_dispatcher(parent_turn, monkey
     assert "attached above" not in seen["text"]
 
 
-def test_to_addressing_by_branch_name(parent_turn):
+def test_addressing_by_branch_name(parent_turn):
     parent_turn.set_branch_name("p1", "a0", "research")
-    out = _agent_impl("dig deeper", to="research")
-    assert "[job dispatched]" in out
+    out = send("dig deeper", to="research")
+    assert out.startswith("[delivered]")
     assert parent_turn.async_calls[-1]["branch_from"] == "a0"
 
 
-def test_to_stale_head_snaps_to_current_tip(parent_turn):
+def test_addressing_by_conversation_title(parent_turn):
+    out = send("dig deeper", to="other")
+    assert out.startswith("[delivered]")
+    assert parent_turn.async_calls[-1]["session_id"] == "p2"
+
+
+def test_stale_head_snaps_to_current_tip(parent_turn):
     s = parent_turn
     s.append_message("p1", {"id": "u2", "role": "user", "content": "later",
                             "timestamp": 0, "predecessor": "a0"})
     s.append_message("p1", {"id": "a2", "role": "assistant", "content": "later reply",
                             "timestamp": 0, "predecessor": "u2"})
     s.commit_turn("p1", "advance")
-    _agent_impl("more", to="p1:a0")  # stale head
+    send("more", to="p1:a0")  # stale head
     assert s.async_calls[-1]["branch_from"] == "a2"
 
 
-def test_to_unknown_target_errors(parent_turn):
-    out = _agent_impl("hi", to="nosuchname")
-    assert "[agent error]" in out and "not found" in out
-
-
-def test_to_and_start_from_conflict(parent_turn):
-    out = _agent_impl("hi", to="p1:a0", start_from="inherit")
-    assert "mutually exclusive" in out
+def test_unknown_target_errors(parent_turn):
+    out = send("hi", to="nosuchname")
+    assert out.startswith("[send_message error]")
     assert not parent_turn.async_calls
 
 
-def test_to_self_dispatch_refused(parent_turn):
-    out = _agent_impl("loop", to="p1:a1")
-    assert "[agent refused]" in out and "own current branch" in out
+def test_self_target_refused(parent_turn):
+    out = send("loop", to="p1:a1")
+    assert "[send_message refused]" in out and "own current turn" in out
 
 
-def test_to_ignores_run_in_background(parent_turn):
-    out = _agent_impl("go", to="p1:a0", run_in_background=True)
-    assert "[job dispatched]" in out  # still the async dispatch path
-
-
-def test_to_message_budget_guard(parent_turn, monkeypatch):
+def test_message_budget_guard(parent_turn, monkeypatch):
     from openprogram.programs.tools.agents.send_message.send_message.depth import (
         set_chain_messages, _chain_messages,
     )
@@ -235,31 +237,57 @@ def test_to_message_budget_guard(parent_turn, monkeypatch):
     tok = set_chain_messages(8)
     try:
         with pytest.raises(Refused) as refused:
-            _agent_impl("deeper", to="p1:a0")
+            send("deeper", to="p1:a0")
     finally:
         _chain_messages.reset(tok)
     assert refused.value.text.startswith("[blocked by setting]") and "messages" in refused.value.text
 
 
-# --- to= dispatch, busy target → pending task + inbox entry ---
+def test_hop_limit_refuses_the_fifth_hop(parent_turn):
+    from openprogram.programs.tools.agents.send_message.send_message.depth import (
+        set_chain_messages, _chain_messages,
+    )
+    from openprogram.runtime.permissions.refusal import Refused
+    tok = set_chain_messages(4)
+    try:
+        with pytest.raises(Refused) as refused:
+            send("deeper", to="p1:a0")
+    finally:
+        _chain_messages.reset(tok)
+    assert "hops" in refused.value.text
+    assert not parent_turn.async_calls
+
+
+def test_hourly_send_limit(parent_turn, monkeypatch):
+    from openprogram.runtime.permissions.refusal import Refused
+    monkeypatch.setattr("openprogram.state.config.read_config",
+                        lambda: {"agent": {"max_sends_per_hour": 2}})
+    send("one", to="p1:a0")
+    send("two", to="p1:a0")
+    with pytest.raises(Refused) as refused:
+        send("three", to="p1:a0")
+    assert "sends this hour" in refused.value.text
+    assert len(parent_turn.async_calls) == 2
+
+
+# --- busy target → pending Job + inbox entry ---
 
 def _dispatch_queued(parent_turn, monkeypatch, prompt="audit the config"):
     monkeypatch.setattr(
         "openprogram.runtime.conversation.run_control.is_turn_running",
         lambda sid: sid == "p2",
     )
-    out = _agent_impl(prompt, to="p2:a9", description="audit")
-    assert "[job dispatched, queued]" in out
+    out = send(prompt, to="p2:a9")
+    assert out.startswith("[queued]"), out
     tid = out.split("execution_id=")[1].split()[0]
     return tid, out
 
 
-def test_to_busy_target_precreates_task_and_queues(parent_turn, monkeypatch):
+def test_busy_target_precreates_job_and_queues(parent_turn, monkeypatch):
     from openprogram.runtime.conversation import inbox
     from openprogram.runtime.jobs.store import load_job
     from openprogram.runtime.jobs.types import JobStatus
     tid, _ = _dispatch_queued(parent_turn, monkeypatch)
-    # Job record is durably admitted before the inbox side effect.
     t = load_job("p2", tid)
     assert t is not None
     assert t.status == JobStatus.QUEUED
@@ -269,18 +297,13 @@ def test_to_busy_target_precreates_task_and_queues(parent_turn, monkeypatch):
     assert t.caller_msg_id == "a1"
     assert t.parent_msg_id == "a9"
     assert t.chain_messages == 1
-    # Inbox entry carries the task id.
-    path = inbox._inbox_path("p2")
-    entries = inbox._load(path)
+    entries = inbox._load(inbox._inbox_path("p2"))
     assert len(entries) == 1
     assert entries[0]["job_id"] == tid
-    # Nothing was submitted to the pool while the target is busy.
     assert not parent_turn.async_calls
 
 
-def test_busy_inbox_failure_cancels_canonical_admission(
-    parent_turn, monkeypatch,
-):
+def test_busy_inbox_failure_cancels_canonical_admission(parent_turn, monkeypatch):
     """A failed inbox write must cancel the admitted execution itself."""
     calls: list[tuple[str, str | None]] = []
 
@@ -302,7 +325,7 @@ def test_busy_inbox_failure_cancels_canonical_admission(
         raise OSError("inbox unavailable")
 
     monkeypatch.setattr("openprogram.runtime.conversation.inbox.enqueue", fail_enqueue)
-    out = _agent_impl("audit", to="p2:a9")
+    out = send("audit", to="p2:a9")
 
     assert "inbox unavailable" in out
     assert len(calls) == 1
@@ -310,9 +333,7 @@ def test_busy_inbox_failure_cancels_canonical_admission(
     assert "inbox enqueue failed" in (calls[0][1] or "")
 
 
-def test_busy_duplicate_cancels_duplicate_admission(
-    parent_turn, monkeypatch,
-):
+def test_busy_duplicate_cancels_duplicate_admission(parent_turn, monkeypatch):
     """A duplicate inbox result must not leave its admission runnable."""
     calls: list[tuple[str, str | None]] = []
 
@@ -330,17 +351,17 @@ def test_busy_duplicate_cancels_duplicate_admission(
         lambda sid: sid == "p2",
     )
     monkeypatch.setattr("openprogram.runtime.conversation.inbox.enqueue", lambda *a, **k: "duplicate")
-    out = _agent_impl("audit", to="p2:a9")
+    out = send("audit", to="p2:a9")
 
-    assert "duplicate dispatch ignored" in out
+    assert "duplicate message ignored" in out
     assert len(calls) == 1
     assert calls[0][0]
-    assert calls[0][1] == "duplicate dispatch"
+    assert calls[0][1] == "duplicate message"
 
 
-# --- inbox drain of tracked entries ---
+# --- inbox drain ---
 
-def test_drain_delivers_tracked_entry_with_task_header(parent_turn, monkeypatch):
+def test_drain_delivers_queued_entry_on_its_job(parent_turn, monkeypatch):
     from openprogram.runtime.conversation import inbox
     tid, _ = _dispatch_queued(parent_turn, monkeypatch)
     monkeypatch.setattr(
@@ -348,18 +369,16 @@ def test_drain_delivers_tracked_entry_with_task_header(parent_turn, monkeypatch)
     delivered = inbox.drain("p2")
     assert delivered == 1
     kw = parent_turn.async_calls[-1]
-    assert kw["job_id"] == tid  # SAME task id — the dispatcher's handle
-    assert kw["prompt"].startswith("[task from p1:a1 (parent)]")
+    assert kw["job_id"] == tid  # SAME Job id — the sender's handle
+    assert kw["prompt"].startswith("[message from p1:a1")
     assert kw["caller_session_id"] == "p1"
     assert inbox.pending_count("p2") == 0
 
 
-def test_drain_skips_withdrawn_tracked_entry(parent_turn, monkeypatch):
+def test_drain_skips_withdrawn_entry(parent_turn, monkeypatch):
     from openprogram.runtime.conversation import inbox
     from openprogram.runtime.jobs import get_runner
     tid, _ = _dispatch_queued(parent_turn, monkeypatch)
-    # Withdraw... but re-add the inbox entry to simulate the race where
-    # drain sees an entry whose task is already terminal.
     get_runner().cancel_execution(tid)
     inbox.enqueue("p2", message="audit the config", sender_session_id="p1",
                   sender_msg_id="a1", sender_agent_id="main", agent_id="main",
@@ -368,8 +387,8 @@ def test_drain_skips_withdrawn_tracked_entry(parent_turn, monkeypatch):
         "openprogram.runtime.conversation.run_control.is_turn_running", lambda sid: False)
     delivered = inbox.drain("p2")
     assert delivered == 0
-    assert not parent_turn.async_calls  # never submitted
-    assert inbox.pending_count("p2") == 0  # entry dropped
+    assert not parent_turn.async_calls
+    assert inbox.pending_count("p2") == 0
 
 
 def test_spawn_job_does_not_resurrect_terminal_precreated(parent_turn):

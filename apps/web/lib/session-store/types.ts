@@ -115,6 +115,8 @@ export interface AskOne {
  *  Persisted per session (see composerSettingsBySession) so each chat
  *  keeps its own; "" thinking means "model default". */
 export interface ComposerSettings {
+  /** Stable identity of the branch whose settings are currently loaded. */
+  active_branch_id?: string | null;
   /** First-turn Agent intent, scoped and persisted with this composer draft. */
   agentInvocation?: import("@/lib/agents/start-conversation").AgentConversationIntent;
   thinking: string;
@@ -136,10 +138,24 @@ export interface ComposerSettings {
   /** Session Sandbox override. true/false is explicit; omitted inherits
    *  the project/global default (system default is on). */
   sandbox?: boolean;
+  /** Controls the person changed in a draft (``thinking``, ``webSearch``):
+   *  its first message carries only these; the rest follow the Agent. */
+  draftTouched?: string[];
+  /** The loaded branch's settings as the server resolves them: each
+   *  value, its source (``branch``, ``agent``, ``project``, ``global``) and
+   *  what it is when the branch sets nothing (``inherited``). */
+  resolved?: ResolvedBranchSettings;
   /** Environment a draft will run in (local / an SSH or Docker
    *  environment id). Sent with the first message, which pins it; the
    *  conversation's own environment_id decides afterwards. */
   environment?: string;
+}
+
+/** ``resolved`` of a branch-settings read (``branch_settings.resolved_settings``). */
+export interface ResolvedBranchSettings {
+  values?: Record<string, unknown>;
+  sources?: Record<string, string>;
+  inherited?: Record<string, unknown>;
 }
 
 /** One field in a runtime.form schema (MCP-elicitation flat object). */
@@ -156,8 +172,9 @@ export interface FormFieldSchema {
 /** One finished agent in a background-agent notice. */
 export interface NoticeItem {
   /** report: a sub-agent's report is in context; reply: a branch
-   *  answered a message; idle: a watched branch went idle. */
-  kind: "report" | "reply" | "idle";
+   *  answered a message; idle: a watched branch went idle; stalled: a
+   *  sub-agent has had no activity for a while and is still running. */
+  kind: "report" | "reply" | "idle" | "stalled";
   name: string;
   failed: boolean;
   address: string;
@@ -423,6 +440,10 @@ export interface AssistantBlock {
   result?: string;
   truncated?: boolean;
   total_bytes?: number;
+  /** Tool block: the agent loop bounded the result for the model; the card
+   *  shows the head of the tool's own output and this says how long the
+   *  whole output is. "View full output" reads the saved file. */
+  full_output?: { total_lines?: number; total_chars?: number; shown_chars?: number };
   message_id?: string;
   node_id?: string;
   is_error?: boolean;
@@ -477,6 +498,18 @@ export interface RunningTask {
   execution_id?: string;
   status_version?: number;
   cancelling?: boolean;
+  /** What the branch's foreground operation is: a reply, `compact`, a
+   *  `rewind`, a `retry` or `edit`, a `function` run. */
+  op_kind?: string;
+  /** The operation's id; Stop names it for an operation with no execution. */
+  op_id?: string;
+  /** The id the page gave the request that started this run (a function
+   *  run, a retry); Stop names the run by it before the server's answer
+   *  names its execution. */
+  client_request_id?: string;
+  /** A step the running turn is in that the run indicator names
+   *  (`compact` while the turn compacts its context). */
+  phase?: string;
 }
 
 export interface TreeNode {

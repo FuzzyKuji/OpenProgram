@@ -179,6 +179,9 @@ def read_layers(session_id: str | None = None, *, personal: Path | None = None):
     project = project_root(session_id)
     # A policy with several read spaces reads each in turn; the project is
     # read with the first of them only, so its hits are not repeated.
+    # An empty project adds no layer to reading: until something is written
+    # there, paths and IDs are the personal memory's, unqualified. Where a
+    # new record goes meanwhile is ``first_write_root``'s answer.
     if (
         project is None
         or not has_notes(project)
@@ -188,6 +191,20 @@ def read_layers(session_id: str | None = None, *, personal: Path | None = None):
         return LayeredMemory([personal])
     default = PROJECT if write_root(session_id) is not None else PERSONAL
     return LayeredMemory([Layer(PROJECT, project), personal], default=default)
+
+
+def first_write_root(session_id: str | None = None) -> Path | None:
+    """Where a new record goes while the project's memory is still empty.
+
+    The background writer writes to the project whenever project writes
+    apply, however empty its memory is; a record created from the chat
+    lands in the same place. None when the project already holds notes
+    (``read_layers`` then names it) or when project writes do not apply.
+    """
+    target = write_root(session_id)
+    if target is None or has_notes(target):
+        return None
+    return target
 
 
 def write_root(session_id: str | None = None) -> Path | None:

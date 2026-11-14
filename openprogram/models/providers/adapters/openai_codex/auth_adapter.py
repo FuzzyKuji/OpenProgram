@@ -39,6 +39,7 @@ from openprogram.models.auth.types import (
     Credential,
     CredentialData,
 )
+from openprogram.host._platform.filesystem import replace_file
 
 
 PROVIDER_ID = "openai-codex"
@@ -238,7 +239,7 @@ def _write_back_to_codex_file(payload: CredentialData) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(existing, indent=2) + "\n", encoding="utf-8")
-        os.replace(tmp, path)
+        replace_file(tmp, path)
     except OSError:
         # Can't write? Silent; our own store is still authoritative.
         pass

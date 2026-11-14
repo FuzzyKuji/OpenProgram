@@ -61,7 +61,13 @@ from openprogram.runtime.execution.agent_input_budget import (
 
 
 
+from openprogram.runtime.execution.attempts import AttemptConflict
 from openprogram.runtime.execution.driver import ActivationInput
+
+STOPPED_BEFORE_START = "Stopped before it started"
+"""What a caller reports when ``CanonicalAgentAdapter.activate`` returns
+``None``: a stop (or a pause) won the race with the turn's activation, so the
+turn never ran and has no result."""
 
 
 from openprogram.runtime.execution.model import ExecutionStatus
@@ -387,6 +393,7 @@ class CanonicalAgentEntry:
         config_snapshot_ref: str,
         admission_key: str | None = None,
         recovery_from: tuple[str, int] | None = None,
+        client_request_id: str | None = None,
     ) -> CanonicalAgentAdmission:
         payload = normalize_agent_turn_payload(turn_payload)
         supplied_session = (
@@ -417,6 +424,7 @@ class CanonicalAgentEntry:
             assistant_message_id=assistant_message_id,
             capabilities=self.driver.capabilities_for_payload(payload),
             agent_turn_payload=payload,
+            client_request_id=client_request_id,
         )
         return CanonicalAgentAdmission(
             execution_id=record.execution_id,
@@ -425,35 +433,44 @@ class CanonicalAgentEntry:
         )
 
     async def activate(self, admission: CanonicalAgentAdmission) -> CanonicalAgentActivation | None:
-        # chat_ack precedes thread startup.  If a pause wins while that
-        # thread is pending, its queued -> paused transition is the only
-        # initial-activation handoff: this stale starter exits without
-        # creating an attempt or a synthetic checkpoint.  A later continue
-        # activates the same immutable admission input exactly once.
-        current = self.store.get_execution(admission.execution_id)
-        if (
-            current is not None
-            and current.status is ExecutionStatus.PAUSED
-            and current.checkpoint_head_id is None
-            and current.current_attempt_id is None
-            and current.reason_code is None
-            and current.status_version == admission.status_version + 1
-        ):
+        """Start an admitted turn, or give way to a pause or stop that won.
+
+        chat_ack precedes thread startup, so a pause or a stop can reach the
+        execution before this starter does. Each of the starter's steps is a
+        compare-and-swap (lease, activate) or a hand-off the driver may
+        refuse; whichever loses, :meth:`_yields_to_control_intent` reads the
+        execution again and returns ``None`` when a control intent holds it.
+        A stop that named the send before its admission (a stop mark the
+        admission took) ends the turn here, before any owner is leased.
+        """
+        if await self._stopped_by_mark(admission.execution_id):
             return None
-        attempt, leased = self.control.attempts.lease(
-            admission.execution_id,
-            expected_version=admission.status_version,
-            owner_id=f"agent-entry-{uuid.uuid4().hex}",
-        )
-        active, running = self.control.attempts.activate(
-            attempt.attempt_id,
-            generation=attempt.generation,
-            expected_execution_version=leased.status_version,
-        )
+        try:
+            attempt, leased = self.control.attempts.lease(
+                admission.execution_id,
+                expected_version=admission.status_version,
+                owner_id=f"agent-entry-{uuid.uuid4().hex}",
+            )
+        except AttemptConflict:
+            if self._yields_to_control_intent(admission.execution_id):
+                return None
+            raise
+        try:
+            active, running = self.control.attempts.activate(
+                attempt.attempt_id,
+                generation=attempt.generation,
+                expected_execution_version=leased.status_version,
+            )
+        except AttemptConflict:
+            if self._yields_to_control_intent(admission.execution_id, attempt):
+                return None
+            raise
         delivered, issue = await self.control._activate(
             active, None, (), activator=self.driver.activate
         )
         if not delivered:
+            if self._yields_to_control_intent(active.execution_id, active):
+                return None
             # Activation failure is a durable owner loss. Let the control
             # service release the exact lease and classify the execution;
             # the public entry never writes lifecycle rows directly.
@@ -475,6 +492,69 @@ class CanonicalAgentEntry:
             generation=active.generation,
             status_version=running.status_version,
         )
+
+    async def _stopped_by_mark(self, execution_id: str) -> bool:
+        """Apply the stop mark this execution's admission took, if any.
+
+        The stop is the one the client sent (its command id, actor and
+        reason), applied to the queued execution: it ends cancelled with its
+        reply written as stopped before it started.
+        """
+        import json
+
+        mark = self.store.stop_mark_for(execution_id)
+        if mark is None:
+            return False
+        await self.control.request_cancel(
+            command_id=str(mark["command_id"]),
+            execution_id=execution_id,
+            actor=json.loads(mark["actor_json"]),
+            reason_code=str(mark["reason_code"]),
+        )
+        try:
+            self.store.drop_stop_mark(execution_id)
+        except Exception:
+            # The stop is written; a mark left behind repeats it harmlessly.
+            _log.warning("stop mark of %s not dropped", execution_id, exc_info=True)
+        return True
+
+    def _yields_to_control_intent(self, execution_id: str, attempt=None) -> bool:
+        """Whether a pause or a stop holds the execution this starter lost.
+
+        Read after the starter lost a compare-and-swap or its driver refused
+        the owner:
+
+        - paused with no checkpoint and no attempt: a pause took the queued
+          turn; a later continue starts it. Nothing is written here.
+        - cancelling or cancelled with no attempt: the stop ends the queued
+          turn itself.
+        - cancelling under this starter's own attempt, which no driver ever
+          heard: this owner reports its own loss, marked as never bound, and
+          the control service ends the execution cancelled.
+
+        Anything else is the starter's failure and is not swallowed.
+        """
+        current = self.store.get_execution(execution_id)
+        if current is None:
+            return False
+        if current.current_attempt_id is None:
+            if current.status is ExecutionStatus.PAUSED:
+                return current.checkpoint_head_id is None and current.reason_code is None
+            return current.status in {ExecutionStatus.CANCELLING, ExecutionStatus.CANCELLED}
+        if (
+            attempt is None
+            or current.status is not ExecutionStatus.CANCELLING
+            or current.current_attempt_id != attempt.attempt_id
+            or current.owner_lease.get("generation") != attempt.generation
+        ):
+            return False
+        recovered = self.control.recover_owner_loss(
+            attempt.execution_id,
+            attempt_id=attempt.attempt_id,
+            generation=attempt.generation,
+            never_bound=True,
+        )
+        return recovered.execution.status is ExecutionStatus.CANCELLED
 
     async def activate_existing_job(
         self,
@@ -546,6 +626,7 @@ class CanonicalAgentAdapter:
         user_message_id: str | None,
         assistant_message_id: str | None = None,
         config_snapshot_ref: str,
+        client_request_id: str | None = None,
     ) -> CanonicalAgentAdmission:
         # A resumed checkpoint is fenced against the message anchors of the
         # immutable input, so every admitted turn records them. A transport
@@ -554,6 +635,20 @@ class CanonicalAgentAdapter:
         # before the input is frozen; the reply id follows the runtime's
         # ``<user_msg_id>_reply`` rule. Without them an interrupted turn
         # could never continue from its checkpoint.
+        from openprogram.runtime.conversation.branch_config import freeze_branch_request
+        from openprogram.runtime.agent.turn_request import INHERIT_PARENT
+        values = asdict(request) if is_dataclass(request) else dict(request)
+        # asdict deep-copies sentinels. Keep omission distinct from an
+        # explicitly selected predecessor, as the durable envelope does.
+        if getattr(request, "branch_from", None) is INHERIT_PARENT:
+            values.pop("branch_from", None)
+        frozen = freeze_branch_request(values, branch_authority=True)
+        for key in ("branch_id", "agent_id", "permission_mode", "permission_rules",
+                    "model_override", "thinking_effort", "tools_override", "service_tier",
+                    "sandbox_enabled", "sandbox_config_frozen",
+                    "owns_conversation_effects", "turn_settings"):
+            if key in frozen:
+                setattr(request, key, frozen[key])
         request_msg_id = getattr(request, "user_msg_id", None)
         if user_message_id is None and assistant_message_id is None and hasattr(request, "user_msg_id"):
             if not request_msg_id:
@@ -569,6 +664,7 @@ class CanonicalAgentAdapter:
             user_message_id=user_message_id,
             assistant_message_id=assistant_message_id,
             config_snapshot_ref=config_snapshot_ref,
+            client_request_id=client_request_id,
         )
 
     def admit_payload(
@@ -582,6 +678,7 @@ class CanonicalAgentAdapter:
         config_snapshot_ref: str,
         admission_key: str | None = None,
         recovery_from: tuple[str, int] | None = None,
+        client_request_id: str | None = None,
     ) -> CanonicalAgentAdmission:
         return self.entry.admit(
             session_id=session_id,
@@ -592,6 +689,7 @@ class CanonicalAgentAdapter:
             config_snapshot_ref=config_snapshot_ref,
             **({"admission_key": admission_key} if admission_key is not None else {}),
             **({"recovery_from": recovery_from} if recovery_from is not None else {}),
+            **({"client_request_id": client_request_id} if client_request_id else {}),
         )
 
     async def activate(
@@ -636,5 +734,6 @@ __all__ = [
     "JobAgentActivation",
     "AGENT_TURN_INPUT_VERSION",
     "MAX_AGENT_TURN_INPUT_BYTES",
+    "STOPPED_BEFORE_START",
     "normalize_agent_turn_payload",
 ]

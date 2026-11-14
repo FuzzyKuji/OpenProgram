@@ -48,6 +48,25 @@ def _unavailable_runtime(error, *, model: str = "unavailable", provider=None):
     return unavailable
 
 
+def _job_worktree(manager):
+    """The active worktree of the job this turn runs for, if it has one.
+
+    A job with ``worktree_id`` binds it before the turn starts
+    (``production_driver/execution.py``); the turn keeps that binding
+    instead of replacing it with the branch's or the project's folder."""
+    try:
+        from openprogram.runtime.jobs.runner.shared import _current_job_id
+        job_id = _current_job_id.get()
+    except Exception:
+        return None
+    if not job_id:
+        return None
+    from openprogram.state.worktree.store import find_for_job
+    from openprogram.state.worktree.types import WorktreeStatus
+    wt = find_for_job(job_id)
+    return wt if wt is not None and wt.status == WorktreeStatus.ACTIVE else None
+
+
 class TurnBindings:
     """Holds the ContextVar tokens for one turn, plus the project baseline."""
 
@@ -63,18 +82,11 @@ class TurnBindings:
         self._turn_request_token = None
         self._render_range_token = None
         self._surface_token = None
-        self._web_use_owner_id = None
         self._sandbox_token = None
         self._environment_token = None
         self._req_session_id: Optional[str] = None
         self._execution_id_token = None
-        self._deferred_token = None
-        self._frozen_tools_token = None
         self._open_applications_token = None
-        self._deferred_names = set()
-        self._deferred_writer = None
-        self._assistant_msg_id = None
-        self._request = None
 
     @classmethod
     def bind(
@@ -87,15 +99,22 @@ class TurnBindings:
     ) -> "TurnBindings":
         self = cls()
         self._req_session_id = req.session_id
-        self._request = req
-        # Restore only the selected predecessor branch, never another session
-        # or a sibling execution. Names cannot widen the resolved tool policy.
-        for message in reversed(db.get_branch(req.session_id, req.user_msg_id or None)):
-            names = message.get("loaded_deferred_tools")
-            if (message.get("role") == "assistant" and isinstance(names, list)
-                    and all(isinstance(name, str) for name in names)):
-                self._deferred_names.update(names)
-                break
+        from openprogram.runtime.conversation.session_config import (
+            SessionRunConfig, load_session_run_config, resolve_branch_settings,
+            sandbox_override_from_config,
+        )
+        if getattr(req, "sandbox_config_frozen", False) or getattr(req, "sandbox_enabled", None) is not None:
+            sandbox_config = SessionRunConfig(sandbox_enabled=req.sandbox_enabled)
+        elif getattr(req, "branch_id", None):
+            # The turn's own branch, read through the one resolver.
+            settings = resolve_branch_settings(
+                req.session_id, req.branch_id, row=db.get_session(req.session_id) or {})
+            sandbox_config = SessionRunConfig(sandbox_enabled=settings.config.sandbox_enabled)
+        else:
+            sandbox_config = load_session_run_config(req.session_id)
+        # Resolve before binding ContextVars: a missing owning branch fails
+        # without falling back to another branch or leaving partial bindings.
+        sandbox_override = sandbox_override_from_config(sandbox_config, req.session_id)
         # A normal foreground turn has no outer execution owner. Bind its
         # assistant reply id so every question emitted during this turn is
         # cancellable by exact execution identity. An outer job/subprocess
@@ -176,7 +195,16 @@ class TurnBindings:
             from openprogram.state.worktree.context import set_worktree as _set_wt
             from openprogram.state.worktree.manager import get_manager as _get_wt_mgr
             _wt_mgr = _get_wt_mgr()
-            _active_wt = _wt_mgr.find_active_for_session(req.session_id)
+            # A job bound to its own worktree (a sub-agent run with
+            # isolation) keeps it; otherwise the turn's branch decides:
+            # its own worktree, else a conversation-wide one.
+            _active_wt = _job_worktree(_wt_mgr)
+            if _active_wt is None:
+                _branch = getattr(req, "branch_id", None)
+                _active_wt = (
+                    _wt_mgr.find_active_for_session(req.session_id, _branch)
+                    if _branch else _wt_mgr.find_active_for_session(req.session_id)
+                )
             if _env is not None and _env.kind == "ssh":
                 # An SSH conversation's files live on the remote host:
                 # its tools start in the environment's remote folder,
@@ -196,12 +224,9 @@ class TurnBindings:
                     self._worktree_token = _set_wt(str(_proj_wd))
         except Exception:
             self._worktree_token = None
-        # Layer 6 (Claude Code's shouldDefer / ToolSearch): install a
-        # session-scoped "loaded deferred tools" set so tool_search can
-        # mutate it and subsequent turns see the updated set.
+        # Deferred tools need no binding: each request reads what its own
+        # messages loaded (``programs.loaded_tools``).
         from openprogram.programs._host import runtime as tool_runtime
-        self._deferred_token = tool_runtime.install_loaded_deferred(self._deferred_names)
-        self._frozen_tools_token = tool_runtime._frozen_turn_tools.set(None)
         # Exposure tiers: an application open in a window for this session
         # has its deferred entries resident for the session's requests.
         try:
@@ -211,8 +236,6 @@ class TurnBindings:
             _log.debug("could not read the session's open applications", exc_info=True)
             open_ids = set()
         self._open_applications_token = tool_runtime.install_open_applications(open_ids)
-        self._deferred_writer = _GraphStore(db, req.session_id)
-        self._assistant_msg_id = assistant_msg_id
 
         # Project auto-commit (entity layer): snapshot which paths are
         # already dirty in the session's bound project BEFORE the agent
@@ -296,22 +319,15 @@ class TurnBindings:
         self._render_range_token = _render_range_var.set(req.render_range)
         from openprogram.runtime.conversation.surface_context import bind as _bind_surface
         self._surface_token = _bind_surface(req.surface_context)
-        from openprogram.runtime.conversation.surface_context import web_use_owner_id
-        self._web_use_owner_id = web_use_owner_id(req.surface_context)
         # Freeze the effective SandboxPolicy for this turn. Nested
         # (subagent) binds inherit and cannot relax the parent snapshot.
         try:
-            from openprogram.runtime.conversation.session_config import (
-                load_session_run_config,
-                sandbox_override_from_config,
-            )
             from openprogram.host.sandbox import bind_turn_policy
-            _cfg = load_session_run_config(req.session_id)
             # The host sandbox governs host paths only. An SSH or Docker
             # environment is its own boundary, so it runs unsandboxed.
             self._sandbox_token = bind_turn_policy(
                 False if _env is not None and not _env.is_local
-                else sandbox_override_from_config(_cfg, req.session_id),
+                else sandbox_override,
             )
         except Exception:
             self._sandbox_token = None
@@ -338,32 +354,9 @@ class TurnBindings:
             _render_range_override as _render_range_var,
         )
         try:
-            if self._request is not None:
-                self._request._loaded_deferred_tools = sorted(self._deferred_names)
-            if self._deferred_writer is not None and self._assistant_msg_id:
-                try:
-                    self._deferred_writer.update(
-                        self._assistant_msg_id,
-                        loaded_deferred_tools=sorted(self._deferred_names),
-                    )
-                except Exception:
-                    _log.warning("could not persist deferred discoveries", exc_info=True)
             from openprogram.programs._host import runtime as tool_runtime
-            if self._deferred_token is not None:
-                tool_runtime._loaded_deferred.reset(self._deferred_token)
-            if self._frozen_tools_token is not None:
-                tool_runtime._frozen_turn_tools.reset(self._frozen_tools_token)
             if self._open_applications_token is not None:
                 tool_runtime._open_applications.reset(self._open_applications_token)
-            if self._web_use_owner_id is not None:
-                from openprogram.programs._host import services as _services
-                browser = _services.lookup("browser")
-                if browser is None:
-                    pass
-                elif suspended:
-                    browser.park_owner(self._web_use_owner_id)
-                else:
-                    browser.release_owner(self._web_use_owner_id)
             if self._surface_token is not None:
                 from openprogram.runtime.conversation.surface_context import (
                     current as _current_surface,

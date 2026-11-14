@@ -1,7 +1,8 @@
 """Tool guides: instructions a tool hands the model when a call needs them.
 
 A tool registers guides instead of putting every rule in its schema. The agent
-loop delivers them into tool results, so a short schema still leads the model
+loop delivers them beside tool results (the attachment sent after a group of
+results, ``shared.tool_attachments``), so a short schema still leads the model
 to the full instructions at the moment it uses a feature:
 
 ``open``      the first result of the tool carries it.
@@ -42,7 +43,8 @@ class Guide:
     summary: str = ""
     when: Optional[Callable[[dict], bool]] = None
     required_for: Optional[Callable[[dict], bool]] = None
-    # Deferred tools this guide teaches; delivering it loads their schemas.
+    # Deferred tools this guide teaches. Delivering it names them and how to
+    # load them (``activation_note``); it loads nothing itself.
     activates: tuple[str, ...] = ()
 
     def body(self) -> str:
@@ -105,7 +107,23 @@ def render(guide: Guide, args: dict | None = None) -> str:
         index = lookup_index(_owner(guide), args or {})
         if index:
             parts.append(index)
+    parts.append(activation_note(guide.activates))
     return f"{marker(guide.name)}\n" + "\n\n".join(p for p in parts if p) + "\n</guide>"
+
+
+def activation_note(names: Iterable[str]) -> str:
+    """The line that names the deferred tools a guide (or an opened
+    application) teaches and how to load them, or "".
+
+    Loading stays with the model's own ``tool_search`` call, as every peer
+    does it (Codex leaves an app the user mentions deferred): the tools
+    array changes only after a search, in one form per provider.
+    """
+    listed = [name for name in dict.fromkeys(names or ()) if isinstance(name, str) and name]
+    if not listed:
+        return ""
+    tools = ", ".join(f"`{name}`" for name in listed)
+    return f"Tools for this: {tools}. Load them with `tool_search select:{','.join(listed)}`."
 
 
 def lookup_index(tool: str, args: dict) -> str:
@@ -149,7 +167,15 @@ def observe_request(messages: Iterable[Any]) -> None:
 
 
 def _texts(messages: Iterable[Any]) -> Iterable[str]:
+    from openprogram.models.providers.shared.tool_attachments import record
+
     for message in messages or ():
+        # A guide delivered to a call is sent after its result, from the
+        # result's attachment record.
+        attached = record(message.get("details") if isinstance(message, dict)
+                          else getattr(message, "details", None))
+        if attached:
+            yield attached["text"]
         content = getattr(message, "content", None)
         if content is None and isinstance(message, dict):
             content = message.get("content")
@@ -182,13 +208,8 @@ def _mark_delivered(guides: Iterable[Guide]) -> None:
     view = _view.get()
     if view is None:
         return
-    activates: list[str] = []
     for guide in guides:
         view.delivered.add(guide.name)
-        activates.extend(guide.activates)
-    if activates:
-        from openprogram.programs._host.runtime import mark_deferred_loaded
-        mark_deferred_loaded(activates)
 
 
 # -- decisions used by permission and the agent loop ---------------------------
@@ -234,15 +255,22 @@ def deliver(guides: list[Guide], args: dict | None = None) -> str:
 
 
 def attach(tool: str, args: Any, result: Any) -> Any:
-    """Put the guides this call is due in front of its result."""
-    if not tracking() or tool not in _registry:
+    """Record the guides this call is due as the attachment sent after its
+    result (``shared.tool_attachments``), not inside the tool's own text.
+    A guide that teaches deferred tools names them (``activation_note``);
+    nothing is loaded until the model searches for them."""
+    if not tracking():
         return result
-    call_args = args if isinstance(args, dict) else {}
-    text = deliver(due(tool, call_args, failed=bool(getattr(result, "is_error", False))), call_args)
-    if not text:
-        return result
-    from openprogram.models.providers.types import TextContent
-    return result.model_copy(update={"content": [TextContent(text=text + "\n\n"), *(result.content or [])]})
+    if tool in _registry:
+        call_args = args if isinstance(args, dict) else {}
+        due_now = due(tool, call_args, failed=bool(getattr(result, "is_error", False)))
+        text = deliver(due_now, call_args)
+        if text:
+            from openprogram.models.providers.shared.tool_attachments import with_attachment
+            result = result.model_copy(update={"details": with_attachment(
+                getattr(result, "details", None), text,
+                guides=[guide.name for guide in due_now], front=True)})
+    return result
 
 
 def help_text(name: str) -> str:
@@ -261,7 +289,7 @@ def help_text(name: str) -> str:
 
 
 __all__ = [
-    "Guide", "attach", "begin_loop", "deliver", "due", "end_loop", "find", "guides_for",
+    "Guide", "activation_note", "attach", "begin_loop", "deliver", "due", "end_loop", "find", "guides_for",
     "help_text", "known", "lookup_index", "marker", "missing_required", "names",
     "observe_request", "refusal", "register", "render", "tracking",
 ]

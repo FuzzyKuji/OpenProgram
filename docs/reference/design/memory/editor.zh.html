@@ -25,7 +25,8 @@
 <tr><th scope="row">写入路径</th><td>分阶段写入：校验引用、重建派生视图、提交 Git 历史，Markdown 渲染不变。源校验不变。</td></tr>
 <tr><th scope="row">过期编辑</th><td>在写锁内比较提交的 <code translate="no">base_content</code>；不一致则拒绝，保留草稿并显示错误。</td></tr>
 <tr><th scope="row">规范化</th><td>响应返回规范化后实际保存的文本，因为规范化可能改动源文本。</td></tr>
-<tr><th scope="row">显示的状态</th><td>行内只显示错误和 Git 警告；没有“保存中”或“已保存”提示。</td></tr>
+<tr><th scope="row">只有标题</th><td>按保存的样子保留：人的保存从不清理 Topic，人写的无引用段落和其他段落一样获得 block ID。</td></tr>
+<tr><th scope="row">显示的状态</th><td>行内只显示错误和警告（Git 提交失败）；没有“保存中”或“已保存”提示。预览在人不带引用添加的每段后放一个 Nova 徽标“你添加的”；OpenProgram 之外写的文件在标题旁放一个徽标“OpenProgram 之外写的 · 记忆只读不改”。</td></tr>
 <tr><th scope="row">切换、刷新</th><td>草稿保留在本地。</td></tr>
 <tr><th scope="row">访问</th><td>需所有者授权的端点读取有界的 Git 历史，仅限主题 Markdown。路径和版本输入不能逃出 Memory；版本必须是完整提交 id。</td></tr>
 </tbody>

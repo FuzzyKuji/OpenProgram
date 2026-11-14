@@ -20,6 +20,7 @@ import os
 import threading
 
 from ..store import default_root
+from openprogram.host._platform.filesystem import replace_file
 
 _LOCK = threading.RLock()
 
@@ -41,7 +42,7 @@ def _write(data: dict) -> None:
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    os.replace(tmp, p)
+    replace_file(tmp, p)
     try:
         os.chmod(p, 0o600)
     except OSError:

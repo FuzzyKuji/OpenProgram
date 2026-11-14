@@ -218,8 +218,8 @@
 <tbody>
 <tr><th scope="row"><code translate="no">head_id</code></th><td>Active branch tip. Conversation writes advance it to a real node, never a placeholder or summary; a dangling head renders empty. Caller-tagged nodes leave it</td></tr>
 <tr><th scope="row"><code translate="no">get_branch(session_id, head_id)</code></th><td>Predecessor chain from head to terminus</td></tr>
-<tr><th scope="row"><code translate="no">list_branches(session_id)</code></th><td>Leaves of the predecessor graph: user and LLM turns, top-level Program actions (caller empty or <code translate="no">ROOT</code>), each parallel one its own leaf. Internal children and runtime, attach or context rows do not end a tip. Merged and non-conversation nodes stay out; no main-tip fallback</td></tr>
-<tr><th scope="row">Branch names</th><td>Session meta, <code translate="no">branches: {head_id: name}</code></td></tr>
+<tr><th scope="row"><code translate="no">list_branches(session_id)</code></th><td>Visible conversation tips plus retained branch references. Rewind hides withdrawn suffixes while preserving sibling references, including references at a shared ancestor or ROOT. Branch identity distinguishes references at the same head. Internal execution rows do not create conversation tips</td></tr>
+<tr><th scope="row">Branch names</th><td>Session metadata: branch-reference labels own each branch name; <code translate="no">branches</code> keeps the selected-head compatibility projection</td></tr>
 </tbody>
 </table>
 
@@ -252,12 +252,12 @@
 <tr><th scope="row">Wrong tool use in a function</th><td>User-turn guidance plus a depth cap, never another tool list (<a href="../execution/agentic-self-recursion.html">self-recursion</a>)</td></tr>
 <tr><th scope="row">Recording</th><td>On a hash change (start, toolset change, plan-mode toggle): a <code translate="no">role=code</code> node <code translate="no">name="context/system_prompt"</code>, <code translate="no">caller=ROOT</code>, output = full text. Rendering pins the latest on the spine</td></tr>
 <tr><th scope="row"><code translate="no">context/*</code> names</th><td>Reserved and hidden from chat, except <code translate="no">context/summary</code>, which is real conversation content</td></tr>
-<tr><th scope="row">Memory prefetch</th><td>Prefix block in the user node's wire message, stored in its <code translate="no">memory_prefetch</code> metadata. Not aged; system and tools stay byte-stable</td></tr>
+<tr><th scope="row">Memory prefetch</th><td>Prefix block in the user node's wire message, stored as the <code translate="no">memory_prefetch</code> entry of its <code translate="no">turn_context</code> metadata (<a href="../../context/composition.html#l2">Composition</a>). System and tools stay byte-stable</td></tr>
 <tr><th scope="row">Images and files</th><td>By reference; bodies in the attachments directory, loaded by render</td></tr>
 </tbody>
 </table>
 
-<h2 id="s8">Compaction and aging</h2>
+<h2 id="s8">Compaction</h2>
 <figure>
 <svg class="fig-wide" viewBox="0 0 680 196" role="img" aria-label="Chain P, a, b, c, d, e linked by predecessor edges. Summary S has P as predecessor and covers a, b and c by id. No edge is rewritten and HEAD stays at e. A chain containing all of a to c renders S, d, e; any other renders raw.">
   <defs><marker id="cp-a" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path class="head" d="M0 0L8 4L0 8z"/></marker></defs>
@@ -290,10 +290,10 @@
 <thead class="sr"><tr><th scope="col">Item</th><th scope="col">Detail</th></tr></thead>
 <tbody>
 <tr><th scope="row"><code translate="no">metadata.covers_ids</code></th><td>Ids, because sibling branches interleave seqs. The WebUI payload adds covered turns' caller subtrees (<a href="rendering.html#s9">rendering §9</a>)</td></tr>
-<tr><th scope="row">Next summary</th><td>Absorbs the last; <code translate="no">extra_meta._last_summary_id</code> marks the active one</td></tr>
+<tr><th scope="row">Next summary</th><td>Absorbs the one in effect, which <code translate="no">nodes.active_summary_for_chain</code> picks for the chain; the graph builder folds each branch with the same pick</td></tr>
 <tr><th scope="row">Full spec</th><td><a href="../../context/compaction.html">Compaction</a></td></tr>
-<tr><th scope="row">Aging boundary</th><td>Advances only at turn commit; a per-call boundary breaks the cache prefix</td></tr>
-<tr><th scope="row">Replay</th><td>Each llm node records <code translate="no">metadata.render_manifest = {policy_version, aged_before_seq, spilled: [...]}</code>, so a graph renders the same bytes on any day</td></tr>
+<tr><th scope="row">Old tool results</th><td>Never aged: each renders as its turn sent it until compaction covers its turn, so the cache prefix only grows between compactions</td></tr>
+<tr><th scope="row">Replay</th><td>Rendering reads only stored nodes, so a graph renders the same bytes on any day; a <code translate="no">render_manifest</code> written by an earlier version is ignored</td></tr>
 <tr><th scope="row">Spill</th><td>When recorded, once and deterministically, never when rendered</td></tr>
 <tr><th scope="row">One pipeline</th><td>The DAG render is the only context path; if it raises, the turn fails visibly</td></tr>
 </tbody>
@@ -313,15 +313,13 @@
 </table>
 
 <h2>Implementation status</h2>
-<p><a href="#s2">Data model</a> through <a href="#s8">Compaction and aging</a> and graph ownership are in code with regression coverage.</p>
+<p><a href="#s2">Data model</a> through <a href="#s8">Compaction</a> and graph ownership are in code with regression coverage.</p>
 <details>
 <summary>Ablation switches</summary>
 <table class="stack">
 <thead><tr><th scope="col">Variable</th><th scope="col">Moves</th><th scope="col">Read</th></tr></thead>
 <tbody>
-<tr><th scope="row"><code translate="no">OPENPROGRAM_TOOL_AGING</code></th><td>Tool aging on or off</td><td>At import</td></tr>
-<tr><th scope="row"><code translate="no">OPENPROGRAM_TOOL_AGING_TAIL_TURNS</code></th><td>Tail turns kept</td><td>At import</td></tr>
-<tr><th scope="row"><code translate="no">OPENPROGRAM_TOOL_AGING_MAX_RESULT_CHARS</code></th><td>Result size limit</td><td>At import</td></tr>
+<tr><th scope="row"><code translate="no">OPENPROGRAM_NODE_RENDER_CAP</code></th><td>Spill size for a new node that is neither a tool result nor a message (a summary, a program's return value); an existing node keeps the limit it was recorded under</td><td>At import</td></tr>
 <tr><th scope="row"><code translate="no">OPENPROGRAM_NODE_SPILL</code></th><td>Large-node spill</td><td>At import</td></tr>
 <tr><th scope="row"><code translate="no">OPENPROGRAM_EXPOSE_DEFAULT</code></th><td>What an unspecified <code translate="no">expose=</code> means; an explicit one wins</td><td>At call</td></tr>
 </tbody>
@@ -339,7 +337,6 @@
 <tr><th scope="row"><code translate="no">openprogram/runtime/context/render.py</code></th><td><code translate="no">render_dag_messages</code></td></tr>
 <tr><th scope="row"><code translate="no">openprogram/runtime/context/components.py</code></th><td>The system-prompt assembler</td></tr>
 <tr><th scope="row"><code translate="no">openprogram/runtime/context/system_prompt_node.py</code></th><td><code translate="no">context/system_prompt</code> recording, <code translate="no">context/*</code> hiding</td></tr>
-<tr><th scope="row"><code translate="no">openprogram/runtime/context/aging.py</code></th><td>Advance-only boundary, render manifests</td></tr>
 <tr><th scope="row"><code translate="no">openprogram/runtime/context/persistence.py</code></th><td>Summary nodes</td></tr>
 <tr><th scope="row"><code translate="no">openprogram/runtime/conversation/turn_runtime/__init__.py</code></th><td>Chat entry</td></tr>
 <tr><th scope="row"><code translate="no">openprogram/runtime/agent/runtime/</code></th><td>Function-body model calls</td></tr>

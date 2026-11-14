@@ -119,7 +119,7 @@ async function checkVisibleCollectionAndActivation() {
   testContext.assert.equal(a.visibility.length, hiddenVisibilityCalls);
   testContext.assert.equal(a.targetCallCount(), hiddenTargetCalls);
 
-  // Resolving a background Page for web_use must not reveal it or alter
+  // Resolving a background Page for the Agent must not reveal it or alter
   // the renderer's visible collection.
   const backgroundVisibilityCalls = a.visibility.length;
   const backgroundTargetCalls = a.targetCallCount();

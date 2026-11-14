@@ -17,6 +17,7 @@ import time
 import uuid
 from pathlib import Path
 from typing import Any, Callable
+from openprogram.host._platform.filesystem import replace_file
 
 
 TRASH_ENV = "OPENPROGRAM_RECOVERABLE_TRASH"
@@ -224,7 +225,7 @@ def _lock_manifest_file(fd: int) -> Callable[[], None] | None:
 def _append_manifest(root: Path, entry: dict[str, Any]) -> None:
     line = (json.dumps(entry, ensure_ascii=True, separators=(",", ":")) + "\n").encode()
     with _manifest_lock:
-        fd = os.open(root / "manifest.jsonl", os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        fd = os.open(root / "manifest.jsonl", os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_BINARY", 0), 0o600)
         unlock = None
         start = None
         try:
@@ -479,13 +480,13 @@ def _atomic_write(path: Path, content: str, mode: int) -> None:
     temporary = path.with_name(f".{path.name}.tmp-{uuid.uuid4().hex}")
     fd = None
     try:
-        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), mode)
         _write_all(fd, content.encode("utf-8"))
         os.fsync(fd)
         os.close(fd)
         fd = None
         os.chmod(temporary, mode)
-        os.replace(temporary, path)
+        replace_file(temporary, path)
     finally:
         if fd is not None:
             os.close(fd)

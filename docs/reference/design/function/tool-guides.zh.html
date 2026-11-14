@@ -16,7 +16,7 @@
 <tr><th scope="row"><code translate="no">text</code></th><td>指南，或返回指南的函数（平台差异、从代码读取的列表）</td></tr>
 <tr><th scope="row"><code translate="no">when(args)</code></th><td><code translate="no">included</code>、<code translate="no">on_error</code> 适用于哪些调用；<code translate="no">lookup</code> 是否进索引</td></tr>
 <tr><th scope="row"><code translate="no">required_for(args)</code></th><td>指南已知前不能运行的调用</td></tr>
-<tr><th scope="row"><code translate="no">activates</code></th><td>指南所讲的延迟工具；送达时加载其 schema，等同 <code translate="no">tool_search</code></td></tr>
+<tr><th scope="row"><code translate="no">activates</code></th><td>指南所讲的延迟工具；送达时在指南末尾加一行，列出这些工具和加载它们的 <code translate="no">tool_search select:</code> 调用（<a href="deferred-tools.zh.html#activation">延迟工具</a>）</td></tr>
 </tbody>
 </table>
 <table class="stack">
@@ -35,7 +35,7 @@
 <li><code translate="no">_run_loop</code> 打开视图（<code translate="no">guides.begin_loop</code>）。loop 之外指南不起作用：直接 Python 调用和测试看到的是普通结果。</li>
 <li>每次模型请求前，<code translate="no">_stream_assistant_response</code> 记录发送的文本（<code translate="no">guides.observe_request</code>）。</li>
 <li>调用判定前，<code translate="no">required_for</code> 指南未知时 <code translate="no">prechecks.call_problem</code> 返回 <code translate="no">GUIDE_REQUIRED</code>：普通工具错误，没有审批卡。模型读完附上的指南再调用。</li>
-<li>调用结束时，<code translate="no">_rewrite_tool_result</code>（<code translate="no">guides.attach</code>）把应送达的指南放在结果前面，各包在 <code translate="no">&lt;guide name="…"&gt;</code> 里。</li>
+<li>调用结束时，<code translate="no">_rewrite_tool_result</code>（<code translate="no">guides.attach</code>）把应送达的指南各包在 <code translate="no">&lt;guide name="…"&gt;</code> 里，记在结果的附件（<code translate="no">details["attachment"]</code>）上，不放进工具自己的文字；它们在这组结果之后发出，也算在请求的文字里（<a href="../context/overview.zh.html#cross-turn-tool-context">工具输出</a>）。</li>
 </ol>
 <p>标记还在上一次请求文本里，或此后已送达，指南就算<strong>已知</strong>。没有台账：压缩、微压缩、worker 重启或新 agent 都会让标记消失，下一个需要它的调用会重新收到。提示词里已带标记指南的 agent 不再重复收到。</p>
 

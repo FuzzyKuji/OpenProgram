@@ -5,12 +5,12 @@
 <p>右侧栏的 Activity 只看一个对话。一次运行在等的事不单独成组，而是落在相关那一行，字形角上显示红色计数。唯一的例外是“等你处理”，即各对话留给读者的报告。消息不作为行。</p>
 
 <h2 id="overview">总览</h2>
-<p>各组顺序固定。等你处理和未完成事项为空时不显示，只有等你处理的组头带计数。悬停组头显示 <code translate="no">SectionHeader</code> 的箭头，点击折叠（按浏览器保存，<code translate="no">lib/prefs/activity-view.ts</code>）。</p>
+<p>各组顺序固定。Agents 一直显示；其余各组为空时连同组头都不显示。只有等你处理的组头带计数。悬停组头显示 <code translate="no">SectionHeader</code> 的箭头，点击折叠（按浏览器保存，<code translate="no">lib/prefs/activity-view.ts</code>）。</p>
 <table class="stack">
 <thead><tr><th scope="col">组</th><th scope="col">行</th><th scope="col">状态行</th></tr></thead>
 <tbody>
 <tr><th scope="row">等你处理</th><td>所有常驻对话里还在等读者的报告（<code translate="no">lib/agents/pending-inbox</code>）。每行打开对应对话。</td><td>“发现 · &lt;代理&gt; · &lt;时间&gt;”</td></tr>
-<tr><th scope="row">代理</th><td>主代理，无论启动多少子代理都只有一行。有多个分支时，每个分支一行，地位相同。代理<a href="../../runtime/always-on-agents.zh.html">常驻</a>期间，已检出分支的行多一行，显示下次唤醒。</td><td>运行中（当前调用或“等待子代理”，加用时，蓝色）；“失败 · &lt;时间&gt;”（红色）；否则是最后消息时间和“10 月 15 日 · 5 个子代理”</td></tr>
+<tr><th scope="row">代理</th><td>主代理，无论启动多少子代理都只有一行，并且总是列出：会话的回合没有留下执行记录时也有它，静止时显示会话最后活动时间，打开后从对话记录读取运行。有多个分支时，每个分支一行，地位相同。代理<a href="../../runtime/always-on-agents.zh.html">常驻</a>期间，已检出分支的行多一行，显示下次唤醒。</td><td>运行中（当前调用或“等待子代理”，加用时，蓝色）；“失败 · &lt;时间&gt;”（红色）；否则是最后消息时间和“10 月 15 日 · 5 个子代理”。在自己 <a href="../../runtime/execution/agent-worktree.zh.html">worktree</a> 里的分支多一个“Worktree”标签和“worktree 中 3 个文件”</td></tr>
 <tr><th scope="row">程序和命令</th><td>运行中的 shell 调用、随运行中断的 shell 调用、所有后台程序。运行中在前，其余按新到旧；每次 20 条。<code translate="no">agent</code> 调用不在这里。</td><td>“命令 · 运行中 · 12 秒”；“命令 · 已中断 · 昨天”（灰色）；“45 / 100 samples · 3.4/s”；“已完成 · 10 / 10 epochs · 4 分 5 秒”；“在 62 / 200 失败 · 退出码 1”</td></tr>
 <tr><th scope="row">未完成事项</th><td><a href="../../../../capabilities/agents.zh.html#未完成事项">未完成事项</a>，每项一行；完成后离开总览</td><td>“未完成 · &lt;时间&gt;”</td></tr>
 <tr><th scope="row">定时任务</th><td>从本对话设置的 Scheduler 任务、提醒和 webhook（任务或其签名规格的 <code translate="no">session_id</code>），新的在前</td><td>“Webhook · 被调用时”；“循环 · 0 9 * * 1-5 · 检查结果变化时”</td></tr>
@@ -75,6 +75,17 @@
 
 <h2 id="pages">页面</h2>
 <p>总览里的一行打开一页。页面不再通向别的页面：属于某行的内容在它下面原地展开，直到被收起。顶部的“运行记录”、焦点在面板内时按 Esc、或点侧栏轨道上的“运行记录”都会返回，并恢复总览的滚动位置和焦点。</p>
+<p>页面像手机上那样移动，用的是 Launchpad 的弹簧；开启减少动效时直接切换。</p>
+<table class="stack">
+<thead><tr><th scope="col">动作</th><th scope="col">发生什么</th></tr></thead>
+<tbody>
+<tr><th scope="row">打开</th><td>页面从右边滑入，盖住总览</td></tr>
+<tr><th scope="row">返回</th><td>页面滑出去；总览从偏左四分之一宽度的位置回来，并从半暗变亮</td></tr>
+<tr><th scope="row">朝总览方向滑动</th><td>页面自己的轨道在最左端时，页面跟着手指走。抬手时已经拉过三分之一宽度，或者是一次甩动，就完成返回；否则页面弹回原位。</td></tr>
+<tr><th scope="row">页面下面</th><td>只有页面移动时总览才在文档里</td></tr>
+</tbody>
+</table>
+<p>在 Agent 页面上，返回和 Esc 一次退一步：图表不在第一列时先退一列，然后才回总览。</p>
 <table class="stack fixed">
 <thead><tr><th scope="col">页面</th><th scope="col">从上到下</th></tr></thead>
 <tbody>
@@ -90,15 +101,51 @@
 <p class="note">页面对应的项目已消失时显示“已不在这里”，直到读者离开。</p>
 
 <h3 id="agent-chart">Agent 时间图</h3>
-<p>一张竖着的时间图，最新的在上面，每一层一列：话题、消息、步骤、步骤里面。每列 256 像素宽。默认宽度只显示话题，往右滚看下一层，侧栏拉宽时并排显示。</p>
-<p>每一块悬停都抬成卡片，都能点。下面还有内容的块往右移一列。只是一次调用、一次失败或没有步骤的消息的块原地展开：输入和结果，或者提问和回复，用运行列表里的写法。</p>
-<p>展开的块变高，下面的块往下让，左边几列里它的色条跟着变长。再点一次收起。还在运行的调用没有可展开的内容。</p>
-<p>点击一块时用 620 毫秒移到它的下一列，这一块位置不动。左右滑动一次翻一列，像翻页：前 48 像素跟手，然后移到下一列，这次滑动剩下的部分和惯性不再移动任何东西。滑得不够就退回。其他方式的左右滚动停下 160 毫秒后吸附到列边。</p>
-<p>正在滑入的一列随着条目展开淡入，不会显示挤成一团的条目。离视野上方超过一屏、下方超过两屏的条目不绘制。</p>
+<p>一张竖着的时间图，最新的在上面，每一层一列：话题、消息、步骤、步骤里面。侧栏宽度决定显示几列，视野里的每一列都是完整的。</p>
+<table class="stack">
+<thead><tr><th scope="col">侧栏宽度</th><th scope="col">列</th></tr></thead>
+<tbody>
+<tr><th scope="row">288（默认，第一个吸附点）</th><td>一列，256 像素宽</td></tr>
+<tr><th scope="row">544（第二个吸附点）</th><td>两列，各 256</td></tr>
+<tr><th scope="row">800（第三个吸附点，最大）</th><td>三列，各 256</td></tr>
+<tr><th scope="row">两个吸附点之间</th><td>取较少的列数，拉宽填满</td></tr>
+</tbody>
+</table>
+<p>列数是图表宽度除以 256 向下取整，至少一列、最多三列（<code translate="no">columnsFor</code>）。宽度变化的那一帧就生效，所以拖动拖动条时，松手会落到的列数在拖动过程中就显示出来。</p>
+<p>每一块悬停都抬成卡片，都能点；被截断的标题或文字悬停时显示全文。下面还有内容的块往右移一列。只是一次调用、一次失败或没有步骤的消息的块原地展开：输入和结果，或者提问和回复，用运行列表里的写法。</p>
+<p>展开的块变高，下面的块往下让，左边几列里它的色条跟着变长。再点一次收起。展开和收起是一段 240 毫秒的标准曲线，收起时内容留到块合上为止。还在运行的调用没有可展开的内容。</p>
+<p>视野以读者去过的最深一列结尾，放得下时从话题开始。点开一块时，如果它的下一列已经在视野里，什么都不移动。列数少于层数时，视野一次移动一列：</p>
+<table class="stack">
+<thead><tr><th scope="col">动作</th><th scope="col">发生什么</th></tr></thead>
+<tbody>
+<tr><th scope="row">点击一块</th><td>它的下一列滑进来，这一块在屏幕上的位置不动</td></tr>
+<tr><th scope="row">返回、Esc、在块上按左方向键</th><td>退回一列；已在第一列时回到总览</td></tr>
+<tr><th scope="row">左右滑动</th><td>图表跟着手指走，最多一列。移动途中再滑也会从当前位置接住。</td></tr>
+<tr><th scope="row">抬手</th><td>已经滑过 48 像素或是一次甩动，就继续到手指前往的那一列；否则退回。两种情况都只有一次移动，抬手后的惯性不再移动任何东西。</td></tr>
+<tr><th scope="row">滑过最后一列</th><td>图表最多让出 44 像素，随落定一起回来</td></tr>
+<tr><th scope="row">滑过第一列</th><td>整个页面跟着走：这就是返回</td></tr>
+<tr><th scope="row">横向转动的鼠标滚轮</th><td>每一格移动一列</td></tr>
+<tr><th scope="row">键盘焦点落到视野外的块</th><td>它所在的列移进视野</td></tr>
+</tbody>
+</table>
+<p>一次移动只是各列轨道靠 transform 滑动一次：</p>
+<ul>
+<li>整列 240 毫秒，剩下的一段更短（不少于 120 毫秒），曲线是 <code translate="no">--ease-standard</code>；开启减少动效时直接切换。</li>
+<li>移动开始前，条目已经按终点排好。滑进来的列已经是最终尺寸；被点的块或视野顶上的块在屏幕上保持不动。</li>
+<li>比终点那一列更深的列不绘制，滑出途中也一样。</li>
+<li>滑动结束后没有任何东西再变高、淡入或落定。</li>
+<li>图表容器从不横向滚动，只上下滚动。离视野上方超过一屏、下方超过两屏的条目不绘制。</li>
+</ul>
+<p>原因：这张图以前靠横向滚动翻列，每块的高度按滚动位置插值。三件事让移动不对劲：</p>
+<ul>
+<li>两段动画：高度在一列 256 像素的前 64 像素里就变完，过阻尼的弹簧还拖着长尾在滑，滑入的一列又按自己的曲线淡入。</li>
+<li>卡顿：每一帧都写所有块的 top 和 height、重设纵向滚动、改变哪些块绘制，等于每帧一次完整布局。</li>
+<li>半列：任何宽度下列都是 256 像素；不是滑动手势的横向滚动停下 160 毫秒后还要吸附到列边。</li>
+</ul>
 <table class="stack fixed">
 <thead><tr><th scope="col">规则</th><th scope="col">做法</th></tr></thead>
 <tbody>
-<tr><th scope="row">高度</th><td>跟着读者往右滚到哪里走，在两层之间插值。父块盖住子块，所以各列同一高度是同一时间。</td></tr>
+<tr><th scope="row">高度</th><td>由视野里最深的一列决定。父块盖住子块，所以各列同一高度是同一时间。</td></tr>
 <tr><th scope="row">时间</th><td>每块顶上写这一块最晚的时刻：话题和消息到分钟，步骤到秒。长时间空闲和换天是横跨各列的一行虚线：换天时每一列的时间列都写日期，长时间空闲在第一列注明空了多久。</td></tr>
 <tr><th scope="row">颜色</th><td>颜色只表示属于哪个话题，不表示结果好坏。每个话题按首次出现的顺序取一个主色，隔了很久回来的话题还是这个颜色。消息取主色下的不同色号，步骤和步骤里面继续往下延伸。没人发起的运行和还没分类的消息是灰色。失败和运行中写在文字里。</td></tr>
 <tr><th scope="row">步骤</th><td>连续调用同一个函数合成一行，每次调用在最后一列。失败的步骤单独一行，错误写在下面。子 Agent 自己的步骤在最后一列。最后一列的一组最多四行高，在自己的格子里滚动。</td></tr>
@@ -152,7 +199,7 @@
 <tr><th scope="row">宽度</th><td><code translate="no">ResizeObserver</code> 写入 CSS 变量；标记用绘图区的百分比定位，拉宽不会重新渲染</td></tr>
 <tr><th scope="row">时间轴</th><td>覆盖列出的最长已结束运行和已展开运行的事件：60、180、300、600、1800 或 3600 秒。更长的运行占满宽度。右端平直表示没有保存结束时间或仍在运行。</td></tr>
 <tr><th scope="row">展开的行</th><td>窄时与左半同宽，两半都放得下时占满整宽。长内容在 8 行处截断，带自己的“展开全文”。</td></tr>
-<tr><th scope="row">面板宽度</th><td>右侧栏宽度按浏览器保存（<code translate="no">useResizableRail</code> 传 <code translate="no">storageKey</code>），首次绘制前恢复，拖动结束时写入。焦点在拖动条上时左右方向键每次改 24，双击或按 Enter 回到默认宽度。左侧栏相同。</td></tr>
+<tr><th scope="row">面板宽度</th><td>右侧栏宽度按浏览器保存（<code translate="no">useResizableRail</code> 传 <code translate="no">storageKey</code>），首次绘制前恢复，拖动结束时写入。焦点在拖动条上时左右方向键每次改 24，双击或按 Enter 回到默认宽度。拖动经过 288、544、800 时会停住，正好放下一、二、三列完整的图表列。左侧栏相同，只有默认宽度一个吸附点。</td></tr>
 <tr><th scope="row">程序和任务的时间轴</th><td>程序的时间轴是它自己的时长：60 秒以内向上取 3 的倍数，更长时用上面的档位。未完成事项和调用没有时间轴，也没有右半。</td></tr>
 </tbody>
 </table>
@@ -167,7 +214,7 @@
 <tr><th scope="row">上、下、Home、End</th><td>在行之间移动。焦点从不改变横向滚动。</td></tr>
 <tr><th scope="row">右、左</th><td>展开和收起该行；加 Shift 在两半之间切换</td></tr>
 <tr><th scope="row">Enter、空格</th><td>等同点击</td></tr>
-<tr><th scope="row">Esc</th><td>仅当焦点在面板内：先离开对话框或文本框，再返回</td></tr>
+<tr><th scope="row">Esc</th><td>仅当焦点在面板内：先离开对话框或文本框，再返回；在 Agent 页面上一次退一步</td></tr>
 </tbody>
 </table>
 </details>
@@ -199,14 +246,14 @@
 <tbody>
 <tr><th scope="row">静止的行</th><td>无框：种类色的裸字形，名称下一行按语气着色的状态（无圆点），箭头</td></tr>
 <tr><th scope="row">悬停</th><td>抬成卡片：文件卡的阴影，加向文字色偏 4% 的实色底；面板本身就是输入表面，同色卡片看不出边。圆角用列表行的圆角，和左侧栏的行一样</td></tr>
-<tr><th scope="row">第二层</th><td>同一种行，只用一组字号（14 和 13，等宽和“当前”标签用 11），字重 400。标题用亮色，其余用次要色；红色只表示失败。动效只有新出现内容 160 毫秒淡入和箭头转动；开启减少动效时没有。</td></tr>
+<tr><th scope="row">第二层</th><td>同一种行，只用一组字号（14 和 13，等宽和“当前”标签用 11），字重 400。标题用亮色，其余用次要色；红色只表示失败。动效只有新出现内容 160 毫秒淡入、箭头转动、页面移动用的弹簧，以及图表列之间 240 毫秒的滑动；开启减少动效时没有。</td></tr>
 <tr><th scope="row">长条和刻度</th><td>长条是一次运行或一个子代理，刻度是一个步骤。平时灰色，失败红色，检查失败或等待琥珀色，运行中蓝色。</td></tr>
 </tbody>
 </table>
 
 <details>
 <summary>代码</summary>
-<p><code translate="no">apps/web/components/right-sidebar/running/running-panel.tsx</code>、<code translate="no">apps/web/components/right-sidebar/running/activity-page.tsx</code>、<code translate="no">apps/web/components/right-sidebar/running/activity-page-row.tsx</code>、<code translate="no">apps/web/components/right-sidebar/running/activity-page-geometry.ts</code>、<code translate="no">apps/web/components/right-sidebar/running/activity-run-wording.ts</code>、<code translate="no">apps/web/components/right-sidebar/running/run-list.tsx</code>、<code translate="no">apps/web/components/right-sidebar/running/run-insides.tsx</code>、<code translate="no">apps/web/components/right-sidebar/running/sub-agent-row.tsx</code>、<code translate="no">apps/web/components/right-sidebar/running/execution-controls.tsx</code>、<code translate="no">apps/web/components/right-sidebar/running/program-page.tsx</code>、<code translate="no">apps/web/components/right-sidebar/running/command-page.tsx</code>、<code translate="no">apps/web/components/right-sidebar/running/scheduled-task-page.tsx</code>、<code translate="no">apps/web/components/right-sidebar/running/open-work-page.tsx</code>、<code translate="no">apps/web/components/right-sidebar/running/always-on-row.tsx</code>、<code translate="no">apps/web/lib/net/execution/activity-runs-client.ts</code>、<code translate="no">apps/web/lib/execution/activity-model.ts</code>、<code translate="no">apps/web/lib/prefs/activity-view.ts</code>、<code translate="no">apps/web/lib/chat/conversation-work.ts</code>、<code translate="no">openprogram/runtime/execution/activity_calls.py</code>、<code translate="no">openprogram/runtime/execution/activity_runs.py</code>、<code translate="no">openprogram/interfaces/server/routes/execution/activity_runs.py</code>、<code translate="no">openprogram/interfaces/server/routes/execution/conversation_work.py</code></p>
+<p><code translate="no">apps/web/components/right-sidebar/running/running-panel.tsx</code>、<code translate="no">apps/web/components/right-sidebar/running/activity-page.tsx</code>、<code translate="no">apps/web/components/right-sidebar/running/use-page-slide.ts</code>、<code translate="no">apps/web/components/right-sidebar/running/sideways.ts</code>、<code translate="no">apps/web/components/right-sidebar/running/activity-page-row.tsx</code>、<code translate="no">apps/web/components/right-sidebar/running/activity-page-geometry.ts</code>、<code translate="no">apps/web/components/right-sidebar/running/activity-run-wording.ts</code>、<code translate="no">apps/web/components/right-sidebar/running/run-list.tsx</code>、<code translate="no">apps/web/components/right-sidebar/running/run-insides.tsx</code>、<code translate="no">apps/web/components/right-sidebar/running/sub-agent-row.tsx</code>、<code translate="no">apps/web/components/right-sidebar/running/execution-controls.tsx</code>、<code translate="no">apps/web/components/right-sidebar/running/program-page.tsx</code>、<code translate="no">apps/web/components/right-sidebar/running/command-page.tsx</code>、<code translate="no">apps/web/components/right-sidebar/running/scheduled-task-page.tsx</code>、<code translate="no">apps/web/components/right-sidebar/running/open-work-page.tsx</code>、<code translate="no">apps/web/components/right-sidebar/running/always-on-row.tsx</code>、<code translate="no">apps/web/lib/net/execution/activity-runs-client.ts</code>、<code translate="no">apps/web/lib/execution/activity-model.ts</code>、<code translate="no">apps/web/lib/prefs/activity-view.ts</code>、<code translate="no">apps/web/lib/chat/conversation-work.ts</code>、<code translate="no">openprogram/runtime/execution/activity_calls.py</code>、<code translate="no">openprogram/runtime/execution/activity_runs.py</code>、<code translate="no">openprogram/interfaces/server/routes/execution/activity_runs.py</code>、<code translate="no">openprogram/interfaces/server/routes/execution/conversation_work.py</code></p>
 </details>
 
 <p class="next"><a href="../visual-system/indicator-dots.zh.html">状态圆点</a> · <a href="sub-agent-row.zh.html">子代理自己的对话</a></p>

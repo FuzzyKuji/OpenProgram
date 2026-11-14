@@ -88,11 +88,11 @@
 <table class="stack">
 <thead><tr><th scope="col">Setting</th><th scope="col">Default</th><th scope="col">Counts</th></tr></thead>
 <tbody>
-<tr><th scope="row"><code translate="no">agent.max_spawn_depth</code></th><td>0, no limit</td><td>Generations of new agents; only creating one counts. At 1 a spawned agent's <code translate="no">agent()</code> spawn is refused and it does the work itself</td></tr>
+<tr><th scope="row"><code translate="no">agent.max_spawn_depth</code></th><td>1</td><td>Generations of new agents; only creating one counts. At 1 a spawned agent's <code translate="no">agent()</code> spawn is refused and it does the work itself</td></tr>
 <tr><th scope="row"><code translate="no">agent.max_messages</code></th><td>0, no limit</td><td>Messages in the chain, whatever the tool, replies included</td></tr>
 </tbody>
 </table>
-<p class="note">Tool exposure follows the message counter only: <code translate="no">agent</code> leaves the listing when messages run out, never because generations did. <code translate="no">job_output</code> stays. An agent reading a worker's result keeps its own generation count, so it can spawn the next wave. See <a href="../runtime/collaboration/agent-collab-architecture.html">agent collaboration</a>.</p>
+<p class="note">Tool exposure is binary: <code translate="no">agent</code> leaves the listing when messages or generations run out, except in a fork, which keeps its caller's tool list for the shared prompt cache and is refused at run time. <code translate="no">read_conversation</code> stays. An agent reading a worker's result keeps its own generation count, so it can spawn the next wave. See <a href="../runtime/collaboration/agent-collaboration.html#limits">agent collaboration</a>.</p>
 </details>
 <details>
 <summary>Rule 7: never joins</summary>

@@ -80,6 +80,7 @@
 <tbody>
 <tr><th scope="row">Desktop source of truth</th><td>A complete valid <code translate="no">theme-prefs.json</code> from the main UI. Legacy browser-storage migration runs only when the file is missing or its mode or style is invalid. Raw browser-database scans cannot find the latest record, so they never override it or restore a cleared accent.</td></tr>
 <tr><th scope="row">After load</th><td>The web page's localStorage is the authority and syncs the desktop cache</td></tr>
+<tr><th scope="row">What Auto follows</th><td>In the desktop App, the OS setting as the main process reads it (<code translate="no">theme.systemDark</code>, pushed on change). A debugger attached to the page can override <code translate="no">prefers-color-scheme</code>, and Playwright forces it to light on every page it adopts, so the App does not read it. In a browser, the media query.</td></tr>
 <tr><th scope="row">Event log</th><td><code translate="no">theme-events.json</code> under desktop userData, at most 64 records: message sends, first-screen init, settings changes, system colour events, cross-window sync, HTML attribute changes</td></tr>
 <tr><th scope="row">Log contents</th><td>Timestamps, fixed event names, theme enums, system light or dark. No chat content, URLs, CSS or user paths. Write failures do not affect rendering.</td></tr>
 <tr><th scope="row">Limit</th><td>The log identifies a switch's source; it does not establish that an unknown trigger is fixed</td></tr>

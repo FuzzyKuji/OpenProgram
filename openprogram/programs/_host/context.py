@@ -149,7 +149,9 @@ class ProgramContext:
         A name this context already owns is skipped, so loading the same
         package again does not record a second undo.
         """
-        from openprogram.programs._host.runtime import Tier, get, owner_kind, set_tier, tool_tier, unregister
+        from openprogram.programs._host.runtime import (
+            Tier, application_of, get, owner_kind, set_tier, tool_tier, unregister,
+        )
         owned = set(self.contributions.get("tools", ()))
         for tool_name in names:
             tool = get(tool_name)
@@ -162,7 +164,9 @@ class ProgramContext:
                 continue
             owned.add(tool_name)
             self._record("tools", tool_name)
-            self.effect(lambda n=tool_name: unregister(n), f"tool {tool_name}")
+            reason = (f"its application '{application_of(self.owner)}' was closed"
+                      if application_of(self.owner) else f"'{self.owner}' was unloaded")
+            self.effect(lambda n=tool_name, why=reason: unregister(n, reason=why), f"tool {tool_name}")
 
     # events
 

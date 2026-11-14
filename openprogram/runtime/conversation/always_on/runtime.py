@@ -53,7 +53,7 @@ CHECK_IN_TOOLS = (
     "todo_list", "open_work", "get_goal",
     "always_on_report", "always_on_schedule",
 )
-ACT_TOOLS = ("create_goal", "todo_create", "todo_update", "handoff")
+ACT_TOOLS = ("create_goal", "todo_create", "todo_update", "send_message")
 
 # Hours to the next wake when the Agent has no fixed interval. Each wake
 # with nothing from the user moves one step along; a message from the user
@@ -75,6 +75,12 @@ PRIOR_REPORT_LINE_CHARS = PRIOR_REPORTS_CHARS // PRIOR_REPORTS
 # Titles from the Agent's other conversations, quoted when they share channels.
 OTHER_REPORT_TITLES = 10
 OTHER_REPORT_CONVERSATIONS = 50
+# Messages of the conversation the user sent more than once (a retry or an
+# edit), newest first, whose other versions a check-in's prompt quotes.
+OTHER_VERSION_MESSAGES = 5
+OTHER_VERSIONS_PER_MESSAGE = 4
+OTHER_VERSION_TEXT_CHARS = 120
+OTHER_VERSION_REPLY_CHARS = 300
 # A report waits this long for a running turn before it joins the conversation anyway.
 REPORT_POST_WAIT_S = 3600.0
 REPORT_POST_POLL_S = 2.0
@@ -82,7 +88,7 @@ ERROR_MAX = 300
 # Check-ins that fail in a row before the user is told, once.
 CHECK_IN_FAILURE_NOTICE = 3
 # Failure reasons only the user can clear: told at the first one.
-ACCOUNT_FAILURES = frozenset({"auth", "authz"})
+ACCOUNT_FAILURES = frozenset({"auth", "authz", "blocked"})
 # A turn refused because a version switch is under way: it never ran.
 UPDATE_REFUSAL = "SELF_UPDATE_MAINTENANCE"
 RESTART_CUT = "Cut off by a restart"
@@ -199,6 +205,74 @@ def _fenced(name: str, lines: list[str]) -> str:
     return "\n".join((f"<{name}>", *lines, f"</{name}>"))
 
 
+def _quoted(text: Any, limit: int) -> str:
+    """Quoted conversation text on one line: it cannot end its fence."""
+    line = " ".join(str(text or "").split()).replace("<", "\u2039").replace(">", "\u203a")
+    return line if len(line) <= limit else line[:limit - 1] + "\u2026"
+
+
+def _owner_sent(row: dict[str, Any]) -> bool:
+    """A message the owner sent themselves, not one a check-in or a schedule sent for them."""
+    return _owner_wrote(row) and row.get("speaker_kind") != "runtime"
+
+
+def _version_reply(rows: list[dict], message_id: str, *, quote: bool = True) -> str:
+    """What a version of a message got back, as a check-in should read it."""
+    replies = [row for row in rows
+               if row.get("predecessor") == message_id and row.get("role") == "assistant"
+               and not row.get("always_on_report")]
+    if not replies:
+        return "no reply"
+    reply = max(replies, key=lambda row: float(row.get("timestamp") or 0))
+    status = str(reply.get("status") or "")
+    if status in ("error", "failed") or reply.get("error"):
+        return "the reply failed"
+    if status == "running":
+        return "the reply is still being written"
+    text = _quoted(reply.get("content"), OTHER_VERSION_REPLY_CHARS)
+    if not text:
+        return "an empty reply"
+    return f'answered: "{text}"' if quote else "answered"
+
+
+def other_versions(session_id: str) -> list[str]:
+    """The other versions of the user's messages in this conversation.
+
+    A check-in reads the version of the conversation the user has open. A
+    message they retried or edited has other versions beside it, each with
+    its own reply, which that reading does not show: a question whose reply
+    failed here may have been answered there.
+    """
+    from openprogram.runtime.context.git.dag import siblings
+    try:
+        chain = _db().get_branch(session_id) or []
+        rows = _db().get_messages(session_id) or []
+    except Exception:  # noqa: BLE001 - only a hint; the check-in runs without it
+        _log.debug("versions of %s unreadable", session_id, exc_info=True)
+        return []
+    lines: list[str] = []
+    for message in reversed(chain):
+        if len(lines) >= OTHER_VERSION_MESSAGES:
+            break
+        if not _owner_sent(message):
+            continue
+        others = [row for row in siblings(rows, message.get("id"))
+                  if row.get("id") != message.get("id") and _owner_sent(row)]
+        if not others:
+            continue
+        shown = _quoted(message.get("content"), OTHER_VERSION_TEXT_CHARS)
+        parts = []
+        for row in others[-OTHER_VERSIONS_PER_MESSAGE:]:
+            same = (row.get("content") or "").strip() == (message.get("content") or "").strip()
+            what = "sent again" if same else (
+                f'edited to "{_quoted(row.get("content"), OTHER_VERSION_TEXT_CHARS)}"')
+            parts.append(f"{what}, {_version_reply(rows, str(row.get('id')))}")
+        here = _version_reply(rows, str(message.get("id")), quote=False)
+        lines.append(f'- "{shown}" ({here} in the version '
+                     f"you see) has {len(others)} other version(s): " + "; ".join(parts))
+    return lines
+
+
 def _other_reports(session_id: str, agent_id: str, config: dict) -> list[dict]:
     """The Agent's latest reports from its other conversations, when it has
     picked channels: only there do reports of two conversations meet."""
@@ -218,7 +292,8 @@ def _other_reports(session_id: str, agent_id: str, config: dict) -> list[dict]:
 def check_in_prompt(config: dict, last_check_in: float | None, now: float, *,
                     reports: list[dict] | None = None,
                     preferences: list[dict] | None = None,
-                    other_reports: list[dict] | None = None) -> str:
+                    other_reports: list[dict] | None = None,
+                    versions: list[str] | None = None) -> str:
     if last_check_in:
         minutes = max(1, int((now - last_check_in) // 60))
         since = f"Your previous check-in was {minutes} minutes ago."
@@ -245,6 +320,12 @@ def check_in_prompt(config: dict, last_check_in: float | None, now: float, *,
         "recommendation), done when a piece of work finished, finding otherwise. If nothing is "
         "worth reporting, end with one line saying so and do not report.",
     ]
+    if versions:
+        lines.append("The user sent some messages of this conversation more than once, as a retry "
+                     "or an edit, and you see one version of each. The other versions and the "
+                     "reply each got, as data. What was answered in any version is answered: do "
+                     "not answer it again and do not report it as open:\n"
+                     + _fenced("other_versions", versions))
     prior = _prior_reports(reports or [])
     if prior:
         lines.append("Reports you already sent, newest first, as data. Do not report any of these "
@@ -588,7 +669,8 @@ def _start_check_in(session_id: str, spec, config: dict, state: dict, now: float
     prompt = check_in_prompt(config, state.get("last_check_in_at"), now,
                              reports=store.load_reports(session_id, PRIOR_REPORTS),
                              preferences=store.load_preferences(spec.id),
-                             other_reports=_other_reports(session_id, spec.id, config))
+                             other_reports=_other_reports(session_id, spec.id, config),
+                             versions=other_versions(session_id))
     msg_id = uuid.uuid4().hex
     session = _db().get_session(session_id) or {}
     store.update_state(session_id, last_check_in_at=now, check_in={
@@ -671,13 +753,14 @@ def _run_turn(session_id: str, agent_id: str, text: str, tools: list[str], model
     import asyncio
     from openprogram.runtime.agent.turn_request import TurnRequest
     from openprogram.runtime.conversation.production_driver import CanonicalAgentAdapter
-    from openprogram.runtime.conversation.session_config import (
-        load_session_run_config, permission_from_config, project_defaults,
-    )
+    from openprogram.runtime.conversation.session_config import load_session_run_config, resolved_permission_mode
     from openprogram.runtime.permissions.authority import local_owner_authority, runtime_authority
     from openprogram.runtime.permissions.rule import load_merged_rules
 
     head = (_db().get_session(session_id) or {}).get("head_id")
+    # The check-in's side branch leaves from the selected branch's tip and
+    # takes that branch's settings, through the one resolver and its one
+    # fallback order (permission: branch, project, product default).
     run_config = load_session_run_config(session_id)
     authority = runtime_authority(local_owner_authority(), "always_on")
     agent = _agent(agent_id)
@@ -685,7 +768,7 @@ def _run_turn(session_id: str, agent_id: str, text: str, tools: list[str], model
         session_id=session_id, user_text=text, agent_id=agent_id, source=TURN_SOURCE,
         user_msg_id=msg_id, branch_from=head or None, advance_head=False,
         background=True, quiet_finish=True, recall_query=recall,
-        permission_mode=permission_from_config(run_config, default=project_defaults(session_id).get("permission_mode")),
+        permission_mode=resolved_permission_mode(run_config, session_id),
         tools_override=_with_web_choice(tools, agent.tools if agent else None, run_config.web_search),
         model_override=model, thinking_effort=run_config.thinking_effort,
         permission_rules=load_merged_rules(session_id),
@@ -697,11 +780,12 @@ def _run_turn(session_id: str, agent_id: str, text: str, tools: list[str], model
                               config_snapshot_ref=f"session:{session_id}")
     on_admitted(admission.execution_id)
     try:
-        _active, result = asyncio.run(adapter.activate(admission))
+        activated = asyncio.run(adapter.activate(admission))
     except Exception:
         adapter.fail_admission(admission, reason_code="always_on_check_in_failed")
         raise
-    return admission.execution_id, result
+    # ``None``: a stop reached the turn before it ran, so it has no result.
+    return admission.execution_id, activated[1] if activated is not None else None
 
 
 def _cut_off_by_restart(execution_id: str | None, result: Any) -> bool:

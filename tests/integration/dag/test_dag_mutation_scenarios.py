@@ -146,7 +146,7 @@ def test_prompt_after_compaction_is_summary_plus_tail(store):
 
 
 def test_double_compaction_extends_coverage_and_keeps_one_active(store):
-    from openprogram.runtime.context.nodes import active_summary, render_context
+    from openprogram.runtime.context.nodes import active_summary_for_chain, render_context
     from openprogram.runtime.context.persistence import Persister, rendered_history
     from openprogram.state.store.session.session_node_writer import SessionNodeWriter
 
@@ -162,7 +162,8 @@ def test_double_compaction_extends_coverage_and_keeps_one_active(store):
     assert second
 
     graph = SessionNodeWriter(store, "s").load()
-    assert active_summary(graph).id == second
+    chain = [m["id"] for m in store.get_branch("s")]
+    assert active_summary_for_chain(graph, chain).id == second
     covers = graph.nodes[second].metadata["covers_ids"]
     assert first not in covers, "coverage names real turns, not summaries"
     assert len(covers) == 8            # old 6 + 2 newly eaten

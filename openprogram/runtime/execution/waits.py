@@ -111,6 +111,8 @@ def question_frame_data(wait: WaitRecord, *, session_id: str | None,
         "tool": request.get("tool"),
         "args": request.get("shown_args", request.get("args")),
         "risk_level": request.get("risk_level"),
+        # A foreground sub-agent's card in its caller's conversation names it.
+        **({"asked_by": request["asked_by"]} if request.get("asked_by") else {}),
         "created_at": wait.created_at,
         "expires_at": wait.expires_at,
     }

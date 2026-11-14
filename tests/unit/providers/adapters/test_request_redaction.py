@@ -148,3 +148,64 @@ def test_a_bracket_at_the_end_of_the_reply_is_not_lost() -> None:
         assert "".join(e.delta for e in events if e.type == "text_delta") == "see ["
 
     asyncio.run(run())
+
+
+def test_a_stop_reaches_the_provider_request_under_the_redaction_wrapper() -> None:
+    from openprogram.models.providers.utils.event_stream import close_stream
+
+    async def run() -> None:
+        ended: list[bool] = []
+
+        def provider(model, context, options):
+            stream = AssistantMessageEventStream()
+
+            async def produce() -> None:
+                stream.push(EventStart(partial=_message([])))
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    ended.append(True)
+
+            stream.attach_producer(asyncio.ensure_future(produce()))
+            return stream
+
+        fn = redacting_stream_fn(provider)
+        context = Context(messages=[UserMessage(content=f"call it with {KEY}", timestamp=1)])
+        stream = fn(object(), context, None)
+        assert (await stream.__anext__()).type == "start"
+
+        await close_stream(stream)  # what a stopped turn does with its response stream
+
+        assert ended == [True]
+
+    asyncio.run(run())
+
+
+def test_a_restarted_reply_does_not_inherit_a_half_placeholder() -> None:
+    from openprogram.models.providers.types import EventRetry
+
+    async def run() -> None:
+        def provider(model, context, options):
+            stream = AssistantMessageEventStream()
+
+            async def produce() -> None:
+                stream.push(EventStart(partial=_message([])))
+                # The first attempt stops inside a placeholder...
+                stream.push(EventTextDelta(content_index=0, delta="Using [[SEC",
+                                           partial=_message([TextContent(text="Using [[SEC")])))
+                stream.push(EventRetry(attempt=2, reason="transport", restart=True))
+                # ...and the request is sent again from its start.
+                message = _message([TextContent(text="Fresh")])
+                stream.push(EventTextDelta(content_index=0, delta="Fresh", partial=message))
+                stream.push(EventDone(reason="stop", message=message))
+
+            asyncio.create_task(produce())
+            return stream
+
+        fn = redacting_stream_fn(provider)
+        context = Context(messages=[UserMessage(content=f"call it with {KEY}", timestamp=1)])
+        events = [event async for event in fn(object(), context, None)]
+        deltas = [e.delta for e in events if e.type == "text_delta"]
+        assert deltas == ["Using ", "Fresh"]
+
+    asyncio.run(run())

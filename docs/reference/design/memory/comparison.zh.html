@@ -336,7 +336,7 @@
 <table class="stack">
 <thead><tr><th scope="col">来自</th><th scope="col">做法</th><th scope="col">我们</th></tr></thead>
 <tbody>
-<tr><th scope="row">codex-cli</th><td>写入者从带重试计数和上次水位的 SQLite 表取租约，先查额度</td><td>跨进程写锁，一秒超时，没有重试计数；失败进入写入者状态和 <code translate="no">memory_writer_failed</code> 帧</td></tr>
+<tr><th scope="row">codex-cli</th><td>写入者从带重试计数和上次水位的 SQLite 表取租约，先查额度</td><td>跨进程写锁，一秒超时；空闲监视器按原因的范围（对话、记忆库、登录）把失败记在 <code translate="no">ingest-state.json</code>；失败进入写入者状态和 <code translate="no">memory_writer_failed</code> 帧</td></tr>
 <tr><th scope="row">codex-cli</th><td>模型在回复中嵌入隐藏标记，指明用了哪条记忆；服务端计数后去掉。计数用于整理时排序。</td><td>未实现；夜间整理只按内容合并</td></tr>
 <tr><th scope="row">openclaw</th><td>去重记录两份，互相校验</td><td>只有节点标记；Topic 脚注也指向这些消息，但不互相校验</td></tr>
 <tr><th scope="row">pi-mono</th><td>离开分支时生成摘要</td><td>未实现</td></tr>

@@ -110,8 +110,9 @@ def register(app):
     async def open_application(app_id: str, body: dict):
         """Open an instance; with ``session_id`` the window belongs to that chat.
 
-        While a session holds a window of the application, its deferred
-        entries are resident for that session (program-model §5).
+        While a session holds a window of the application, the session's
+        deferred-tool catalog says it is open and how to load its entries;
+        opening it loads nothing (deferred-tools.html).
         """
         async def apply():
             definition = catalog.get(app_id)
@@ -206,8 +207,8 @@ def register(app):
             policy = CSP.replace("connect-src 'none'", "connect-src " + asset_base) + "; frame-ancestors 'self'"
             headers = {"Access-Control-Allow-Origin": "*", "Content-Security-Policy": policy, "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer", "Cache-Control": "no-store"}
             if target.suffix.lower() == ".html":
-                sdk = (Path(__file__).parent.parent / "application-sdk.js").read_text()
-                html = target.read_text()
+                sdk = (Path(__file__).parent.parent / "application-sdk.js").read_text(encoding="utf-8")
+                html = target.read_text(encoding="utf-8")
                 bootstrap = "<script>" + sdk + "</script>"
                 doctype = re.match(r"\s*<!doctype[^>]*>", html, re.IGNORECASE)
                 offset = doctype.end() if doctype else 0

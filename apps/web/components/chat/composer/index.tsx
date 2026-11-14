@@ -22,6 +22,7 @@
  */
 "use client";
 
+import { platformKeys } from "@/lib/shortcut-keys";
 import { PendingDecisionPanels } from "../messages/runtime/decision-output";
 import { QueuedMessages } from "../messages/editing/queued-messages";
 
@@ -29,6 +30,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useCompactControlsRow } from "./controls/use-compact-controls-row";
 import { createPortal } from "react-dom";
 
+import { useBoundComposerSettings, useBoundSetComposerSettings } from "./state/use-composer-settings";
+import { settingOrigin } from "@/lib/session-store/branch-settings";
 import { useSessionStore } from "@/lib/session-store";
 import { useAwaitingAnswer } from "@/lib/chat/decisions/answer-wait";
 import { useSessionScope } from "@/lib/session-store/session-scope";
@@ -49,7 +52,7 @@ import { SlashMenu } from "./slash/slash-menu";
 import { AttachmentStrip } from "./attach/strip/attachment-strip";
 import { attachmentsBlockSend } from "./attach/attachment-session-cache";
 import { forgetRefill, setRewindUploading } from "@/lib/chat/rewind/rewind-store";
-import { useComposerAttachments } from "./attach/use-composer-attachments";
+import { DROP_PANE, useComposerAttachments } from "./attach/use-composer-attachments";
 import { useFileMention } from "./attach/mention/use-file-mention";
 import type { MentionSources } from "./attach/mention/mention-sources";
 import type { MentionScope } from "./attach/mention/at-mention";
@@ -71,6 +74,7 @@ import { useSandboxToggle } from "./controls/toggles/use-sandbox-toggle";
 import { ControlsCluster } from "./controls/controls-cluster";
 import { RIM_OUT, useTuckedControls } from "./controls/use-tucked-controls";
 import { TuckRow } from "./controls/tuck-row";
+import { useTuckBackdrop } from "./controls/use-tuck-backdrop";
 import { usePasteTokens } from "./paste/use-paste-tokens";
 import { useHistoryRecall } from "./input/use-history-recall";
 import { useChatSubmit } from "./submit/use-chat-submit";
@@ -170,7 +174,7 @@ export function Composer({ sessionId: boundSessionId }: { sessionId?: string } =
     onFileInputChange,
     clearAfterSubmit: clearAttachmentsAfterSubmit,
     detachForSubmit: detachAttachmentsForSubmit,
-  } = useComposerAttachments(bound);
+  } = useComposerAttachments(bound, undefined, true);
 
   // Files sent here from elsewhere in the window (a web tab's region
   // screenshot) arrive as if dropped on this composer.
@@ -205,7 +209,7 @@ export function Composer({ sessionId: boundSessionId }: { sessionId?: string } =
   const setCurrentConv = useSessionStore((s) => s.setCurrentConv);
   const send = wsSend;
   const isRunning = runningTask !== null;
-  const modKey = typeof navigator !== "undefined" && /Mac/.test(navigator.platform) ? "⌘" : "Ctrl+";
+  const modKey = platformKeys("⌘");
   const isCancelling = Boolean(runningTask?.cancelling);
   const fnFormActive = fnFormFunction !== null;
   // Decisions have their own output cards. Chat text always sends or queues
@@ -291,11 +295,14 @@ export function Composer({ sessionId: boundSessionId }: { sessionId?: string } =
   // request body and no-ops for providers that don't read service_tier.
   const fastByModel = useSessionScope((s) => s.settings.fastByModel);
   const fastModelKey = `${chatAgent.provider ?? ""}:${chatAgent.model ?? ""}`;
-  const fastEnabled = fastByModel?.[fastModelKey] ?? false;
+  const fastDefault = useSessionScope((s) => s.settings.fast);
+  const fastEnabled = fastByModel?.[fastModelKey] ?? fastDefault;
   // 有的模型没有 Fast 档（service_tier）——后端 agent_settings 按当前
   // 模型下发 chat.fast；不支持就整个隐藏开关/chip，也不随消息发送。
   const fastSupported = !!chatAgent.fast;
-  const setComposerSettings = useSessionScope((s) => s.patchSettings);
+  const setComposerSettings = useBoundSetComposerSettings();
+  // Web search follows the Agent unless this branch set it (the chip's tooltip says which).
+  const webSearchOrigin = settingOrigin(useBoundComposerSettings().resolved, "web_search");
   const toggleFast = () => setComposerSettings({ fast: !fastEnabled, fastByModel: { ...fastByModel, [fastModelKey]: !fastEnabled } });
   const fastHint = chatAgent.fast_capability?.status === "unsupported"
     ? text("Fast is disabled for this connection.", "当前线路已禁用高速模式。")
@@ -365,6 +372,8 @@ export function Composer({ sessionId: boundSessionId }: { sessionId?: string } =
     focusTick,
     textareaRef,
   });
+  // The mask above the box drops to just above it while the rows are tucked.
+  useTuckBackdrop(inputAreaRef, tuck.tucked);
 
   // Close the effort pill on outside click. It's INLINE inside the
   // composer wrapper, so a click in the textarea or on any other
@@ -597,6 +606,7 @@ export function Composer({ sessionId: boundSessionId }: { sessionId?: string } =
       pendingImagesCount={pendingImages.length}
       pendingDocsCount={pendingDocs.length}
       webSearchEnabled={webSearchEnabled}
+      webSearchOrigin={webSearchOrigin}
       toggleWebSearch={toggleWebSearch}
       fastEnabled={fastEnabled}
       fastSupported={fastSupported}
@@ -639,7 +649,7 @@ export function Composer({ sessionId: boundSessionId }: { sessionId?: string } =
           changes between drags. */}
       {dragActive && typeof document !== "undefined"
         ? createPortal(
-            <ScopedDropOverlay />,
+            <ScopedDropOverlay within={wrapperRef.current?.closest<HTMLElement>(DROP_PANE)} />,
             document.body,
           )
         : null}

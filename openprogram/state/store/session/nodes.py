@@ -232,6 +232,8 @@ class Graph:
     def __init__(self):
         self.nodes: dict[str, Call] = {}
         self._next_seq: int = 0
+        # Ids a rewind retracted from the conversation; they stay stored.
+        self.retracted: frozenset[str] = frozenset()
 
     def add(self, node: Call) -> Call:
         """Append ``node`` to the graph. Assigns ``node.seq`` if it

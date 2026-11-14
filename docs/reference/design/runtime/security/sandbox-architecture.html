@@ -6,8 +6,8 @@
 <thead><tr><th scope="col">Check</th><th scope="col">Answers</th><th scope="col">How</th></tr></thead>
 <tbody>
 <tr><th scope="row">Authority</th><td>Who is asking</td><td>Authenticated principal and a fixed capability ceiling on every request; nested Agents never widen it</td></tr>
-<tr><th scope="row">Permission</th><td>May this operation run</td><td>One shared decision under the session's mode; the mode can change mid-turn and the next tool check uses it. See <a href="permission-decision.html">Permission decision and refusals</a>.</td></tr>
-<tr><th scope="row">Sandbox</th><td>What an approved process can touch</td><td>Seatbelt (macOS) or bubblewrap (Linux). Off unless the conversation's Sandbox switch is on.</td></tr>
+<tr><th scope="row">Permission</th><td>May this operation run</td><td>One shared decision under the execution branch's mode; the mode can change mid-turn and the next tool check uses it. See <a href="permission-decision.html">Permission decision and refusals</a>.</td></tr>
+<tr><th scope="row">Sandbox</th><td>What an approved process can touch</td><td>Seatbelt (macOS) or bubblewrap (Linux). Off unless the Sandbox switch of the conversation branch the turn runs on is on.</td></tr>
 </tbody>
 </table>
 <p class="note">The same contract covers Web, CLI, ACP, channels, nested Agents, scheduled tasks and continuation.</p>
@@ -18,7 +18,6 @@
 <tbody>
 <tr><th scope="row">Authenticated local entry</th><td>Attaches complete owner authority to <code translate="no">TurnRequest</code> before durable admission. The audit actor and the execution request are separate values; an admission actor alone does not authorize tools.</td></tr>
 <tr><th scope="row">Paired channels</th><td>Keep the paired tier</td></tr>
-<tr><th scope="row">Browser MCP grants</th><td>May use <code translate="no">mcp_browser</code></td></tr>
 <tr><th scope="row">Nested requests</th><td>Inherit, cannot expand</td></tr>
 <tr><th scope="row">Missing or unknown authority</th><td>Fails closed with a stable reason code</td></tr>
 <tr><th scope="row">Recovery</th><td>Never rebuilds owner authority from a source label or model text. Legacy admitted requests without authority must be resubmitted through an authenticated entry.</td></tr>
@@ -54,14 +53,14 @@
 </table>
 
 <h2 id="modes">Mode resolution</h2>
-<p>The conversation's setting, then the project's default, then Bypass permissions (<code translate="no">DEFAULT_PERMISSION</code>). The resolved mode drives admission and UI acknowledgements. <a href="permission-decision.html#modes">The modes</a> are defined with the decision.</p>
+<p>The setting of the conversation branch the turn runs on, then the project's default, then Bypass permissions (<code translate="no">DEFAULT_PERMISSION</code>). The resolved mode drives admission and UI acknowledgements. <a href="permission-decision.html#modes">The modes</a> are defined with the decision.</p>
 
 <h2 id="permission-lifecycle">Live permission changes</h2>
 <table class="stack fixed">
 <thead class="sr"><tr><th scope="col">Aspect</th><th scope="col">Rule</th></tr></thead>
 <tbody>
-<tr><th scope="row">State</th><td><code translate="no">SessionStore</code> owns a versioned <code translate="no">permission_state</code> dictionary with mode and owner principal. Atomic compare-and-set stops stale clients overwriting a newer selection. No parallel approval database or generic policy engine.</td></tr>
-<tr><th scope="row">Settings command</th><td>WebSocket; authenticates the owner, validates session scope, returns the authoritative mode and version. Conflicts stay errors.</td></tr>
+<tr><th scope="row">State</th><td><code translate="no">SessionStore</code> owns a versioned <code translate="no">permission_state</code> dictionary per branch, with mode and owner principal. Atomic compare-and-set stops stale clients overwriting a newer selection. No parallel approval database or generic policy engine.</td></tr>
+<tr><th scope="row">Settings command</th><td>WebSocket; authenticates the owner, validates session and branch scope, returns the authoritative mode, version and branch identity. Conflicts stay errors.</td></tr>
 <tr><th scope="row">Takes effect</th><td>At server confirmation, independent of an in-flight model request. Each later ordinary approval check uses it, including later calls in the same batch. One call keeps its decision through dispatch; authorized calls are not interrupted. No restart or next message needed.</td></tr>
 <tr><th scope="row">Web and App</th><td>Send immediately with the confirmed version, reading first only when none is known. A requested selection is shown apart from an acknowledged mode; older acknowledgements and hydration snapshots cannot replace newer state; transport errors stay visible.</td></tr>
 <tr><th scope="row">Unsent draft</th><td>Stores its selection locally without creating a session; first submission supplies it</td></tr>
@@ -92,7 +91,7 @@
 <tr><th scope="row"><code translate="no">workspace-write</code></th><td>Writes to working roots, masks protected reads, filters credential environment variables, network off unless <code translate="no">sandbox.network</code></td></tr>
 <tr><th scope="row"><code translate="no">danger-full-access</code></th><td>Host user permissions</td></tr>
 <tr><th scope="row">Missing backend</th><td>Refuses by default; explicit <code translate="no">warn</code> is an acknowledged fallback</td></tr>
-<tr><th scope="row">Sandbox switch</th><td>A session override resolved into an immutable turn snapshot. A change affects later turns, not current processes, other sessions, scheduled tasks or inherited child policy. Ordinary approval never disables it.</td></tr>
+<tr><th scope="row">Sandbox switch</th><td>A branch override resolved into an immutable turn snapshot. A change affects later turns, not current processes, other sessions, scheduled tasks or inherited child policy. Ordinary approval never disables it.</td></tr>
 <tr><th scope="row">Scheduled commands and prompts</th><td>Use their conversation's setting when they fire</td></tr>
 </tbody>
 </table>
@@ -168,7 +167,7 @@
 <thead class="sr"><tr><th scope="col">Module</th><th scope="col">Responsibility</th></tr></thead>
 <tbody>
 <tr><th scope="row"><code translate="no">permissions/authority.py</code></th><td>Identity and capability ceilings</td></tr>
-<tr><th scope="row"><code translate="no">permissions/state.py</code></th><td>Versioned session state, owner validation, atomic updates</td></tr>
+<tr><th scope="row"><code translate="no">permissions/state.py</code></th><td>Versioned branch state, owner validation, atomic updates</td></tr>
 <tr><th scope="row"><code translate="no">permissions/policy.py</code></th><td>Shared decisions and explicit rules</td></tr>
 <tr><th scope="row"><code translate="no">permissions/classifier.py</code></th><td>Auto risk classification; only JSON boolean <code translate="no">true</code> permits execution</td></tr>
 <tr><th scope="row"><code translate="no">permissions/approval.py</code></th><td>Approval manifests, exact wait consumption, tool execution</td></tr>

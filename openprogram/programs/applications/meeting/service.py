@@ -24,6 +24,12 @@ class MeetingService:
     FFMPEG_MISSING = audio.MISSING
 
     @staticmethod
+    def system_audio_support() -> dict:
+        """Whether this computer's sound can be recorded for the "Others" track, and why not."""
+        from . import system_audio
+        return system_audio.support()
+
+    @staticmethod
     def start(title: str = "", language: str = "") -> session.Meeting:
         return session.start(title, language)
 

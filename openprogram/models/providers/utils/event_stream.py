@@ -6,6 +6,8 @@ Provides an async-iterable stream with a terminal result value.
 from __future__ import annotations
 
 import asyncio
+import time
+import weakref
 from typing import Any, Callable, Generic, TypeVar
 import logging
 
@@ -104,8 +106,65 @@ class EventStream(Generic[T, R]):
         return item
 
 
+#: Tasks a stopped reader left unwinding, per loop. A reader that stops does
+#: not wait for the provider to finish closing; whoever closes the loop does,
+#: through :func:`settle_unwinding`, before the loop shuts its async
+#: generators down.
+_unwinding: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, set[asyncio.Future]]" = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def _retrieve(task: asyncio.Future) -> None:
+    if not task.cancelled():
+        task.exception()
+
+
+def leave_unwinding(task: asyncio.Future) -> None:
+    """Hand ``task``, still unwinding after its reader stopped, to the loop's owner.
+
+    However it ends is not reported: the reader already has its outcome.
+    """
+    task.add_done_callback(_retrieve)
+    if task.done():
+        return
+    tasks = _unwinding.setdefault(task.get_loop(), set())
+    tasks.add(task)
+    task.add_done_callback(tasks.discard)
+
+
+async def settle_unwinding(*, grace: float = 2.0, bound: float = 1.0) -> None:
+    """Finish the tasks stopped readers left on the running loop.
+
+    They are given ``grace`` seconds to end on their own (a socket close is a
+    round trip); what is still running then is cancelled and awaited for at
+    most ``bound`` seconds more.
+    """
+    deadline = time.monotonic() + grace
+    while True:
+        # A task that ends may leave another: read the set again each round.
+        left = set(_unwinding.get(asyncio.get_running_loop(), ()))
+        left.discard(asyncio.current_task())
+        if not left:
+            return
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        await asyncio.wait(left, timeout=remaining)
+    for task in left:
+        task.cancel()
+    await asyncio.wait(left, timeout=bound)
+
+
 async def close_stream(stream, iterator=None, *, timeout=None):
-    """Close the owned producer, with bounded cleanup for an explicit stop."""
+    """Close the owned producer, with bounded cleanup for an explicit stop.
+
+    With a ``timeout`` the caller waits that long at most. A close still
+    running then is left to the loop's owner (:func:`leave_unwinding`), not
+    cancelled: a second cancel would reach the producer through the close
+    waiting on it and cut the provider's own close short. The caller goes on,
+    and the close is finished before the loop is.
+    """
     close = getattr(stream, "cancel_producer", None)
     if not callable(close):
         close = getattr(iterator if iterator is not None else stream, "aclose", None)
@@ -116,14 +175,12 @@ async def close_stream(stream, iterator=None, *, timeout=None):
         if timeout is None:
             await close()
         else:
-            cleanup = asyncio.create_task(close())
-            done, _ = await asyncio.wait({cleanup}, timeout=timeout)
-            if not done:
-                cleanup.cancel()
-            def consume(task):
-                if not task.cancelled():
-                    task.exception()
-            cleanup.add_done_callback(consume)
+            cleanup = asyncio.ensure_future(close())
+            try:
+                await asyncio.wait({cleanup}, timeout=timeout)
+            finally:
+                # Also when this wait is itself cancelled: the close goes on.
+                leave_unwinding(cleanup)
     except asyncio.CancelledError:
         raise
     except Exception:

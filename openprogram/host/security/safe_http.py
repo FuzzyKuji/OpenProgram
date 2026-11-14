@@ -38,6 +38,7 @@ from .url_policy import (
     normalize_url,
     resolve_all,
 )
+from openprogram.host._platform.filesystem import replace_file
 
 
 _MAX_RESPONSE_HEADERS = 100
@@ -1681,7 +1682,7 @@ class SafeClient(httpx.Client):
                         output.write(chunk)
                 output.flush()
                 os.fsync(output.fileno())
-            os.replace(temporary, target)
+            replace_file(temporary, target)
             return target
         finally:
             Path(temporary).unlink(missing_ok=True)
@@ -1824,7 +1825,7 @@ class SafeAsyncClient(httpx.AsyncClient):
                         output.write(chunk)
                 output.flush()
                 os.fsync(output.fileno())
-            os.replace(temporary, target)
+            replace_file(temporary, target)
             return target
         finally:
             Path(temporary).unlink(missing_ok=True)

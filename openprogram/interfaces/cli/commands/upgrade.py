@@ -339,7 +339,7 @@ def _write_sentinel(payload: dict) -> None:
     try:
         path = _sentinel_path()
         payload = {**payload, "updated_at": time.time()}
-        path.write_text(json.dumps(payload, indent=2))
+        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     except Exception:
         # Progress reporting must never fail an upgrade.
         _log.debug("upgrade progress sentinel not written", exc_info=True)

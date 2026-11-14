@@ -210,6 +210,35 @@ def _openrouter_exhausted(body: str) -> bool:
         return False
 
 
+def _keep_openrouter_limit(provider_id: str, api_key: str, res: tuple[int, str, int] | None) -> None:
+    """Keep what the key may still spend, read from the same ``/key`` answer.
+
+    Recorded only for a key that is stored (or the environment key): a key
+    being checked before it is saved has no place to be shown yet.
+    """
+    if res is None or res[0] != 200:
+        return
+    try:
+        import json
+        import time as _time
+        from openprogram.models.usage.quota import account_for_token, default_store
+        from openprogram.models.usage.quota_fetchers import openrouter
+        account = account_for_token(provider_id, api_key)
+        limits = openrouter.parse(json.loads(res[1]), _time.time())
+        if limits and account is not None and (account or _is_environment_key(provider_id, api_key)):
+            default_store.observe(provider_id, account, limits, force_write=True, replace_source=True)
+    except Exception:
+        _log.debug("OpenRouter key limit not kept", exc_info=True)
+
+
+def _is_environment_key(provider_id: str, api_key: str) -> bool:
+    try:
+        from openprogram.models.providers.settings.env_api_keys import resolve_provider_key
+        return resolve_provider_key(provider_id) == api_key
+    except Exception:
+        return False
+
+
 def _interpret(
     provider_id: str, kind: str, res: tuple[int, str, int] | None, *,
     via: str, balance_body: bool = False, require_json: bool = False,
@@ -267,6 +296,7 @@ def _layer1_probe(provider_id: str, kind: str, api_key: str, base: str | None,
         res = _http_get(base.rstrip("/") + "/key",
                         headers={"Authorization": f"Bearer {api_key}"}, timeout=timeout,
                         configured_url=base)
+        _keep_openrouter_limit(provider_id, api_key, res)
         return _interpret(provider_id, kind, res, via="GET /key", balance_body=True)
     if kind == "anthropic_native":
         res = _http_get("https://api.anthropic.com/v1/models",

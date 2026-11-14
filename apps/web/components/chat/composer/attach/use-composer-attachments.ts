@@ -109,17 +109,22 @@ function releaseAttachmentPreviews(data: StoredAttachments): StoredAttachments {
   };
 }
 
+/** A split-view pane: a file dragged over one goes to that pane's composer. */
+export const DROP_PANE = ".peer-session-pane";
+/** An editor that takes the files dropped on it itself. */
+export const OWN_DROP = "[data-file-drop]";
+
 /**
  * @param boundChatKey  Bind attachments to THIS chat instead of the focused
- *   one (split-view pane). Also suppresses the window-level drag listeners:
- *   those are global, and with two composers mounted both would fire on a
- *   single drop. The unbound (focused) instance keeps owning window drops.
+ *   one (split-view pane).
+ * @param ownsPane  This is a pane's composer: a file dragged anywhere over its
+ *   pane is its to take. An editor inside a message takes only what lands on it.
  */
 export function useComposerAttachments(
   boundChatKey?: string | null,
   transientInitial?: StoredAttachments,
+  ownsPane = false,
 ): UseComposerAttachmentsResult {
-  const isBound = boundChatKey != null;
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
   const [imageError, setImageError] = useState<string | null>(null);
   const [pendingDocs, setPendingDocs] = useState<PendingDoc[]>([]);
@@ -131,12 +136,6 @@ export function useComposerAttachments(
   pendingDocsRef.current = pendingDocs;
   const fileInputRef = useRef<HTMLInputElement>(null);
   const composerRootRef = useRef<HTMLDivElement | null>(null);
-
-  // ``dragCounter`` tracks dragenter / dragleave net depth on the
-  // window so the overlay only fades out when the cursor truly leaves
-  // the window (lots of dragenter/leave events fire as the cursor
-  // crosses child elements — a counter is the documented workaround).
-  const dragCounter = useRef(0);
 
   // Per-chat persistence (IndexedDB). Provisional local_* draft ids are
   // stable too, so multiple unsent chats keep independent attachments.
@@ -617,56 +616,57 @@ export function useComposerAttachments(
   // Window-level guard — without this Chrome treats a file drop on
   // any unhandled element (page background, sidebar, status bar,
   // etc.) as a navigation request and opens the file in a new tab.
-  // Even when the user lands on the composer the cancel happens too
-  // late sometimes. Adding ``preventDefault`` on both dragover + drop
-  // at the window level makes the drop zone effectively the whole
-  // page; when the user releases anywhere we synthesise a drop into
-  // the composer's handler.
+  // ``preventDefault`` on dragover + drop at the window level makes the
+  // drop zone the whole page.
+  //
+  // Every mounted composer listens, and exactly one takes a given drag:
+  // the one whose pane the pointer is over. Outside every split pane it is
+  // the focused pane's composer, or the single composer when not split.
   useEffect(() => {
     function hasFiles(e: DragEvent): boolean {
       return !!e.dataTransfer && e.dataTransfer.types.includes("Files");
     }
-    function blockNav(e: DragEvent) {
-      if (hasFiles(e)) e.preventDefault();
+    function mine(e: DragEvent): boolean {
+      const root = composerRootRef.current;
+      if (!root || root.getClientRects().length === 0) return false;
+      if (!(e.target instanceof Element) || e.target.closest(OWN_DROP)) return false;
+      const over = e.target.closest(DROP_PANE);
+      const own = root.closest(DROP_PANE);
+      if (over) return over === own;
+      return !own || own.getAttribute("data-pane-focused") === "true";
     }
-    function onEnter(e: DragEvent) {
+    function onOver(e: DragEvent) {
       if (!hasFiles(e)) return;
       e.preventDefault();
-      dragCounter.current++;
-      setDragActive(true);
+      setDragActive(mine(e));
     }
     function onLeave(e: DragEvent) {
-      if (!hasFiles(e)) return;
-      dragCounter.current = Math.max(0, dragCounter.current - 1);
-      if (dragCounter.current === 0) setDragActive(false);
+      // Leaving the window itself: nothing is being entered.
+      if (hasFiles(e) && !e.relatedTarget) setDragActive(false);
     }
     async function routeDrop(e: DragEvent) {
       if (!hasFiles(e)) return;
       e.preventDefault();
-      dragCounter.current = 0;
       setDragActive(false);
       const dt = e.dataTransfer;
-      if (!dt) return;
+      if (!dt || !mine(e)) return;
       const dropped: File[] = [];
       for (let i = 0; i < dt.files.length; i++) {
         dropped.push(dt.files[i]);
       }
       await processDroppedFiles(dropped, captureDropEntries(dt));
     }
-    // Only the focused (unbound) composer listens at window level — two
-    // sets of listeners would route one drop into both sessions.
-    if (isBound) return;
-    window.addEventListener("dragenter", onEnter);
-    window.addEventListener("dragleave", onLeave);
-    window.addEventListener("dragover", blockNav);
-    window.addEventListener("drop", routeDrop);
+    // Captured, so an editor that stops its own drop still ends this drag here.
+    if (!ownsPane) return;
+    window.addEventListener("dragover", onOver, true);
+    window.addEventListener("dragleave", onLeave, true);
+    window.addEventListener("drop", routeDrop, true);
     return () => {
-      window.removeEventListener("dragenter", onEnter);
-      window.removeEventListener("dragleave", onLeave);
-      window.removeEventListener("dragover", blockNav);
-      window.removeEventListener("drop", routeDrop);
+      window.removeEventListener("dragover", onOver, true);
+      window.removeEventListener("dragleave", onLeave, true);
+      window.removeEventListener("drop", routeDrop, true);
     };
-  }, [processDroppedFiles, isBound]);
+  }, [processDroppedFiles, ownsPane]);
 
   const onDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
     if (e.dataTransfer.types.includes("Files")) {

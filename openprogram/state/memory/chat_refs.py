@@ -98,26 +98,35 @@ def citable(message: dict[str, Any]) -> bool:
     What a person said and what the assistant replied, from a speaker
     whose authority lets their words become memory.
     """
+    return refusal(message) is None
+
+
+def refusal(message: dict[str, Any]) -> str | None:
+    """Why memory may not rest a claim on this message, or None if it may."""
     from openprogram.state.authority import (
         has_capability,
         is_legacy_message,
         normalize_authority,
     )
 
-    from .policy import source_matches_execution
+    from .policy import source_matches_execution, source_refusal
 
     if message.get("role") not in _ROLES or is_runtime_turn(message):
-        return False
+        return "it is not something a person said or the assistant replied"
     if not source_matches_execution(message):
-        return False
+        return source_refusal(message)
     if not _text(message).strip() or not str(message.get("id") or "").strip():
-        return False
+        return "it has no text"
     authority = normalize_authority(message)
     if not authority:
         # Only history from before authority existed lacks it, and that is
         # the local owner's own conversation.
-        return is_legacy_message(message)
-    return has_capability(authority, "memory.source.append")
+        if is_legacy_message(message):
+            return None
+        return "its speaker may not be a source for memory"
+    if has_capability(authority, "memory.source.append"):
+        return None
+    return "its speaker may not be a source for memory"
 
 
 def observed_at(value: Any) -> str | None:
@@ -171,9 +180,34 @@ class ChatLookup:
         found = self._messages(parts[0]).get(parts[1])
         return found[1] if found else None
 
+    def _retracted(self, session_id: str, message_id: str) -> dict[str, Any] | None:
+        """The message a rewind retracted, as it was stored, or None."""
+        try:
+            pair = self._db()._open(session_id)  # noqa: SLF001 - the raw nodes
+            if pair is None:
+                return None
+            index = pair[1]
+            if message_id not in set(index.meta.get("rewind_hidden_nodes") or ()):
+                return None
+            node = index.nodes_by_id.get(message_id)
+            if node is None:
+                return None
+            from openprogram.state.store.session._msg_adapter import _node_to_msg
+
+            return _node_to_msg(node, session_id)
+        except Exception:  # noqa: BLE001 - read as deleted
+            return None
+
     def citable(self, value: str) -> bool:
         message = self.message(value)
         return message is not None and citable(message)
+
+    def refusal(self, value: str) -> str | None:
+        """Why this reference may not be cited, or None if it may."""
+        message = self.message(value)
+        if message is None:
+            return "the chat no longer holds it"
+        return refusal(message)
 
     def excerpt(self, value: str, *, before: int = 2, after: int = 2) -> dict[str, Any]:
         """The cited message with the conversation around it.
@@ -187,6 +221,20 @@ class ChatLookup:
         session_id, message_id = parts
         found = self._messages(session_id).get(message_id)
         if found is None:
+            retracted = self._retracted(session_id, message_id)
+            if retracted is not None:
+                # A rewind took it out of the conversation in place; it is
+                # still stored, so the memory still shows what it rests on.
+                return {
+                    "ref": value, "session_id": session_id, "message_id": message_id,
+                    "retracted": True,
+                    "turns": [{
+                        "message_id": message_id, "role": retracted.get("role"),
+                        "speaker": retracted.get("speaker_display") or retracted.get("role"),
+                        "at": observed_at(retracted.get("timestamp")),
+                        "text": _text(retracted), "cited": True,
+                    }],
+                }
             return {"ref": value, "session_id": session_id, "deleted": True}
         index, _message = found
         rows = self._order[session_id]
@@ -217,7 +265,7 @@ def render_excerpt(excerpt: dict[str, Any]) -> str:
     """An excerpt as Markdown, the cited turn marked."""
     if excerpt.get("deleted"):
         return "Original session deleted. The memory remains available."
-    lines = []
+    lines = ["This message was retracted by a rewind. It is shown as it was."] if excerpt.get("retracted") else []
     for turn in excerpt["turns"]:
         mark = "**→** " if turn["cited"] else ""
         when = f" · {turn['at'][:16].replace('T', ' ')}" if turn.get("at") else ""

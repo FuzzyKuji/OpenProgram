@@ -1053,11 +1053,21 @@ def popen_spy(monkeypatch):
     return calls
 
 
-def test_reveal_per_platform(project_root, popen_spy, monkeypatch):
+@pytest.fixture
+def linux_desktop(monkeypatch):
+    """A Linux graphical session with xdg-open, whatever this machine has."""
+    from openprogram.host._platform import file_manager
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setattr(file_manager.shutil, "which", lambda name: name)
+
+
+def test_reveal_per_platform(project_root, popen_spy, monkeypatch, linux_desktop):
+    import ntpath
     target = os.path.realpath(str(project_root / "apple.txt"))
     for platform, argv in (
         ("darwin", ["open", "-R", target]),
-        ("win32", ["explorer", "/select," + target]),
+        # One command line: Explorer parses /select,"<path>" itself.
+        ("win32", f'explorer.exe /select,"{ntpath.normpath(target)}"'),
         ("linux", ["xdg-open", os.path.dirname(target)]),
     ):
         popen_spy.clear()
@@ -1069,7 +1079,7 @@ def test_reveal_per_platform(project_root, popen_spy, monkeypatch):
         assert popen_spy == [argv], platform
 
 
-def test_reveal_dir_on_linux_opens_dir_itself(project_root, popen_spy, monkeypatch):
+def test_reveal_dir_on_linux_opens_dir_itself(project_root, popen_spy, monkeypatch, linux_desktop):
     monkeypatch.setattr(ws_files.sys, "platform", "linux")
     data = _run(ws_files.handle_project_file_reveal,
                 {"project_id": "p1", "path": "src"})["data"]

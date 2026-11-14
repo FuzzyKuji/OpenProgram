@@ -40,7 +40,10 @@ def _find_fork_group(idx, head_id: str) -> str:
         parent = getattr(node, "predecessor", None)
         if not parent:
             break
-        siblings = idx.children_by_predecessor.get(parent, [])
+        # Turns a rewind retracted are no attempt to switch to.
+        retracted = set(idx.meta.get("rewind_hidden_nodes") or ())
+        siblings = [child for child in idx.children_by_predecessor.get(parent, [])
+                    if child not in retracted]
         if len(siblings) > 1:
             return f"fork:{parent}"
         cur = parent
@@ -63,7 +66,10 @@ async def handle_list_commits(ws, cmd: dict):
             # head_id-self group if the index isn't available.
             pair = store._open(session_id)
             idx = pair[1] if pair else None
+            retracted = set(idx.meta.get("rewind_hidden_nodes") or ()) if idx else set()
             for s in entries:
+                if s.head_node_id in retracted:
+                    continue  # a commit of a turn a rewind retracted
                 group_id = (
                     _find_fork_group(idx, s.head_node_id)
                     if idx else s.head_node_id

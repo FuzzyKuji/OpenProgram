@@ -5,6 +5,8 @@ the server emits. The web runner replays the files this produces.
 """
 from __future__ import annotations
 
+import asyncio
+import threading
 import time
 from typing import Callable
 
@@ -57,6 +59,30 @@ def stopped_during_tool(chat: LiveChat) -> str:
     chat.cancel()
     chat.wait_finished()
     return "Stop during a tool call keeps the partial text and ends the run."
+
+
+def stopped_before_start(chat: LiveChat) -> str:
+    from openprogram.runtime.conversation.production_driver.shared import CanonicalAgentEntry
+
+    activate = CanonicalAgentEntry.activate
+    waiting, start = threading.Event(), threading.Event()
+
+    async def held(entry, admission):
+        waiting.set()
+        await asyncio.to_thread(start.wait, 30)
+        return await activate(entry, admission)
+
+    CanonicalAgentEntry.activate = held
+    try:
+        chat.send("stop me before you start")
+        wait_until(waiting.is_set, what="the turn waiting to start")
+        chat.cancel()
+        start.set()
+        chat.wait_finished()
+    finally:
+        start.set()
+        CanonicalAgentEntry.activate = activate
+    return "Stop before the turn starts ends it as a stopped reply."
 
 
 def read_during_stream(chat: LiveChat) -> str:
@@ -296,6 +322,7 @@ SCENARIOS: dict[str, Callable[[LiveChat], str]] = {
     "second_turn": second_turn,
     "provider_error": provider_error,
     "stopped_during_tool": stopped_during_tool,
+    "stopped_before_start": stopped_before_start,
     "read_during_stream": read_during_stream,
     "reconnect_during_stream": reconnect_during_stream,
     "steered_turn": steered_turn,

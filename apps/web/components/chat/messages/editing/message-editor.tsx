@@ -82,7 +82,7 @@ export function MessageEditor({ msg, sessionId, onDone }: {
     }
   }
 
-  return <div className={styles.editor} ref={files.composerRootRef} data-dragging={files.dragActive}
+  return <div className={styles.editor} ref={files.composerRootRef} data-file-drop="" data-dragging={files.dragActive}
     onDragOver={e => { if (!saving.current) files.onDragOver(e); }}
     onDragLeave={files.onDragLeave} onDrop={e => {
       e.preventDefault(); e.stopPropagation(); if (!saving.current) files.onDrop(e);

@@ -447,5 +447,7 @@
   "reference/design/ui/remote-web-access.viz.html": "reference/design/ui/remote-web-access.html",
   "reference/design/ui/remote-web-access.zh.viz.html": "reference/design/ui/remote-web-access.zh.html",
   "reference/design/site-indexnow-implementation.html": "reference/design/site-indexnow-discovery.html",
-  "reference/design/site-indexnow-implementation.zh.html": "reference/design/site-indexnow-discovery.zh.html"
+  "reference/design/site-indexnow-implementation.zh.html": "reference/design/site-indexnow-discovery.zh.html",
+  "reference/design/integrations/web-use.html": "reference/design/integrations/browser-application.html",
+  "reference/design/integrations/web-use.zh.html": "reference/design/integrations/browser-application.zh.html"
 }

@@ -25,6 +25,29 @@ def turn_request_fields() -> frozenset[str]:
     return frozenset(field.name for field in fields(TurnRequest))
 
 
+#: What a parent's permission snapshot may carry (``lifecycle.spawn_permission_snapshot``).
+_SNAPSHOT_KEYS = frozenset({"mode", "rules", "additional_working_dirs", "sandbox_enabled"})
+
+
+def _own_permissions(job: Any) -> dict[str, Any]:
+    """The ``permissions`` block of the Agent a sub-agent runs as: from the
+    frozen profile a trial carries, else the saved Agent."""
+    from openprogram.runtime.agent_registry.manager import validate_permissions
+    profile = getattr(job, "profile_snapshot", None)
+    if isinstance(profile, Mapping) and "permissions" in profile:
+        try:
+            return validate_permissions(profile.get("permissions"))
+        except ValueError as exc:
+            # Unreadable narrowing must not run as "narrows nothing".
+            raise JobAgentInputError(f"invalid Agent permissions: {exc}") from exc
+    try:
+        from openprogram.runtime.agent_registry import manager
+        spec = manager.get(job.agent_id) if job.agent_id else None
+    except Exception:  # noqa: BLE001 - an unreadable registry narrows nothing more
+        spec = None
+    return dict(getattr(spec, "permissions", None) or {})
+
+
 class JobAgentInputV1(_JobAgentInputSchema):
     """Validated version-1 input and conversion to the existing turn DTO."""
 
@@ -34,7 +57,8 @@ class JobAgentInputV1(_JobAgentInputSchema):
                  permission_snapshot: Mapping[str, Any] | None = None,
                  usage_goal: Mapping[str, Any] | None = None,
                  automation: str | None = None,
-                 detached: bool = False) -> "JobAgentInputV1":
+                 detached: bool = False,
+                 asks_through: Mapping[str, Any] | None = None) -> "JobAgentInputV1":
         from openprogram.runtime.permissions.modes import DEFAULT_PERMISSION
         from openprogram.state.authority import normalize_authority
 
@@ -101,21 +125,47 @@ class JobAgentInputV1(_JobAgentInputSchema):
             request["automation"] = automation
         if detached:
             request["detached"] = True
+        # Resolve the destination before permission defaults: the page may
+        # be on a different branch from the delivered message.
+        from openprogram.runtime.conversation.branch_config import freeze_branch_request
+        request = freeze_branch_request(request)
         if permission_snapshot is not None:
             from openprogram.runtime.permissions.modes import VALID_PERMISSION
-            if (job.source not in {"agent_spawn", "self_update_replan", "self_update_continue"} or set(permission_snapshot) != {"mode", "rules"}
+            if (job.source not in {"agent_spawn", "self_update_replan", "self_update_continue"}
+                    or not {"mode", "rules"} <= set(permission_snapshot) <= _SNAPSHOT_KEYS
                     or permission_snapshot["mode"] not in VALID_PERMISSION):
                 raise JobAgentInputError("invalid inherited permission snapshot")
             request["permission_mode"] = permission_snapshot["mode"]
             request["permission_rules"] = copy.deepcopy(permission_snapshot["rules"])
+            if "additional_working_dirs" in permission_snapshot:
+                request["additional_working_dirs"] = list(permission_snapshot["additional_working_dirs"])
+            if "sandbox_enabled" in permission_snapshot:
+                request["sandbox_enabled"] = permission_snapshot["sandbox_enabled"]
+                request["sandbox_config_frozen"] = True
         elif owner_work and job.parent_session_id:
             # No live parent to inherit from (a message delivered once its
             # target went idle): the turn runs as one sent in that conversation.
             from openprogram.runtime.conversation.session_config import conversation_permission
-            permission = conversation_permission(job.parent_session_id)
+            permission = conversation_permission(job.parent_session_id, **(
+                {"branch_id": request["branch_id"]} if request.get("branch_id") else {}
+            ))
             request["permission_mode"] = permission["permission_mode"]
             rules = permission["permission_rules"]
             request["permission_rules"] = dataclasses.asdict(rules) if dataclasses.is_dataclass(rules) else rules
+        if (permission_snapshot is not None or (owner_work and job.parent_session_id)) \
+                and isinstance(request.get("turn_settings"), dict):
+            # The permission set here replaces the one the branch gave.
+            record = request["turn_settings"]
+            record["values"]["permission_mode"] = request["permission_mode"]
+            record["sources"]["permission_mode"] = "parent" if permission_snapshot is not None else "branch"
+        if job.source == "agent_spawn":
+            # What the caller allows, cut by what the sub-agent's own Agent
+            # allows (permissions/delegation.py); its own Agent never widens it.
+            from openprogram.runtime.permissions.delegation import narrow_request
+            narrow_request(request, _own_permissions(job))
+            if asks_through:
+                # A person waits on this sub-agent in the caller's conversation.
+                request["asks_through"] = dict(asks_through)
         payload = {
             "version": JOB_AGENT_INPUT_VERSION,
             "kind": "job_agent",

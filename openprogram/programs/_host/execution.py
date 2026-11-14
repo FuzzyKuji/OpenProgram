@@ -5,7 +5,10 @@ Lives under ``programs/`` so ``agentic_programming`` can import it without
 
 What this module owns
 ---------------------
-* Result cap + optional persist-to-disk (``_normalize_result``).
+* A tool's return value as an ``AgentToolResult`` (``_normalize_result``),
+  with the smaller cap a tool may declare recorded in its details; the
+  agent loop bounds the result once (``spill.bound_text``).
+* The whole-text file a bounded result names (``_persist_full_result``).
 * ``asyncio.wait_for`` + sync-in-executor with copied Context
   (``invoke_callable``).
 * The timeout ``AgentToolResult`` text (``timeout_tool_result``).
@@ -43,15 +46,21 @@ from typing import Any, Callable, Optional, Union
 
 from openprogram.models.providers.types import AgentToolResult
 from openprogram.models.providers.types import AudioContent, ImageContent, TextContent
+from openprogram.state.store.session.tool_output_gc import TOOL_RESULTS_DIRNAME
 import logging
 
 _log = logging.getLogger(__name__)
 
 
-DEFAULT_MAX_RESULT_CHARS = 30_000
-MIN_KEEP_CHARS = 2_000
-DEFAULT_HEAD_RATIO = 0.7
-TOOL_RESULTS_DIRNAME = "tool_results"
+# Characters the streaming ``on_update`` tail keeps when the tool names no
+# capacity of its own: about one bounded result of English text.
+DEFAULT_STREAM_CAPACITY_CHARS = 40_000
+MIN_STREAM_CAPACITY_CHARS = 2_000
+
+# ``AgentToolResult.details`` key of the cap a tool declared
+# (``max_result_weight``): the agent loop bounds the result to the smaller
+# of it and the model's cap (``spill.result_cap``).
+CAP_DETAIL = "cap"
 
 # Surface-path names the undeclared-tool fallback will inspect.
 _FALLBACK_PATH_KEYS = frozenset({"path", "file_path"})
@@ -79,63 +88,83 @@ def _tool_results_dir() -> Path:
     return p
 
 
-def _cap_result_text(text: str, max_chars: int,
-                     *, head_ratio: float = DEFAULT_HEAD_RATIO) -> str:
-    keep = max(max_chars, MIN_KEEP_CHARS)
-    if len(text) <= keep:
-        return text
-    head = int(keep * head_ratio)
-    tail = keep - head
-    elided = len(text) - head - tail
-    return (
-        text[:head]
-        + f"\n\n[... {elided:,} chars elided of {len(text):,} total —"
-        f" call again with narrower scope or check the persisted file ...]\n\n"
-        + (text[-tail:] if tail else "")
-    )
+def _session_results_dir() -> Path | None:
+    """``<session>/tool_results/`` of the conversation the running tool
+    belongs to, or None when no conversation is running or its directory
+    does not exist (a one-off CLI call)."""
+    try:
+        from openprogram.runtime.execution.run_control import get_current_session_id
+        from openprogram.runtime.context.session_db import default_db
+
+        session_id = get_current_session_id()
+        if not session_id:
+            return None
+        session_dir = Path(default_db()._session_dir(session_id))  # noqa: SLF001
+    except Exception:  # noqa: BLE001 - fall back to the shared directory
+        _log.debug("no session directory for a full tool result", exc_info=True)
+        return None
+    if not session_dir.is_dir():
+        return None
+    return session_dir / TOOL_RESULTS_DIRNAME
 
 
 def _persist_full_result(
     call_id: str, text: str, *, results_dir: Path | None = None,
+    fallback_dir: Callable[[], Path] | None = None,
 ) -> Path:
-    directory = results_dir if results_dir is not None else _tool_results_dir()
+    """Keep a tool result's whole text and return its path.
+
+    The file is named by the text's content (``<sha256>.txt``) inside the
+    running conversation's directory, so it is deleted and backed up with
+    the conversation, the same text is kept once, and two texts never take
+    one name whatever call made them. ``results_dir`` names the directory
+    outright; without a conversation the file goes to ``fallback_dir()``
+    (the profile's shared ``tool_results/``). An existing file is reused:
+    its name says it holds this text. ``call_id`` is kept for callers.
+    """
     import hashlib
     import os
     import tempfile
 
-    from openprogram.runtime.execution.run_control import (
-        get_current_execution_id,
-        get_current_session_id,
-    )
-    from openprogram.programs._host.runtime import _current_tool_call_occurrence_id
+    from openprogram.host._platform.filesystem import replace_file
 
-    # Raw provider call IDs can repeat across rounds and sessions. Reuse
-    # current ownership for attribution; exclusive creation also protects
-    # unscoped calls and repeated saves of the same occurrence.
-    scope = json.dumps([
-        get_current_session_id(), get_current_execution_id(),
-        _current_tool_call_occurrence_id.get(), str(call_id),
-    ], ensure_ascii=False).encode("utf-8")
-    owner = hashlib.sha256(scope).hexdigest()[:24]
-    fd, name = tempfile.mkstemp(prefix=f"result-{owner}-", suffix=".txt", dir=directory)
-    p = Path(name)
+    del call_id
+    directory = results_dir if results_dir is not None else _session_results_dir()
+    if directory is None:
+        directory = (fallback_dir or _tool_results_dir)()
+    directory.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()[:32]
+    path = directory / f"{digest}.txt"
+    if path.is_file():
+        return path
+    fd, name = tempfile.mkstemp(prefix=f".{digest}-", suffix=".tmp", dir=directory)
+    temporary = Path(name)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as stream:
             stream.write(text)
+        # Same name, same text: a writer that got here first left the
+        # same bytes, so replacing its file changes nothing.
+        replace_file(temporary, path)
     except BaseException:
-        p.unlink(missing_ok=True)
+        temporary.unlink(missing_ok=True)
         raise
-    return p
+    return path
+
+
+def with_cap(result: AgentToolResult, cap: int | None) -> AgentToolResult:
+    """``result`` with the tool's own cap recorded in its details."""
+    if not cap:
+        return result
+    details = dict(result.details) if isinstance(result.details, dict) else {}
+    details[CAP_DETAIL] = int(cap)
+    return result.model_copy(update={"details": details})
 
 
 def _normalize_result(
     raw: Any,
     *,
     call_id: str,
-    max_chars: int,
-    persist_full: bool,
-    head_ratio: float,
-    persist: Callable[[str, str], Path] | None = None,
+    cap: int | None = None,
 ) -> AgentToolResult:
     """Convert a tool's raw return value into an AgentToolResult.
 
@@ -143,15 +172,16 @@ def _normalize_result(
       - str → TextContent ("Error: ..." also sets is_error)
       - dict / list → JSON-serialized as TextContent
       - ToolReturn → text + images + json
-      - AgentToolResult → passthrough (no cap)
+      - AgentToolResult → passthrough
 
-    Then applies char cap with optional persist-to-disk for the full
-    version (so the LLM can lazy-load via a read tool when needed).
-    ``persist`` overrides the default writer so callers that monkeypatch
-    ``_runtime._tool_results_dir`` keep working.
+    Nothing is cut here: the agent loop bounds every result once, where
+    it is stored (``tool_dispatch._as_stored``). ``cap``, the smaller
+    weight a tool may declare (``max_result_weight``), is recorded in the
+    details for that bound.
     """
+    del call_id
     if isinstance(raw, AgentToolResult):
-        return raw
+        return with_cap(raw, cap)
 
     images: list[ImageContent] = []
     audio: list[AudioContent] = []
@@ -196,25 +226,6 @@ def _normalize_result(
             # Not serialisable even with default=str (non-str keys, cycles); text stays empty.
             _log.debug("tool result json payload not serialisable", exc_info=True)
 
-    full_text = text_part
-    max_chars = max(max_chars, MIN_KEEP_CHARS)
-    if len(full_text) > max_chars:
-        if persist_full:
-            try:
-                writer = persist or _persist_full_result
-                p = writer(call_id, full_text)
-                marker = (
-                    f"\n\n[Full result ({len(full_text):,} chars) saved at "
-                    f"{p} — read tool can fetch it]"
-                )
-            except Exception:
-                marker = ""
-            text_part = _cap_result_text(full_text, max_chars,
-                                          head_ratio=head_ratio) + marker
-        else:
-            text_part = _cap_result_text(full_text, max_chars,
-                                          head_ratio=head_ratio)
-
     content: list[Any] = []
     if text_part:
         content.append(TextContent(text=text_part))
@@ -227,11 +238,11 @@ def _normalize_result(
     if json_payload is not None:
         details["json"] = json_payload
 
-    return AgentToolResult(
+    return with_cap(AgentToolResult(
         content=content,
         details=details or None,
         is_error=is_error,
-    )
+    ), cap)
 
 
 def _iter_str_values(value: Any):
@@ -299,9 +310,9 @@ def dispatch_sandbox_error(
 ) -> AgentToolResult | None:
     """Fail-closed path/URL check. Returns an is_error result, or None to proceed.
 
-    Read paths go to ``validate_read_path`` unchanged (it already
-    ``expanduser`` + ``realpath``s; relative → process cwd). Write
-    paths are worktree-anchored first, same as the file tools.
+    Read and write paths are worktree-anchored first, same as the file
+    tools (a relative path names a file in the bound worktree, not in
+    the process cwd).
     """
     from openprogram.host.sandbox import validate_read_path, validate_write_path
     from openprogram.host.security.url_policy import URLPolicyError, normalize_url
@@ -312,7 +323,9 @@ def dispatch_sandbox_error(
             continue
         for raw in _iter_str_values(args[key]):
             if direction == "read":
-                violation = validate_read_path(raw)
+                # Relative reads bind to the worktree too: the tool reads
+                # there, so the check must look at the same file.
+                violation = validate_read_path(_path_for_write_check(raw))
             else:
                 violation = validate_write_path(_path_for_write_check(raw))
             if violation:

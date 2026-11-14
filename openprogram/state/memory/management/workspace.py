@@ -15,7 +15,7 @@ from typing import Any
 
 from openprogram.host import sandbox as _sandbox
 
-from ..markdown import parse_topic_tree
+from ..markdown import read_checked_tree, read_topic_tree
 from .block_views import BlockViewsMixin
 from .config import MemoryConfig
 from .patching import apply_memory_changes
@@ -28,10 +28,16 @@ from .transaction import (
     git_commit_state,
     install_state,
     preserve_creation_order,
+    workspace_files,
     workspace_revision,
     workspace_write_lock,
 )
-from ..workspace_layout import TEMPORARY_PREFIX, is_internal_path, runtime_dir
+from ..workspace_layout import (
+    TEMPORARY_PREFIX,
+    is_internal_path,
+    is_state_file,
+    runtime_dir,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -80,6 +86,10 @@ class MemoryWorkspace(
         allowed_new_source_refs: set[str] | None = None,
     ):
         self.memory_dir = Path(memory_dir).resolve()
+        # Topic files written outside OpenProgram (paths under topics/):
+        # on the stage to be read, closed to every edit. Refreshed with
+        # the stage.
+        self.outside: set[str] = set()
         self.memory_dir.mkdir(parents=True, exist_ok=True)
         self.stage_dir = Path(tempfile.mkdtemp(prefix=f"{TEMPORARY_PREFIX}topics-"))
         self.pending: dict[str, dict[str, Any]] = {}
@@ -125,6 +135,9 @@ class MemoryWorkspace(
             if source.exists():
                 shutil.copytree(source, self.stage_dir / name)
         (self.stage_dir / "topics").mkdir(exist_ok=True)
+        from . import ownership
+
+        self.outside = ownership.outside_paths(self.memory_dir)
         for name in ("recent_events.jsonl", "commitments.jsonl"):
             derived = self.memory_dir / name
             if derived.exists():
@@ -141,7 +154,9 @@ class MemoryWorkspace(
         staged_runtime.parent.mkdir(parents=True, exist_ok=True)
         if runtime.exists():
             shutil.copy2(runtime, staged_runtime)
-        self._base_revision = workspace_revision(self.memory_dir)
+        # What each committed file held when the stage was copied, so a
+        # write that ends later can tell what moved underneath it.
+        self._base_files = workspace_files(self.memory_dir)
         self._stage_usable = True
 
     def shell(
@@ -175,7 +190,7 @@ class MemoryWorkspace(
             args,
             cwd=self.stage_dir,
             shell=use_shell,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
             capture_output=True,
             timeout=120,
             env=env,
@@ -189,12 +204,90 @@ class MemoryWorkspace(
 
     def baseline(self) -> tuple[list[Any], set[str], dict[str, str]]:
         """Snapshot the staged tree so an edit can be committed against it."""
-        units = parse_topic_tree(self.stage_dir / "topics")
+        units = read_topic_tree(
+            self.stage_dir / "topics", outside=self.outside,
+        ).units
         return (
             units,
-            {unit.memory_id for unit in units},
+            own_block_ids(units),
             self._topic_fingerprints(self.stage_dir / "topics"),
         )
+
+    def is_outside(self, relative: str) -> bool:
+        """Whether a path under ``topics/`` is a file written outside."""
+        from . import ownership
+
+        return ownership.contains(self.outside, relative)
+
+    def _written_paths(self, stage: Path | None = None) -> set[str]:
+        """Topic files (paths under ``topics/``) this write created or
+        changed on ``stage``: the files it answers for. Measured against
+        the committed bytes the stage was copied from."""
+        topics = (stage or self.stage_dir) / "topics"
+        written: set[str] = set()
+        for path in topics.rglob("*.md") if topics.is_dir() else ():
+            if not path.is_file():
+                continue
+            relative = path.relative_to(topics).as_posix()
+            if self.is_outside(relative):
+                continue
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            if self._base_files.get(f"topics/{relative}") != digest:
+                written.add(relative)
+        return written
+
+    def _parse_stage(self, stage: Path | None = None) -> list[Any]:
+        """The staged tree, each file this write wrote held to the strict
+        structure and every other one read as it is."""
+        stage = stage or self.stage_dir
+        return read_checked_tree(
+            stage / "topics",
+            checked=self._written_paths(stage),
+            outside=self.outside,
+        )
+
+    def adopt_person_edits(self) -> None:
+        """A person saving a file written outside makes it memory's own:
+        from this install on it is checked, normalized and recorded as
+        ours, like any file a person edits."""
+        from ..policy import owner_editing
+
+        if not owner_editing() or not self.outside:
+            return
+        topics = self.stage_dir / "topics"
+        for relative in sorted(self.outside):
+            staged = topics / relative
+            current = (
+                hashlib.sha256(staged.read_bytes()).hexdigest()
+                if staged.is_file() else None
+            )
+            if current != self._base_files.get(f"topics/{relative}"):
+                self.outside.discard(relative)
+
+    def _refuse_outside_edits(self, stage: Path) -> None:
+        """A file written outside OpenProgram is read-only to every
+        transaction but a person's save: changed, deleted or moved on the
+        stage, the whole write is refused."""
+        from ..policy import owner_editing
+
+        if owner_editing():
+            return
+        topics = stage / "topics"
+        for relative in sorted(self.outside):
+            staged = topics / relative
+            base = self._base_files.get(f"topics/{relative}")
+            current = (
+                hashlib.sha256(staged.read_bytes()).hexdigest()
+                if staged.is_file() else None
+            )
+            if current != base:
+                raise TransactionError(
+                    "OUTSIDE_FILE_READ_ONLY",
+                    f"topics/{relative} was written outside OpenProgram and "
+                    "is read-only: leave it as it is and put new facts in "
+                    "another Topic file",
+                    path=f"topics/{relative}",
+                )
 
     def commit_edits(
         self,
@@ -216,15 +309,12 @@ class MemoryWorkspace(
         self.last_changed_topics = []
         self.last_created_blocks = 0
         try:
+            self._refuse_outside_edits(self.stage_dir)
             preserve_creation_order(self, before_units)
             self._normalize_topic_edits(before_block_ids, before_units)
-            staged_ids = {
-                unit.memory_id
-                for unit in parse_topic_tree(self.stage_dir / "topics")
-            }
-            self._validate_topic_contract(
-                before_units, before_block_ids & staged_ids
-            )
+            # A writer may delete a block (Git keeps it); a link left
+            # pointing at it is refused when the views are rebuilt.
+            self._validate_topic_contract(before_units)
             selected_refs = self._allowed_new_source_refs
             if selected_refs is not None:
                 # The batch the Runtime selected is what this commit may newly
@@ -234,15 +324,11 @@ class MemoryWorkspace(
                 self._transaction_source_refs = frozenset(selected_refs)
             try:
                 with workspace_write_lock(self.memory_dir):
-                    if workspace_revision(self.memory_dir) != self._base_revision:
-                        raise TransactionError(
-                            "CONCURRENT_UPDATE",
-                            "workspace changed while the writer was running",
-                        )
+                    self._take_in_outside_changes()
                     self._synchronize()
             finally:
                 self._transaction_source_refs = None
-            after_units = parse_topic_tree(self.memory_dir / "topics")
+            after_units = read_topic_tree(self.memory_dir / "topics").units
             after_topics = self._topic_fingerprints(self.stage_dir / "topics")
             self.last_changed_topics = [
                 "topics/" + path
@@ -256,6 +342,87 @@ class MemoryWorkspace(
         except Exception:
             self._refresh_stage()
             raise
+
+    # What the stage mirrors of the workspace, and installs back over it.
+    _MIRRORED_DIRS = ("topics", "timeline")
+    _MIRRORED_FILES = (
+        "recent_events.jsonl", "commitments.jsonl", "relations.json",
+        "core.md", "MEMORY.md",
+    )
+
+    def _take_in_outside_changes(self) -> None:
+        """Rebase the stage onto files that changed on disk since it was
+        copied. Called under the write lock, right before install.
+
+        A file this write left alone takes the new bytes from disk, whatever
+        they hold: a file another tool rewrote is read as it is and fails no
+        write. One this write changed too, or the cursor, is a conflict, as
+        is a taken file that leaves a link of ours dangling.
+        """
+        current = workspace_files(self.memory_dir)
+        base = self._base_files
+        moved = sorted(
+            path for path in set(base) | set(current)
+            if base.get(path) != current.get(path)
+        )
+        taken: list[str] = []
+        conflicts: list[str] = []
+        for relative in moved:
+            path = Path(relative)
+            if is_state_file(path):
+                conflicts.append(relative)
+                continue
+            if not (
+                path.parts[0] in self._MIRRORED_DIRS
+                or relative in self._MIRRORED_FILES
+            ):
+                continue
+            staged = self.stage_dir / relative
+            staged_hash = (
+                hashlib.sha256(staged.read_bytes()).hexdigest()
+                if staged.is_file() else None
+            )
+            if staged_hash != base.get(relative):
+                conflicts.append(relative)
+            else:
+                taken.append(relative)
+
+        def conflict(reason: str) -> TransactionError:
+            return TransactionError(
+                "CONCURRENT_UPDATE",
+                f"workspace changed while the writer was running: {reason}",
+                details={"paths": conflicts[:20]},
+            )
+
+        if conflicts:
+            raise conflict(", ".join(conflicts[:5]))
+        taken_topics = [r for r in taken if r.startswith("topics/")]
+        dangling_before = (
+            _dangling(read_topic_tree(self.stage_dir / "topics").units)
+            if taken_topics else set()
+        )
+        for relative in taken:
+            staged = self.stage_dir / relative
+            source = self.memory_dir / relative
+            if source.is_file():
+                staged.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, staged)
+            else:
+                staged.unlink(missing_ok=True)
+        if taken_topics:
+            from . import ownership
+
+            # Which files are outside is a fact about the disk, which just
+            # moved; the stage now holds exactly those bytes.
+            self.outside = ownership.outside_paths(self.memory_dir)
+            dangling = sorted(
+                _dangling(read_topic_tree(self.stage_dir / "topics").units)
+                - dangling_before
+            )
+            if dangling:
+                conflicts = taken_topics
+                raise conflict(f"dangling block link: {dangling[0]}")
+        self._base_files = current
 
     def check_edits(self, baseline: tuple[Any, ...] | None) -> str | None:
         """Run the commit's checks on a copy of the stage, installing nothing.
@@ -271,18 +438,14 @@ class MemoryWorkspace(
         probe_dir = Path(tempfile.mkdtemp(prefix=f"{TEMPORARY_PREFIX}check-"))
         try:
             shutil.copytree(self.stage_dir, probe_dir, dirs_exist_ok=True)
+            self._refuse_outside_edits(probe_dir)
             probe = copy.copy(self)
             probe.stage_dir = probe_dir
             preserve_creation_order(probe, before_units)
             probe._normalize_topic_edits(before_block_ids, before_units)
-            staged_ids = {
-                unit.memory_id for unit in parse_topic_tree(probe_dir / "topics")
-            }
-            probe._validate_topic_contract(
-                before_units, before_block_ids & staged_ids
-            )
+            probe._validate_topic_contract(before_units)
             probe._transaction_source_refs = self._allowed_new_source_refs
-            probe._check_block_references(parse_topic_tree(probe_dir / "topics"))
+            probe._check_block_references(probe._parse_stage())
         except Exception as exc:  # noqa: BLE001 - any failure is the answer
             return f"{type(exc).__name__}: {exc}"
         finally:
@@ -483,7 +646,15 @@ class MemoryWorkspace(
             if path.suffix != ".md" or topics not in path.parents:
                 lines.append(relative.as_posix())
                 continue
-            text = path.read_text(encoding="utf-8")
+            text = path.read_text(encoding="utf-8", errors="replace")
+            if self.is_outside(path.relative_to(topics).as_posix()):
+                # Read it for what it says; it is not ours to change.
+                lines.append(
+                    relative.as_posix() + "  (written outside OpenProgram: "
+                    "read-only. Read and mention it, but do not edit, move "
+                    "or delete it, and do not link to its paragraphs)"
+                )
+                continue
             lines.append(relative.as_posix() + _topic_size_note(relative, text))
             heading = ""
             for line in text.splitlines():
@@ -504,3 +675,21 @@ class MemoryWorkspace(
                 )
                 heading = ""
         return "\n".join(lines) or "(empty workspace)"
+
+
+def own_block_ids(units: list[Any]) -> set[str]:
+    """The block IDs a write must keep: the ``^id`` of every paragraph in
+    memory's own files. A derived ID is never written, and a file written
+    outside changes its IDs as it likes."""
+    return {
+        unit.memory_id for unit in units
+        if not unit.derived_id and not unit.outside
+    }
+
+
+def _dangling(units: list[Any]) -> set[str]:
+    """Link targets no unit holds."""
+    ids = {unit.memory_id for unit in units}
+    return {
+        target for unit in units for target in unit.relation_targets
+    } - ids

@@ -106,8 +106,11 @@ interface ConvState {
    *  `agentSettings` above stays the focused conversation's. */
   agentSettingsBySession: Record<string, AgentSettingsState>;
   setSessionAgentSettings: (key: string, s: AgentSettingsState) => void;
-  /** Drop every cached entry (global model settings changed); panes refetch. */
-  clearSessionAgentSettings: () => void;
+  /** Moves when some conversation's model settings changed and the news
+   *  does not say which (``agent_settings_changed``). Every shown pane
+   *  reads its own entry again and keeps showing it until the read lands. */
+  agentSettingsEpoch: number;
+  markSessionAgentSettingsStale: () => void;
   /** The Agent a conversation's first turn bound, known from its ACK until
    *  the conversation list carries `agent_id`. */
   boundAgentBySession: Record<string, string>;
@@ -203,12 +206,6 @@ interface ConvState {
       provider?: string | null;
     } | null,
     contextWindow?: number | null,
-  ) => void;
-  /** Ring + panel compact lifecycle. Not occupancy. */
-  compactionUi: Record<string, { running?: boolean }>;
-  setCompactionUi: (
-    sessionId: string,
-    patch: { running?: boolean },
   ) => void;
 
   setWsStatus: (s: ConvState["wsStatus"]) => void;
@@ -717,7 +714,8 @@ export const useSessionStore = createWithEqualityFn<ConvState>((set) => ({
   agentSettingsBySession: {},
   setSessionAgentSettings: (key, settings) =>
     set((prev) => ({ agentSettingsBySession: { ...prev.agentSettingsBySession, [key]: settings } })),
-  clearSessionAgentSettings: () => set({ agentSettingsBySession: {} }),
+  agentSettingsEpoch: 0,
+  markSessionAgentSettingsStale: () => set((prev) => ({ agentSettingsEpoch: prev.agentSettingsEpoch + 1 })),
   boundAgentBySession: {},
   setBoundAgent: (sessionId, agentId) =>
     set((prev) => prev.boundAgentBySession[sessionId] === agentId ? {}
@@ -752,14 +750,6 @@ export const useSessionStore = createWithEqualityFn<ConvState>((set) => ({
 
   tokens: {},
   contextWindow: {},
-  compactionUi: {},
-  setCompactionUi: (sessionId, patch) =>
-    set((s) => ({
-      compactionUi: {
-        ...s.compactionUi,
-        [sessionId]: { ...s.compactionUi[sessionId], ...patch },
-      },
-    })),
   heads: {},
   setHead: (sessionId, headId) =>
     set((s) =>

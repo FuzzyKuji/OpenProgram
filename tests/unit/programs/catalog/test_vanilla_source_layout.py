@@ -57,5 +57,6 @@ def test_single_file_tools_are_modules_and_multi_file_tools_are_packages() -> No
     assert (root / "files/read.py").is_file()
     assert not (root / "files/read").exists()
     application = root.parent / "applications/browser"
-    assert (application / "engine/browser.py").is_file()
-    assert (application / "engine/_actions").is_dir()
+    assert (application / "tabs.py").is_file()
+    assert not (application / "engine").exists()
+    assert not (application / "web_use").exists()

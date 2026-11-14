@@ -24,7 +24,9 @@
 <tr><th scope="row"><code translate="no">AgentSession._run_with_retry</code></th><td>Draws on the invocation's transport allowance</td><td>2 s, 4 s, 8 s</td></tr>
 <tr><th scope="row"><code translate="no">retry_stream</code> (Codex), retry loop (completions)</th><td>Reads the deadline before each attempt and sleep</td><td>5 attempts, 2 s base, 30 s cap</td></tr>
 <tr><th scope="row">Shared httpx client</th><td>Connect, write, pool 30 s; keepalive ~60 s; force-IPv4; proxy</td><td>none</td></tr>
-<tr><th scope="row"><code translate="no">_parse_sse_stream</code></th><td><code translate="no">wait = min(idle, stall, total, deadline)</code></td><td>none</td></tr>
+<tr><th scope="row"><code translate="no">_parse_sse_stream</code>, Codex WebSocket</th><td><code translate="no">wait = min(idle, stall, total, deadline)</code></td><td>none</td></tr>
+<tr><th scope="row"><code translate="no">streaming/stream._delivered</code></th><td>Every provider's stream passes here. Draws on the invocation's transport allowance; one attempt under a Goal or job reservation</td><td><a href="#resend">Re-sends</a> a transport failure: 5 attempts, 2 s base, 30 s cap</td></tr>
+<tr><th scope="row"><code translate="no">streaming/stream._metered</code></th><td>The <a href="#idle-bound">idle bound</a> for every provider that has none of its own</td><td>none</td></tr>
 </tbody>
 </table>
 
@@ -34,12 +36,61 @@
 <tbody>
 <tr><th scope="row">Connect, write, pool</th><td>30 s</td><td><code translate="no">OPENPROGRAM_HTTPX_{CONNECT,WRITE,POOL}_TIMEOUT_S</code></td></tr>
 <tr><th scope="row">TCP dead-peer detection</th><td>~60 s (30 + 10 × 3)</td><td><code translate="no">OPENPROGRAM_TCP_KEEPALIVE</code></td></tr>
+<tr><th scope="row">No event (<a href="#idle-bound">idle bound</a>)</th><td>300 s</td><td><code translate="no">OPENPROGRAM_STREAM_IDLE_TIMEOUT_S</code> (0 turns it off); Codex also <code translate="no">OPENPROGRAM_SSE_DATA_STALL_TIMEOUT_S</code></td></tr>
 <tr><th scope="row">No bytes at all</th><td>600 s</td><td><code translate="no">OPENPROGRAM_SSE_IDLE_TIMEOUT_S</code></td></tr>
-<tr><th scope="row">No real data</th><td>900 s</td><td><code translate="no">OPENPROGRAM_SSE_DATA_STALL_TIMEOUT_S</code></td></tr>
 <tr><th scope="row">Total for one stream</th><td>none (0)</td><td><code translate="no">OPENPROGRAM_SSE_TOTAL_TIMEOUT_S</code></td></tr>
 <tr><th scope="row">httpx read backstop</th><td>idle + 60 s</td><td><code translate="no">OPENPROGRAM_HTTPX_READ_TIMEOUT_S</code></td></tr>
 <tr><th scope="row">Large prompts</th><td>× 1.25 above 50k tokens, × 1.5 above 100k, × 2 above 200k</td><td>by <code translate="no">context_tokens</code></td></tr>
 <tr><th scope="row">Force IPv4, proxy</th><td>off, automatic</td><td><code translate="no">OPENPROGRAM_FORCE_IPV4</code>, <code translate="no">HTTP(S)_PROXY</code></td></tr>
+</tbody>
+</table>
+
+<h2 id="idle-bound">Idle bound</h2>
+<p>A reply that stops arriving while its connection stays open ends its attempt after 300 s without an event, as <code translate="no">StreamIdleTimeout</code>: a transport error, retried by the layer that owns the attempt and shown as a retry.</p>
+<ul>
+<li>Keepalive pings and comment lines are not events.</li>
+<li>The wait for response headers counts as silence.</li>
+<li>The stalled stream is closed before the error is raised.</li>
+<li>A stop ends the wait at once.</li>
+</ul>
+<table class="stack">
+<thead><tr><th scope="col">Transport</th><th scope="col">Bounded in</th><th scope="col">Retried by</th></tr></thead>
+<tbody>
+<tr><th scope="row">Codex subscription, WebSocket and HTTP</th><td><code translate="no">read_budget.ReadBudget</code>, every frame or data line</td><td><code translate="no">retry_stream</code></td></tr>
+<tr><th scope="row">Chat Completions (DeepSeek, xAI, OpenAI-compatible)</th><td>The provider's request and chunk loop</td><td>Its own retry loop</td></tr>
+<tr><th scope="row">Gemini subscription</th><td>Each attempt's request and data lines; its own waits between attempts are not silence</td><td><code translate="no">stream._delivered</code></td></tr>
+<tr><th scope="row">OpenAI and Azure Responses, Anthropic, Google, Bedrock, plugin providers</th><td><code translate="no">stream._metered</code>, every event</td><td><code translate="no">stream._delivered</code></td></tr>
+</tbody>
+</table>
+<p>A provider that bounds itself sets <code translate="no">bounds_own_stream_idle</code>.</p>
+<p>boto3 blocks, so Bedrock reads on a thread of its own:</p>
+<ul>
+<li>The request and each event-stream read run there; each event is handed to the loop, so a stall never pauses other sessions.</li>
+<li>Closing the stream shuts its socket. botocore's own 60 s read timeout also applies to each read.</li>
+<li>The Bedrock SDK transport is disabled in the product until its network path is managed.</li>
+</ul>
+<p>A server-requested wait longer than <code translate="no">OPENPROGRAM_RETRY_AFTER_CAP_S</code> is not slept through: Gemini subscription fails at once with the rate-limit error, as <code translate="no">retry_stream</code> does.</p>
+<h2 id="resend">Re-sending a failed reply</h2>
+<p>A reply that stalls or whose connection drops before its final event says nothing about the request, so <code translate="no">stream._delivered</code> sends the same request again. It serves the conversation turn path, <code translate="no">AgentSession</code> and one-shot calls alike.</p>
+<table class="stack">
+<thead><tr><th scope="col">Case</th><th scope="col">What happens</th></tr></thead>
+<tbody>
+<tr><th scope="row">Failure before any content</th><td>Sent again after a <code translate="no">retry</code> event. Codex and Chat Completions do this in their own loops first; a failure they spent their attempts on arrives flagged and is not sent again</td></tr>
+<tr><th scope="row">Failure after reasoning, text or a tool call</th><td>The whole request is sent again and the partial is void, as Codex CLI and Claude Code do. The <code translate="no">retry</code> event carries <code translate="no">restart</code>; the reply's row and the loop's partial message drop the failed response's text and reasoning, so a steer during the wait commits none of it. Codex instead keeps the partial (<code translate="no">stop_reason="length"</code>) and the turn continues from it</td></tr>
+<tr><th scope="row">Tools</th><td>Never run twice: tools run only after a response's final event, and a failed response has none</td></tr>
+<tr><th scope="row">Reply going out to a channel</th><td>Paragraphs already sent cannot be recalled. The unsent text of the failed response is dropped, and the new response skips the opening it repeats word for word. A new response with other wording is sent whole after what went out</td></tr>
+<tr><th scope="row">Not re-sent</th><td>Rate limit, overload, auth or a bad request (SDK retries and failover own those); a request under a Goal or job reservation; anything after a stop</td></tr>
+<tr><th scope="row">Bound spent</th><td>The failure is flagged <code translate="no">transport_exhausted</code>, so neither <code translate="no">AgentSession</code> nor exec retries it again</td></tr>
+<tr><th scope="row">Usage</th><td>An attempt that reached the provider and ended without a final message is recorded: with the tokens it reported, or as one request whose cost is unknown. Reaching it means streamed content, reported tokens, or silence for the idle bound; an adapter's <code translate="no">start</code> event does not count. A refusal or a connection that failed before any content is not recorded</td></tr>
+</tbody>
+</table>
+<p>The consumer sees one <code translate="no">start</code> for the request, however many attempts it took. The redaction and failover wrappers own their producer task, so a stop reaches the provider request under them.</p>
+<table class="stack">
+<thead><tr><th scope="col">Why 300 s</th><th scope="col"></th></tr></thead>
+<tbody>
+<tr><th scope="row">Codex CLI</th><td><code translate="no">stream_idle_timeout_ms</code> 300 000, then up to 5 stream retries, on the same backend</td></tr>
+<tr><th scope="row">Claude Code</th><td>Event-level stream watchdog 300 s; a smaller setting is raised to 300 s to absorb thinking pauses and proxy buffering</td></tr>
+<tr><th scope="row">Longest healthy silence measured</th><td>gpt-6.1-sol, xhigh, 15–18k reasoning tokens over 5–6 min: 14 s between events with a reasoning summary, 20 s without one. 2 697 of 2 700 recorded Codex requests reached their first content within 101 s</td></tr>
 </tbody>
 </table>
 
@@ -51,13 +102,17 @@
 <tr><th scope="row"><code translate="no">transport_exhausted</code></th><td><code translate="no">retry_stream</code> marks a spent budget; exec does not restart it, and keeps reason and retryable honest</td></tr>
 <tr><th scope="row"><code translate="no">ExecInterrupt(BaseException)</code></th><td>Passes every <code translate="no">except Exception</code> retry layer. Only the outermost owner raises it.</td></tr>
 <tr><th scope="row"><code translate="no">OPENPROGRAM_EXEC_TIMEOUT_S</code></th><td>Process default for <code translate="no">exec</code>; 0 is unbounded. Needs no signals, which Python delivers only to the main thread.</td></tr>
+<tr><th scope="row">Stop while a reply streams</th><td>The turn ends without waiting for the provider to close: the read in flight is cancelled and handed to the turn's loop (<code translate="no">event_stream.leave_unwinding</code>). A bounded close that runs out of time is handed over the same way, still running: cancelling it would cancel the provider a second time and cut its socket close short.</td></tr>
+<tr><th scope="row">The turn's loop closing</th><td>On a thread of its own, in <code translate="no">asyncio.run</code>'s order: the reads and closes a stop handed over get 2 s to end (a socket close is a round trip) and are cancelled after that, the provider clients close, the tasks the turn left are cancelled, async generators are shut down and the loop closes</td></tr>
+<tr><th scope="row">Tasks that appear while it closes</th><td>The close of an abandoned stream generator, or a socket close a cancelled task left running, runs to its end. Async generators are shut down only once no task is left, repeated until nothing new appears. This has 1 s; what is still running then is cancelled and named in a warning.</td></tr>
+<tr><th scope="row">Reply ended inside a block</th><td>Its final message holds the text and thinking as content blocks, not the adapter's working dict, at <code translate="no">stream._extract_final</code>. An unfinished tool call stays as the adapter left it.</td></tr>
 </tbody>
 </table>
 <p class="note">A benchmark runner with a sample budget subclasses <code translate="no">ExecInterrupt</code> for its watchdog, stops on authentication errors and scores by <code translate="no">LLMError.reason</code>.</p>
 
 <details>
 <summary>Not built: a hard limit on a synchronous <code translate="no">_call</code></summary>
-<p>Python cannot kill a thread: the caller would return while <code translate="no">_call</code> runs on until its socket fails, possibly writing model-call nodes or store state. The deadline and SSE budgets already bound stalls. Subprocess isolation for benchmark samples is also not built.</p>
+<p>Python cannot kill a thread: the caller would return while <code translate="no">_call</code> runs on until its socket fails, possibly writing model-call nodes or store state. The deadline, the idle bound and the SSE budgets already bound stalls. Subprocess isolation for benchmark samples is also not built.</p>
 </details>
 
 <h2 id="classification">Classification</h2>
@@ -68,6 +123,7 @@
 <tr><th scope="row">1</th><td>HTTP 429</td><td><code translate="no">RATE_LIMIT</code>; <code translate="no">AUTHORIZATION</code> if a spent quota</td><td>yes; no</td></tr>
 <tr><th scope="row">1</th><td>HTTP 500, 502, 503, 504</td><td><code translate="no">PROVIDER_INTERNAL</code></td><td>yes</td></tr>
 <tr><th scope="row">1</th><td>HTTP 401, 403</td><td><code translate="no">AUTHENTICATION</code>, <code translate="no">AUTHORIZATION</code></td><td>no</td></tr>
+<tr><th scope="row">1</th><td>HTTP 403 whose body is a web page, not the API's JSON: the network edge in front of the provider refused the caller's address. The message keeps the page's words, not its markup</td><td><code translate="no">NETWORK_BLOCK</code></td><td>no</td></tr>
 <tr><th scope="row">1</th><td>HTTP 400</td><td><code translate="no">INVALID_REQUEST</code>, <code translate="no">CONTEXT_LENGTH</code>, <code translate="no">CONTENT_POLICY</code></td><td>no</td></tr>
 <tr><th scope="row">2</th><td>Transport exception type (<code translate="no">ConnectError</code>, <code translate="no">ReadTimeout</code>, ...); SDK <code translate="no">APIConnectionError</code>, <code translate="no">APITimeoutError</code>; anything caused by one</td><td><code translate="no">TRANSPORT</code></td><td>yes</td></tr>
 <tr><th scope="row">3</th><td>Message substring</td><td>matching reason</td><td>by reason</td></tr>
@@ -76,6 +132,7 @@
 </table>
 <p class="note"><code translate="no">LLMError</code> carries <code translate="no">reason</code>, <code translate="no">retryable</code>, <code translate="no">http_status</code>, <code translate="no">retry_after_s</code>, <code translate="no">attempts</code>, <code translate="no">elapsed_s</code>, <code translate="no">had_image</code>, <code translate="no">provider</code>, <code translate="no">model</code>, <code translate="no">last_error_type</code>, <code translate="no">cause</code>. A deadline hit is <code translate="no">TIMEOUT</code>, never retryable. A spent budget of a retryable error stays retryable: retry with a new budget, not at once.</p>
 <p class="note">An exception with no verdict may show as <code translate="no">UNKNOWN</code>, non-retryable; <code translate="no">error_retryable_inferred</code> marks that, and only such messages keep Runtime's bounded fallback. An explicit verdict, known reason or spent transport budget is authoritative.</p>
+<p class="note"><code translate="no">error_kind</code> names a finer, stable category beside the reason, found on the exception or anything it wraps: a stalled stream and a reset connection are both <code translate="no">TRANSPORT</code>, only the first is <code translate="no">stream_idle</code>. The others are <code translate="no">stream_total</code>, <code translate="no">memory_unavailable</code>, <code translate="no">model_unavailable</code> and <code translate="no">auth</code>.</p>
 
 <h2 id="transport-allowance">Recovery allowances</h2>
 <table class="stack">

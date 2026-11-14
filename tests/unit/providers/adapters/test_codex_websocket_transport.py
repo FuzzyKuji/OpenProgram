@@ -295,3 +295,17 @@ def test_a_chatgpt_turn_goes_zstd_compressed_and_others_plain():
 
     plain, headers = request_compression.encode_turn(body, chatgpt_sign_in=False)
     assert headers == {} and json.loads(plain) == body
+
+
+def test_the_rate_limit_frame_goes_to_the_observer_not_the_reply():
+    seen: list[dict] = []
+
+    async def scenario(backend):
+        turn = await ws.open_turn(base_url=backend.base_url, headers=HEADERS, body=_body(USER_1),
+                                  receive_next=_receive, on_frame=seen.append)
+        events = [event async for event in turn.events(_receive)]
+        assert all(event["type"] != "codex.rate_limits" for event in events)
+
+    run(scenario)
+    assert [frame["type"] for frame in seen] == ["codex.rate_limits"]
+    assert seen[0]["plan_type"] == "plus"

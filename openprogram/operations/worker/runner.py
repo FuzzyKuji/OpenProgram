@@ -271,6 +271,22 @@ def _remember_worker_environment() -> None:
             worker_print(f"worker environment not saved: {exc}")
 
 
+def _register_install() -> None:
+    """List this install among the version store's users (``versions/users.py``).
+
+    An install from before the list existed is added on its first start, so
+    the last uninstaller knows the store is no longer needed.
+    """
+    from openprogram.operations.self_update.versions import users
+
+    if trial_mode():
+        return
+    try:
+        users.register_running_install()
+    except (OSError, ValueError) as exc:
+        worker_print(f"install not listed among the version store's users: {exc}")
+
+
 def trial_mode() -> bool:
     """Whether this worker is a candidate version's trial.
 
@@ -281,8 +297,8 @@ def trial_mode() -> bool:
     scheduler and cron ticker, the always-on ticker, channels, MCP servers,
     the release and plugin update checks, service installation, the
     self-update recovery sweep, the idle-session watcher, the nightly
-    reorganizer, config hooks, the subscription catalog refresher and the
-    Programs watcher.
+    reorganizer, the daily tool output collection, config hooks, the
+    subscription catalog refresher and the Programs watcher.
     """
     return os.environ.get("OPENPROGRAM_TRIAL", "").strip() == "1"
 
@@ -345,6 +361,25 @@ def _settle_managed_version(port: int) -> None:
         worker_print(f"direct edits could not be reported: {exc}")
 
 
+_STOP_POLL_SECONDS = 0.25
+
+
+def _wait_for_stop(sleep=time.sleep) -> None:
+    """Hold the main thread until the worker is asked to stop.
+
+    A signal raises ``KeyboardInterrupt`` out of the sleep. A stop request
+    file does the same where no signal can be sent (``request_stop``): it
+    is looked for often enough that the shutdown fits in the five seconds
+    ``stop_worker`` waits before it kills.
+    """
+    from .lifecycle import stop_requested
+
+    while True:
+        sleep(_STOP_POLL_SECONDS)
+        if stop_requested():
+            raise KeyboardInterrupt
+
+
 def run_foreground() -> int:
     """Run the worker in the current process. Blocks until SIGTERM / Ctrl-C."""
     from openprogram.host.process_logging import configure_process_logging
@@ -368,6 +403,10 @@ def run_foreground() -> int:
         return 1
 
     _remember_worker_environment()
+    _register_install()
+    # A request left for an earlier worker with this PID is not for this one.
+    from .lifecycle import clear_stop_request
+    clear_stop_request()
 
     # The user's Programs live in one directory; an older profile kept them
     # in workflows/ and applications/. Move them before anything loads.
@@ -518,6 +557,15 @@ def run_foreground() -> int:
         except Exception as exc:  # noqa: BLE001
             worker_print(f"self-update watchdog failed to start: {type(exc).__name__}")
 
+    if not trial:
+        # Full tool outputs in the profile's shared folder that no
+        # conversation names any more go once a day.
+        try:
+            from openprogram.state.store.session.tool_output_gc import start_daily
+            start_daily()
+        except Exception as exc:  # noqa: BLE001
+            worker_print(f"tool output collection failed to start: {type(exc).__name__}")
+
     threading.Thread(
         target=_settle_managed_version, args=(port,), daemon=True, name="version-settle",
     ).start()
@@ -620,18 +668,22 @@ def run_foreground() -> int:
     def _on_sigterm(_signum, _frame):
         raise KeyboardInterrupt
 
-    try:
-        _signal.signal(_signal.SIGTERM, _on_sigterm)
-    except (ValueError, OSError):
-        pass
+    # SIGBREAK is Ctrl-Break in a Windows console; it exists only there.
+    for _name in ("SIGTERM", "SIGBREAK"):
+        _number = getattr(_signal, _name, None)
+        if _number is None:
+            continue
+        try:
+            _signal.signal(_number, _on_sigterm)
+        except (ValueError, OSError):
+            pass
 
     try:
-        # Block forever — webui server runs on its own threads/loop, so
-        # we just need to keep the main thread alive. If channels are
-        # running, we also want to react when they all die (worker can
-        # keep running with just webui though, so don't exit).
-        while True:
-            time.sleep(1.0)
+        # Block until asked to stop — webui server runs on its own
+        # threads/loop, so we just need to keep the main thread alive. If
+        # channels are running, we also want to react when they all die
+        # (worker can keep running with just webui though, so don't exit).
+        _wait_for_stop()
     except KeyboardInterrupt:
         print()
         worker_print("stopping...")
@@ -671,4 +723,5 @@ def run_foreground() -> int:
         lock.release()
         clear_pid_file()
         clear_port_file()
+        clear_stop_request()
     return 0

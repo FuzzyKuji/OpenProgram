@@ -138,7 +138,7 @@
 <tbody>
 <tr><th scope="row">存储</th><td><code translate="no">state/store/session/session_store/</code>、<code translate="no">memory_index.py</code>、<code translate="no">session_log.py</code></td></tr>
 <tr><th scope="row">事件层</th><td><code translate="no">runtime/events/</code>（<code translate="no">bus.py</code>、<code translate="no">tool_gate.py</code>）、<code translate="no">runtime/agent/questions.py</code></td></tr>
-<tr><th scope="row">上下文引擎</th><td><code translate="no">runtime/context/</code>：<code translate="no">engine.py</code>、<code translate="no">render.py</code>、<code translate="no">aging.py</code>、<code translate="no">tool_aging/</code>、<code translate="no">compaction/</code>；finalize 在 <code translate="no">conversation/turn_runtime/finalize.py</code></td></tr>
+<tr><th scope="row">上下文引擎</th><td><code translate="no">runtime/context/</code>：<code translate="no">engine.py</code>、<code translate="no">render.py</code>、<code translate="no">compaction/</code>；finalize 在 <code translate="no">conversation/turn_runtime/finalize.py</code></td></tr>
 <tr><th scope="row">Agent 运行</th><td><code translate="no">runtime/agent/loop/</code>、<code translate="no">conversation/sub_agent_run.py</code>、<code translate="no">models/providers/utils/event_stream.py</code>、<code translate="no">extensions/gating.py</code></td></tr>
 <tr><th scope="row">协作</th><td><code translate="no">programs/tools/agents/send_message/</code>、<code translate="no">programs/tools/agents/agent/</code></td></tr>
 </tbody>
@@ -146,7 +146,7 @@
 <h3 id="storage">存储</h3>
 <dl class="pairs">
 <dt>日志</dt><dd>每会话一份追加日志；<code translate="no">_open(sid)</code> 返回 <code translate="no">(SessionLog, SessionMemoryIndex)</code>，LRU 缓存，索引可从日志重建</dd>
-<dt>分支</dt><dd>（session, head）。<code translate="no">get_branch(sid[, head])</code> 沿 predecessor、caller 回走；<code translate="no">set_head</code> 移动 meta 里的单个 UI 指针。fork 是独立的链，互不污染</dd>
+<dt>分支</dt><dd>稳定分支身份加当前消息位置。<code translate="no">get_branch(sid[, head])</code> 沿 predecessor 链回走；Rewind 后不同分支引用可以停在同一位置。每个引用保留独立配置，项目文件仍共享</dd>
 <dt>提交</dt><dd>轮次边界 <code translate="no">commit_turn(sid, msg)</code>。事件：<code translate="no">sessions.listed</code>、<code translate="no">branches.listed</code></dd>
 </dl>
 <h3 id="event-layer">事件层</h3>
@@ -157,7 +157,7 @@
 </dl>
 <h3 id="context-engine">上下文引擎</h3>
 <dl class="pairs">
-<dt>老化</dt><dd>渲染时，近期尾部之外的工具结果折叠成一行。不动 DAG 节点</dd>
+<dt>工具输出</dt><dd>工具结果在生成时按权重截一次，之后每个请求按存下的样子完整发送；只有压缩会替换旧轮次</dd>
 <dt>上下文 commit</dt><dd><code translate="no">state/store/session/context_commit/</code>：每轮的存档记录，分支合并时写入，显示在上下文时间线（<code translate="no">context/commit/views.py</code>）。finalize 回填最终助手输出</dd>
 <dt>事件</dt><dd><code translate="no">context.compacted</code></dd>
 </dl>

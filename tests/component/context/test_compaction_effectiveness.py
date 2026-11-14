@@ -315,28 +315,6 @@ def test_reports_in_a_real_conversation_fold_into_a_summary(tmp_path, monkeypatc
     store.close()
 
 
-def test_overflow_installs_a_summary_and_the_retry_is_smaller(conversation, monkeypatch):
-    from openprogram.runtime.context.compaction.reactive import reactive_compact
-    eng = DefaultContextEngine()
-
-    async def summarize(**kwargs):
-        return 'recap of the older turns'
-
-    monkeypatch.setattr(eng.summarizer, '_llm_summary', summarize)
-    monkeypatch.setattr('openprogram.runtime.context.resolve_engine_for', lambda _agent: eng)
-    _, _, before = rendered(conversation)
-    events = []
-    retry_history = reactive_compact(
-        agent_profile={}, session_id='compact', model=None, on_event=events.append,
-    )
-    assert retry_history and retry_history[0].get('covers_ids')
-    kinds = [event['data']['type'] for event in events]
-    assert 'reactive_compact_done' in kinds and 'reactive_snip' not in kinds
-    # The retry renders from the DAG, so this is the request it sends.
-    _, _, after = rendered(conversation)
-    assert estimate_history_tokens(after) < estimate_history_tokens(before)
-
-
 def test_an_over_budget_turn_sends_no_snip_event(monkeypatch):
     from types import SimpleNamespace
     from openprogram.runtime.conversation.turn_runtime import loop_runner
@@ -355,8 +333,10 @@ def test_an_over_budget_turn_sends_no_snip_event(monkeypatch):
 
     monkeypatch.setattr('openprogram.runtime.context.resolve_engine_for', lambda _agent: Engine())
     monkeypatch.setattr('openprogram.runtime.context.system_prompt_node.record_system_prompt', lambda *_a: None)
-    db = SimpleNamespace(get_session=lambda _sid: {}, get_branch=lambda *_a: [])
-    req = SimpleNamespace(session_id='s', history_override=None, background=False, run_note=None, user_msg_id='u')
+    db = SimpleNamespace(get_session=lambda _sid: {}, get_branch=lambda *_a: [],
+                         merge_node_metadata=lambda *_a, **_k: None)
+    req = SimpleNamespace(session_id='s', history_override=None, background=False, run_note=None, user_msg_id='u',
+                          permission_mode=None)
     # Several whole turns, far over the window: the shape the old fallback cut.
     turns = [message for i in range(8) for message in (
         {'role': 'user', 'content': f'request {i}'}, {'role': 'assistant', 'content': f'answer {i}'})]
@@ -371,23 +351,9 @@ def test_an_over_budget_turn_sends_no_snip_event(monkeypatch):
     assert prepared == [turns]
 
 
-def test_overflow_recovery_closes_the_clients_its_summary_built(conversation, monkeypatch):
-    from openprogram.runtime.context.compaction.reactive import reactive_compact
-    eng = DefaultContextEngine()
-
-    async def summarize(**kwargs):
-        return 'recap of the older turns'
-
-    closed_while_open = []
-    monkeypatch.setattr(eng.summarizer, '_llm_summary', summarize)
-    monkeypatch.setattr('openprogram.runtime.context.resolve_engine_for', lambda _agent: eng)
-    monkeypatch.setattr('openprogram.models.providers.utils.http_client.shutdown_loop_clients',
-                        lambda loop: closed_while_open.append(not loop.is_closed()))
-    assert reactive_compact(agent_profile={}, session_id='compact', model=None, on_event=lambda _event: None)
-    assert closed_while_open == [True]
-
-
 def test_a_conversation_summary_marks_cancelled_requests_and_attributes_claims(monkeypatch):
+    from tests.support.summary_stream import sectioned
+
     from openprogram.runtime.context.compaction import bounded_summary, prompts
 
     assert 'cancelled' in prompts.SUMMARY_RULES and 'the assistant said' in prompts.SUMMARY_RULES
@@ -395,10 +361,10 @@ def test_a_conversation_summary_marks_cancelled_requests_and_attributes_claims(m
 
     async def capture(source, model, options, *, instruction, max_tokens, **kwargs):
         seen['instruction'] = instruction
-        return 'recap'
+        return sectioned()
 
     monkeypatch.setattr(bounded_summary, 'summarize_text', capture)
     text = asyncio.run(Summarizer()._llm_summary(
         prefix=[{'role': 'user', 'content': 'never mind, cancel that'}],
         model=None, previous_summary=None, cancel_event=None))
-    assert text == 'recap' and prompts.SUMMARY_RULES in seen['instruction']
+    assert text == sectioned() and prompts.SUMMARY_RULES in seen['instruction']

@@ -34,6 +34,10 @@ class NotDispatched(ComputerUseError):
     """
 
 
+class StaleElement(NotDispatched):
+    """A previously observed control vanished; return a fresh observation."""
+
+
 class NotAnswering(NotDispatched):
     """The application answered nothing for a while: it is busy, so nothing more was sent to it.
 

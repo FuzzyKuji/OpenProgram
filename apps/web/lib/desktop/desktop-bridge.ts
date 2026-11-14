@@ -62,7 +62,6 @@ export {
 } from "./bridge/bridge-menu";
 export {
   subscribeWebTabPopups,
-  subscribeBrowserHumanInput,
 } from "./bridge/bridge-events";
 export {
   visibleWebTab,

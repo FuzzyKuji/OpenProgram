@@ -33,6 +33,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
+from openprogram.host._platform.filesystem import replace_file
 
 
 _sources_lock = threading.Lock()  # ponytail: one lock for the sources RMW; split if writers contend
@@ -120,7 +121,7 @@ def _write_program_sources_document(payload: dict) -> None:
             json.dumps(payload, indent=2, sort_keys=True),
             encoding="utf-8",
         )
-        os.replace(temporary, target)
+        replace_file(temporary, target)
     finally:
         temporary.unlink(missing_ok=True)
 

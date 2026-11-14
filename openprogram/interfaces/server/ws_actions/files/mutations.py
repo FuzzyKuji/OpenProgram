@@ -5,7 +5,6 @@ import hashlib
 import os
 import shutil
 import subprocess
-import sys
 
 from .shared import _BINARY_SNIFF_BYTES
 from .shared import _READ_MAX_BYTES
@@ -198,19 +197,13 @@ def _reveal_entry(project_id: str, path: str) -> dict:
 def reveal_in_file_manager(target: str) -> dict:
     """Select ``target`` in the worker machine's file manager. The caller
     has already checked that the path is one it may show."""
+    from openprogram.host._platform import file_manager
     try:
         # Popen (never run/call): the file manager must not block the
-        # executor thread. argv lists only — no shell.
-        if sys.platform == "darwin":
-            subprocess.Popen(["open", "-R", target])
-        elif sys.platform == "win32":
-            subprocess.Popen(["explorer", "/select," + target])
-        else:
-            # No cross-desktop "select this file" verb on Linux — open
-            # the containing directory instead.
-            subprocess.Popen(["xdg-open",
-                              target if os.path.isdir(target)
-                              else os.path.dirname(target)])
+        # executor thread. No shell.
+        subprocess.Popen(file_manager.reveal_command(target))
+    except file_manager.NoFileManager as e:
+        return {"error": str(e)}
     except OSError as e:
         return {"error": f"{type(e).__name__}: {e}"}
     return {"ok": True}

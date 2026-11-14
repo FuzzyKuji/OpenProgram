@@ -50,7 +50,7 @@
 curl -fsSL https://openprogram.io/install | sh
 ```
 
-Windows(v1.1.0부터): `irm https://openprogram.io/install.ps1 | iex`. macOS 데스크톱 App은 DMG로 [릴리스 페이지](https://github.com/FuzzyKuji/OpenProgram/releases)에서 받을 수 있습니다. Linux와 Windows App은 v1.1.0부터 제공됩니다. openprogram.io에 연결되지 않으면: `curl -fsSL https://raw.githubusercontent.com/FuzzyKuji/OpenProgram/main/docs/_static_root/install.sh | sh`. 다른 방법은 [설치 안내](https://openprogram.io/docs/install/install.html)(영어)를 보세요.
+Windows(v1.2.0부터): `irm https://openprogram.io/install.ps1 | iex`. macOS 데스크톱 App은 DMG로 [릴리스 페이지](https://github.com/FuzzyKuji/OpenProgram/releases)에서 받을 수 있습니다. Linux App은 같은 페이지에 deb와 AppImage로 있고, Windows App은 v1.2.0부터 제공됩니다. openprogram.io에 연결되지 않으면: `curl -fsSL https://raw.githubusercontent.com/FuzzyKuji/OpenProgram/main/docs/_static_root/install.sh | sh`. 다른 방법은 [설치 안내](https://openprogram.io/docs/install/install.html)(영어)를 보세요.
 
 ## 빠른 시작
 
@@ -101,7 +101,7 @@ class SupportAgent(Agent):
 
 | | |
 |---|---|
-| **[데스크톱과 웹 UI](https://openprogram.io/docs/reference/design/ui/README.html)** | macOS에서는 App, v1.1.0부터는 Linux와 Windows에서도 App을 씁니다. 웹 UI는 이 모든 시스템과 서버에서 쓸 수 있습니다. |
+| **[데스크톱과 웹 UI](https://openprogram.io/docs/reference/design/ui/README.html)** | macOS와 Linux에서는 App, v1.2.0부터는 Windows에서도 App을 씁니다. 웹 UI는 이 모든 시스템과 서버에서 쓸 수 있습니다. |
 | **[분할 창](https://openprogram.io/docs/reference/design/ui/workspace/center-tabs-and-split-layout.html)** | 채팅, 파일, 터미널, 웹 페이지를 나란히 배치. |
 | **[내장 브라우저](https://openprogram.io/docs/reference/design/ui/browser/built-in-browser.html)** | 에이전트가 읽고 조작하는 브라우저를 옆에서 지켜볼 수 있습니다. |
 | **[통합 터미널](https://openprogram.io/docs/reference/design/ui/workspace/integrated-terminal.html)** | 작업 공간 안의 터미널을 에이전트와 함께 씁니다. |

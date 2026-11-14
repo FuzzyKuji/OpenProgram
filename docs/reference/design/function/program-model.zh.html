@@ -30,7 +30,7 @@
 <tr><th scope="row">可单独禁用</th><td>否</td><td>是</td></tr>
 <tr><th scope="row">UI</th><td>无</td><td>可带，在 App 窗口显示</td></tr>
 <tr><th scope="row"><code translate="no">setup(ctx)</code></th><td>否</td><td>可选</td></tr>
-<tr><th scope="row">入口</th><td>至少一个。常驻，冷门的延迟</td><td>可以没有。延迟；在窗口打开期间常驻</td></tr>
+<tr><th scope="row">入口</th><td>至少一个。常驻，冷门的延迟</td><td>可以没有。延迟，窗口打开时也是</td></tr>
 <tr><th scope="row">归属条件</th><td>没有它 Agent 失去基本能力，且不需要自己的屏幕</td><td>其余一切：浏览器、用户工作流、已安装应用、外部 harness</td></tr>
 </tbody>
 </table>
@@ -39,7 +39,7 @@
 <tbody>
 <tr><th scope="row"><code translate="no">tools/interaction/ask_user.py</code></th><td><code translate="no">ask_user</code>：运行中的 Program 询问用户并等待</td></tr>
 <tr><th scope="row"><code translate="no">tools/planning/goal/</code></th><td>聊天 Goals：<code translate="no">create_goal</code>、<code translate="no">get_goal</code>、<code translate="no">update_goal</code>、<code translate="no">goal</code> Program</td></tr>
-<tr><th scope="row"><code translate="no">applications/browser/</code></th><td><code translate="no">web_use</code></td></tr>
+<tr><th scope="row"><code translate="no">applications/browser/</code></th><td>没有入口；服务 <code translate="no">browser</code>，在 <code translate="no">computer_use_agent(target="browser")</code> 背后</td></tr>
 <tr><th scope="row"><code translate="no">applications/workflow_recording/</code></th><td>无入口；服务 <code translate="no">workflow_recording</code></td></tr>
 <tr><th scope="row"><code translate="no">applications/office_editor/</code></th><td>无入口；文档窗口 Office 路由背后的服务 <code translate="no">office_editor</code></td></tr>
 <tr><th scope="row"><code translate="no">_authoring/</code></th><td><code translate="no">errors</code>、<code translate="no">json_parsing</code>、<code translate="no">reports</code>，导入路径 <code translate="no">openprogram.programs._authoring.&lt;module&gt;</code></td></tr>
@@ -112,10 +112,11 @@
 <tr><th scope="row">hidden</th><td>什么都看不到；只供 Python</td><td><code translate="no">expose=False</code></td></tr>
 </tbody>
 </table>
-<p class="note">存为 <code translate="no">_tier</code>，用 <code translate="no">set_tier</code> 设置（<code translate="no">programs._host.runtime.Tier</code>）。审批（<code translate="no">requires_approval</code>，可以是参数的函数）独立于层级：<code translate="no">web_use</code> 延迟且需审批。<code translate="no">_defer</code> 镜像层级，供计价和持久化 tools 数组的读取方使用。<code translate="no">openprogram programs list</code> 和 <code translate="no">/api/plugins/inspect</code> 显示层级。</p>
-<details><summary>窗口打开期间常驻</summary>
+<p class="note">存为 <code translate="no">_tier</code>，用 <code translate="no">set_tier</code> 设置（<code translate="no">programs._host.runtime.Tier</code>）。审批（<code translate="no">requires_approval</code>，可以是参数的函数）独立于层级：延迟的入口可以需要审批，常驻的也可以不需要。<code translate="no">_defer</code> 镜像层级，供计价和持久化 tools 数组的读取方使用。<code translate="no">openprogram programs list</code> 和 <code translate="no">/api/plugins/inspect</code> 显示层级。</p>
+<details><summary>在窗口中打开</summary>
 <p>信号是会话的应用绑定（<code translate="no">programs/_host/ui/bindings.py</code>，表 <code translate="no">resource_bindings</code>）。指明会话的 <code translate="no">open</code> 绑定一个实例：App 窗口经 <code translate="no">POST /api/applications/&lt;id&gt;/open</code> 带 <code translate="no">session_id</code>，或 Agent 经 <code translate="no">application.&lt;id&gt;</code> 调用。<code translate="no">release</code> 或 <code translate="no">POST /api/applications/&lt;id&gt;/close</code> 解除。</p>
-<p>每轮开始 <code translate="no">TurnBindings</code> 读取 <code translate="no">open_application_ids(session_id)</code> 并安装（<code translate="no">_runtime.install_open_applications</code>）。<code translate="no">split_tools_for_dispatch</code> 和 <code translate="no">tool_search</code> 读 <code translate="no">resident_now</code>：常驻入口、用 <code translate="no">tool_search</code> 加载过的延迟入口、owner <code translate="no">application:&lt;id&gt;</code> 处于打开状态的延迟入口，都进入 tools 数组。注册层级不变；单次请求的副本是 <code translate="no">as_resident</code>。</p>
+<p>每轮开始 <code translate="no">TurnBindings</code> 读取 <code translate="no">open_application_ids(session_id)</code> 并安装（<code translate="no">_runtime.install_open_applications</code>）。打开不加载任何工具：打开的应用在目录里的那一行注明这一点，并以 <code translate="no">activation_note</code> 结尾，由模型按名字加载（<a href="deferred-tools.zh.html">延迟工具</a>）。</p>
+<p><code translate="no">split_tools_for_dispatch</code> 和 <code translate="no">tool_search</code> 读 <code translate="no">resident_now</code>：常驻入口和用 <code translate="no">tool_search</code> 加载过的延迟入口进入 tools 数组。注册层级不变；单次请求的副本是 <code translate="no">as_resident</code>。</p>
 </details>
 
 <h2 id="6-user-directory">用户目录</h2>

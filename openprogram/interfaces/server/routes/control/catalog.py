@@ -4,7 +4,7 @@ import inspect
 # Connection authentication, delivery receipts and approval decisions are not
 # product operations an Agent may manufacture. Their dedicated paths remain.
 INTERNAL_PREFIXES = ('/api/auth', '/api/terminal/claim', '/api/terminal/result', '/api/framework', '/api/execution/wait/answer')
-INTERNAL_COMMANDS = {'webtab_register', 'webtab_result', 'webtab_closed', 'webtab_popup', 'webtab_human_input',
+INTERNAL_COMMANDS = {'webtab_register', 'webtab_result', 'webtab_closed', 'webtab_popup',
                      'set_permission', 'add_permission_rule', 'remove_permission_rule',
                      'execution.wait.answer', 'revision.approve', 'follow_up_answer', 'framework_interface_register', 'framework_interface_result'}
 

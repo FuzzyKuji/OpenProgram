@@ -224,6 +224,7 @@ def test_session_loaded_replays_running_execution_id(env, monkeypatch):
         }
     monkeypatch.setattr(_s, "_get_provider_info", lambda sid=None: {})
     monkeypatch.setattr(_s, "_is_run_active", lambda sid: True)
+    monkeypatch.setattr(_s, "_is_selected_run_active", lambda sid: True)
 
     ws = FakeWS()
     try:

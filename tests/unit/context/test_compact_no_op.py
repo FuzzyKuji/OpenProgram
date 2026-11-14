@@ -8,6 +8,7 @@ import pytest
 
 from openprogram.runtime.context.engine import DefaultContextEngine
 from openprogram.runtime.context.compaction.summarize import Summary
+from openprogram.runtime.context.tokens import estimate_history_tokens
 from openprogram.runtime.context.types import CompactResult
 
 
@@ -33,14 +34,14 @@ def engine(monkeypatch):
             ),
         })(),
     )
-    monkeypatch.setattr(eng, "_occupancy_tokens", lambda sid, hist: 40_737)
+    monkeypatch.setattr(eng, "_occupancy_tokens", lambda sid, hist, **_k: 40_737)
     from types import SimpleNamespace
     from openprogram.runtime.context import persistence
 
-    def view(_db, sid):
+    def view(_db, sid, head_id=None, *, audience=None):
         history = persistence.rendered_history(_db, sid)
         return SimpleNamespace(
-            history=history, messages=history,
+            history=history, messages=history, head_id=head_id,
             unchanged=lambda *_a: True,
             candidate_messages=lambda *_a: [{"role": "assistant", "content": "recap"}],
         )
@@ -127,15 +128,23 @@ def test_success_stamps_token_metadata_on_summary(engine, monkeypatch):
         )
 
     monkeypatch.setattr(engine.summarizer, "summarise", _ok)
+    written = []
     monkeypatch.setattr(
         engine.persister, "insert_summary_node",
-        lambda *a, **k: "summary_abc",
+        lambda *a, **k: written.append(k["facts"]) or "summary_abc",
     )
     result = asyncio.run(engine.compact(
         agent=None, session_id="s1", model=None, user_initiated=True,
     ))
     assert result.no_op is False
-    assert engine._stamped["tokens_before"] == 40_737
-    assert engine._stamped["tokens_after"] == 40_737
-    assert engine._stamped["summarised_count"] == 8
-    assert engine._stamped["compacted_at"] > 0
+    # The node is written once with every fact; nothing is stamped after.
+    assert engine._stamped == {}
+    (facts,) = written
+    assert facts["trigger"] == "manual"
+    assert facts["tokens_before"] == 40_737
+    # The ring's reading less what the summary saves on this chain.
+    saved = estimate_history_tokens(hist) - estimate_history_tokens(
+        [{"role": "assistant", "content": "recap"}])
+    assert facts["tokens_after"] == result.tokens_after == 40_737 - saved
+    assert facts["summarised_count"] == 8
+    assert facts["compacted_at"] > 0

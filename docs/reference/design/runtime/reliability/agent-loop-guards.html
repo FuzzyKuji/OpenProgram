@@ -9,6 +9,7 @@
 <tr><th scope="row">Repeated tool rounds</th><td><code translate="no">tool_loop_guard.ToolLoopGuard</code></td><td>After each tool round, <code translate="no">loop.py</code></td><td>Turn ends with a notice</td></tr>
 <tr><th scope="row">Tool calls written as text</th><td><code translate="no">text_tool_calls.recover_text_tool_calls</code></td><td>When a reply ends, <code translate="no">streaming.py</code></td><td>Written calls become real ones</td></tr>
 <tr><th scope="row">Repeated failing call</th><td><code translate="no">failure_policy</code> and the tool executor</td><td>Each tool call, <code translate="no">tool_dispatch.py</code></td><td>Third identical failure is not run; a note answers it</td></tr>
+<tr><th scope="row">Long stretch with nothing shown</th><td><code translate="no">progress_note.QuietStretch</code></td><td>After each tool round of a turn somebody is watching, <code translate="no">loop.py</code></td><td>After 6 rounds of tool calls only, one note for this turn asks for a few words of progress; nothing ends</td></tr>
 </tbody>
 </table>
 <p class="note">A healthy turn is left alone. Nothing here caps output length, round count or wall time.</p>

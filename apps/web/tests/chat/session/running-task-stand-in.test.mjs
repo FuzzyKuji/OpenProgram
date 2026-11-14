@@ -101,3 +101,32 @@ test("a task restored with the reply-id stand-in takes its turn's real execution
   );
   assert.equal(useSessionStore.getState().runningTasks[sid].execution_id, "exec_p1");
 });
+
+test("a turn on a branch that is not selected does not take the pane's run slot", async () => {
+  const { restoreForegroundExecutionTask } = await import(
+    "../../../lib/runtime-bridge/session/chat-handlers.ts"
+  );
+  const sid = "side-branch-session";
+  rows.putRows(sid, [
+    { id: "a1", role: "user", rowKind: "user", content: "A", status: "done" },
+    { id: "a1_reply", role: "assistant", rowKind: "assistant", content: "done", status: "done" },
+  ]);
+  // The selected branch is idle; another branch's turn starts.
+  restoreForegroundExecutionTask(
+    { session_id: sid, msg_id: "b1", execution_id: "exec_b1", status_version: 3, branch_id: "branch_b", side_branch: true },
+    { session_id: sid, execution_id: "exec_b1", status: "running" },
+  );
+  assert.equal(useSessionStore.getState().runningTasks[sid], undefined);
+
+  // The selected branch's own turn still takes the slot beside it.
+  restoreForegroundExecutionTask(
+    { session_id: sid, msg_id: "a2", execution_id: "exec_a2", status_version: 3, branch_id: "branch_a", side_branch: false },
+    { session_id: sid, execution_id: "exec_a2", status: "running" },
+  );
+  assert.equal(useSessionStore.getState().runningTasks[sid].execution_id, "exec_a2");
+  restoreForegroundExecutionTask(
+    { session_id: sid, msg_id: "b2", execution_id: "exec_b2", status_version: 4, branch_id: "branch_b", side_branch: true },
+    { session_id: sid, execution_id: "exec_b2", status: "running" },
+  );
+  assert.equal(useSessionStore.getState().runningTasks[sid].execution_id, "exec_a2");
+});

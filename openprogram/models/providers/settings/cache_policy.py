@@ -78,14 +78,18 @@ def apply_cache_policy(
         return dict(hint)
 
     # --- last tool (highest priority — tools sit at the cache prefix root) ---
+    # A deferred definition (``defer_loading``) is outside the cached prefix
+    # until it is referenced and cannot carry a breakpoint, so the mark goes
+    # on the last tool that is not deferred.
     tools = context.tools
-    if tools:
-        last = tools[-1]
+    last_index = _last_resident_tool(tools or [])
+    if last_index >= 0:
+        last = tools[last_index]
         if last.cache_control is None:
             mark = _take()
             if mark is not None:
                 tools = list(tools)
-                tools[-1] = last.model_copy(update={"cache_control": mark})
+                tools[last_index] = last.model_copy(update={"cache_control": mark})
                 changed = True
 
     # --- latest user message: mark its last text part, else its last part ---
@@ -102,6 +106,14 @@ def apply_cache_policy(
     if not changed:
         return context
     return context.model_copy(update={"tools": tools, "messages": messages})
+
+
+def _last_resident_tool(tools) -> int:
+    """Index of the last tool not sent with ``defer_loading``, or -1."""
+    for i in range(len(tools) - 1, -1, -1):
+        if not getattr(tools[i], "defer_loading", False):
+            return i
+    return -1
 
 
 def _last_index(messages, cls) -> int:

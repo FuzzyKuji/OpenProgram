@@ -104,6 +104,40 @@ def local_owner_authority() -> dict[str, Any]:
     return owner_authority(owner_principal_id())
 
 
+_process_owner: str | None = None
+
+
+def process_owner_principal_id() -> str:
+    """The owner principal of a run that belongs to no profile.
+
+    A host that imports the package and runs a function with its own model
+    client is the owner of that run, and no profile is involved: the
+    principal is drawn once per process and never stored, so the run reads
+    and creates nothing under the profile directory. It equals no profile's
+    owner, so what a profile keeps for its owner (schedules, approvals,
+    updates) stays closed to it.
+    """
+    global _process_owner
+    with _owner_lock:
+        if _process_owner is None:
+            _process_owner = f"owner/install/{uuid.uuid4().hex[:16]}"
+        return _process_owner
+
+
+def standalone_owner_authority(*, profile_model: bool) -> dict[str, Any]:
+    """Owner authority for a run nobody sent a turn request for.
+
+    ``profile_model`` says the run is on a model built from the profile's
+    providers and credentials, so it is the profile owner's. Until a run
+    uses one it is owned by the process: a host that brings its own model
+    client (``Runtime(call=...)``), wherever it creates it, never opens a
+    profile to find out who the owner is.
+    """
+    if profile_model:
+        return local_owner_authority()
+    return owner_authority(process_owner_principal_id())
+
+
 def paired_channel_authority(
     channel: str,
     account_id: str,
@@ -167,18 +201,6 @@ def mcp_client_authority(client_id: str) -> dict[str, Any]:
         "authority_tier": "paired",
         "interaction": "non-interactive",
     }
-
-
-def mcp_web_control_authority(value: Mapping[str, Any]) -> dict[str, Any]:
-    """Narrow authority used only by the first-class MCP web_use route."""
-    authority = normalize_authority(value)
-    if (
-        authority.get("speaker_kind") != "client"
-        or authority.get("authority_tier") != "paired"
-        or not str(authority.get("speaker_id") or "").startswith("mcp/")
-    ):
-        raise AuthorityError("MCP browser-control authority is invalid")
-    return {**authority, "authority_tier": "mcp_browser"}
 
 
 def runtime_authority(parent: Mapping[str, Any] | Any, source: str) -> dict[str, Any]:
@@ -279,8 +301,9 @@ __all__ = [
     "owner_principal_id",
     "owner_authority",
     "local_owner_authority",
+    "process_owner_principal_id",
+    "standalone_owner_authority",
     "channel_owner_authority",
-    "mcp_web_control_authority",
     "paired_channel_authority",
     "mcp_client_authority",
     "runtime_authority",

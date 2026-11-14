@@ -8,6 +8,7 @@
  * on this computer (/api/voice/status). The microphone itself has no
  * options of its own: everything about it is set here.
  */
+import { platformKeys, useIsMacPlatform } from "@/lib/shortcut-keys";
 import { jsonFetch } from "@/lib/net/fetch-client";
 import { useCallback, useEffect, useState } from "react";
 
@@ -39,6 +40,7 @@ interface VoiceStatus {
 
 export function VoiceSettings() {
   const { text } = useTranslation();
+  const mac = useIsMacPlatform();
   const [status, setStatus] = useState<VoiceStatus | null>(null);
   const [model, setModel] = useState("");
   const [message, setMessage] = useState("");
@@ -104,8 +106,8 @@ export function VoiceSettings() {
     <SettingsPage
       title={text("Voice", "语音")}
       description={text(
-        "Speak into the microphone in the bottom-left corner of the input box, or hold ⌥Space while typing. Each phrase is transcribed when you pause and lands in the box for you to edit and send.",
-        "点输入框左下角的麦克风说话，或在输入时按住 ⌥空格。每说完一句停顿一下就会转写，文字落进输入框，改完再发。",
+        `Speak into the microphone in the bottom-left corner of the input box, or hold ${platformKeys("⌥", mac)}Space while typing. Each phrase is transcribed when you pause and lands in the box for you to edit and send.`,
+        `点输入框左下角的麦克风说话，或在输入时按住 ${platformKeys("⌥", mac)}空格。每说完一句停顿一下就会转写，文字落进输入框，改完再发。`,
       )}
     >
       {status ? <>

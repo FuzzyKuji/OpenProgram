@@ -159,7 +159,7 @@ def test_a_builtin_application_package_mounts_through_the_same_path(tmp_path, mo
         catalog.get("demo_notes")
 
 
-def test_an_open_window_makes_the_entries_resident_for_that_session(client, tmp_path):
+def test_an_open_window_is_tracked_per_session_and_its_entries_stay_deferred(client, tmp_path):
     from openprogram.programs._host.runtime import (
         Tier, get, install_open_applications, split_tools_for_dispatch, tool_tier, _open_applications,
     )
@@ -176,7 +176,9 @@ def test_an_open_window_makes_the_entries_resident_for_that_session(client, tmp_
     assert open_application_ids("chat-2") == set()
     token = install_open_applications(open_application_ids("chat-1"))
     try:
-        assert split_tools_for_dispatch([entry])[0] == [entry]
+        # An open window does not send the schemas: the model loads them
+        # with tool_search, so the cached prefix stays the same.
+        assert split_tools_for_dispatch([entry])[0] == []
     finally:
         _open_applications.reset(token)
     assert tool_tier(entry) is Tier.DEFERRED, "the registered tier never changes"
@@ -188,55 +190,41 @@ def test_an_open_window_makes_the_entries_resident_for_that_session(client, tmp_
 
 
 def test_a_builtin_application_is_disabled_and_enabled_by_its_setting(client):
-    from openprogram.programs._host.registry import builtin_application_enabled, program_tools
-    from openprogram.programs._host.runtime import Tier, _toolset_membership, get, tool_tier
-    before = {name: (get(name), set(_toolset_membership.get(name, ()))) for name in program_tools("application:browser")}
-    assert set(before) == {"web_use"}
+    from openprogram.programs._host import services as _services
+    from openprogram.programs._host.registry import builtin_application_enabled
+    assert _services.lookup("browser") is not None
 
     assert client.patch("/api/applications/browser", json={"enabled": False}).status_code == 200
-    assert not builtin_application_enabled("browser")
-    assert all(get(name) is None for name in before)
-    assert program_tools("application:browser") == []
+    try:
+        assert not builtin_application_enabled("browser")
+        assert _services.lookup("browser") is None
+        listed = {row["id"]: row for row in client.get("/api/applications").json()["builtin"]}
+        assert listed["browser"] == {
+            "id": "browser", "enabled": False, "loaded": False, "entries": [],
+            "title": "Browser", "icon": "browser",
+            "description": "The built-in web browser. The Agent uses it to read pages, fill forms and take screenshots.",
+        }
+    finally:
+        assert client.patch("/api/applications/browser", json={"enabled": True}).status_code == 200
+    assert _services.lookup("browser") is not None
     listed = {row["id"]: row for row in client.get("/api/applications").json()["builtin"]}
-    assert listed["browser"] == {
-        "id": "browser", "enabled": False, "loaded": False, "entries": [],
-        "title": "Browser", "icon": "browser",
-        "description": "The built-in web browser. The Agent uses it to read pages, fill forms and take screenshots.",
-    }
-
-    assert client.patch("/api/applications/browser", json={"enabled": True}).status_code == 200
-    for name, (tool, toolsets) in before.items():
-        assert get(name) is tool and set(_toolset_membership.get(name, ())) == toolsets
-        assert tool_tier(tool) is Tier.DEFERRED
-    listed = {row["id"]: row for row in client.get("/api/applications").json()["builtin"]}
-    assert listed["browser"]["enabled"] and listed["browser"]["entries"] == sorted(before)
+    assert listed["browser"]["enabled"] and listed["browser"]["loaded"]
 
 
 def test_a_disabled_builtin_stays_disabled_when_the_registry_loads_again(client):
+    from openprogram.programs._host import services as _services
     from openprogram.programs._host.ui import catalog
-    from openprogram.programs._host.registry import load_program_modules, program_tools, sync_builtin_application
-    from openprogram.programs._host.runtime import get
+    from openprogram.programs._host.registry import load_program_modules, sync_builtin_application
     catalog.configure("browser", enabled=False)
     try:
+        sync_builtin_application("browser")
         load_program_modules()
-        assert get("web_use") is None
+        assert _services.lookup("browser") is None
         assert catalog.builtin_settings("browser") == {"id": "browser", "enabled": False}
     finally:
         catalog.configure("browser", enabled=True)
         sync_builtin_application("browser")
-    assert program_tools("application:browser") == ["web_use"]
-
-
-def test_disabling_the_browser_withdraws_its_service_and_entry(client):
-    from openprogram.programs._host import services as _services
-    from openprogram.programs._host.runtime import get
-    assert _services.lookup("browser") is not None and get("web_use") is not None
-    assert client.patch("/api/applications/browser", json={"enabled": False}).status_code == 200
-    try:
-        assert _services.lookup("browser") is None and get("web_use") is None
-    finally:
-        assert client.patch("/api/applications/browser", json={"enabled": True}).status_code == 200
-    assert _services.lookup("browser") is not None and get("web_use") is not None
+    assert _services.lookup("browser") is not None
 
 
 def test_a_tool_cannot_be_disabled(client):

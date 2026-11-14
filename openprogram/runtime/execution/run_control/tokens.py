@@ -51,6 +51,9 @@ class CancellationToken:
             if self._retired:
                 return False
             self._event.set()
+        # What waits on the signal hears it now (``wakeups``), not at a poll.
+        from openprogram.runtime.execution.run_control.wakeups import fire
+        fire(self._event)
         return True
 
     def is_cancelled(self) -> bool:

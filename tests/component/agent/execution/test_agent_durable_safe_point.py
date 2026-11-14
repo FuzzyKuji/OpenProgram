@@ -24,7 +24,7 @@ TURN_LAUNCH_MODULE = "openprogram.interfaces.server.ws_actions.chat.turn_launch"
 
 from openprogram.runtime.execution import AttemptStore, ExecutionStore, RuntimeControlService
 from openprogram.runtime.execution.driver import DriverAck, DriverBinding, DriverRegistry
-from openprogram.runtime.execution.model import CapabilitySet, CommandStatus, ExecutionStatus
+from openprogram.runtime.execution.model import CapabilitySet, CommandKind, CommandStatus, ExecutionStatus
 from openprogram.runtime.execution.effects import EffectStatus
 
 
@@ -178,10 +178,6 @@ def public_chat(tmp_path, monkeypatch):
             return None
 
     fake_threads_started_by(monkeypatch, TURN_LAUNCH_MODULE, NoopThread)
-    monkeypatch.setattr(
-        "openprogram.runtime.conversation.workspace_alignment.get_workspace_alignment",
-        lambda _sid: {"status": "aligned"},
-    )
 
     try:
         yield session_id, execution_store, control, conversation
@@ -756,18 +752,19 @@ def test_public_cancel_uses_a_durable_exact_command_envelope(public_chat):
     )
     assert _command_payload(_command_frame(retry_ws))["status"] == CommandStatus.APPLIED.value
 
-    collision_ws = FakeWS()
+    # A stop names no version: the same command id seen at another version
+    # is the same stop, not a different request.
+    replay_ws = FakeWS()
     _run_action(
-        "execution.cancel", collision_ws,
+        "execution.cancel", replay_ws,
         {
             "action": "execution.cancel", "command_id": "cancel-envelope-1",
             "execution_id": execution.execution_id,
             "expected_version": execution.status_version + 1,
         },
     )
-    collision = _command_payload(_command_frame(collision_ws))
-    assert collision["status"] == CommandStatus.REJECTED.value
-    assert collision["rejection_code"] == "idempotency_collision"
+    assert _command_payload(_command_frame(replay_ws))["status"] == CommandStatus.APPLIED.value
+    assert len(store.list_commands(execution.execution_id, kinds=(CommandKind.CANCEL,))) == 1
 def test_stale_step_without_a_live_owner_returns_latest_snapshot_without_mutation(public_chat):
     _ws, ack, execution, store, _control = _chat_ack(public_chat)
     first_ws = FakeWS()

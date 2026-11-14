@@ -40,7 +40,9 @@
 <ul>
 <li>建在 <code translate="no">dispatcher.process_user_turn</code> 上，这是 webui 线程、子 agent 和任务运行器共用的非 HTTP 入口，工具门控、权限和持久化都共用。</li>
 <li>轮次带 <code translate="no">local_owner_authority()</code>：本机编辑器就是所有者在交互，因此 <code translate="no">approval.request</code> 可用。</li>
-<li>审批订阅 <code translate="no">question.asked</code>，用标准的执行等待命令作答，审批门、规则和“始终允许”的持久化都不变。</li>
+<li>审批让执行停在一个等待上。服务端从本次 prompt 的 <code translate="no">question.asked</code> 帧、恢复后那一轮的事件总线和执行的未决等待里拿到它，再用标准的执行等待命令作答；审批门、规则和“始终允许”的持久化都不变。</li>
+<li><code translate="no">session/prompt</code> 一直开到执行结束，所以作答之后的各轮仍属于同一次 prompt。编辑器答不了的等待直接拒绝；编辑器推不动的状态让 prompt 以错误结束。</li>
+<li>第一次 prompt 才创建对话，并把会话的 <code translate="no">cwd</code> 绑定为它的项目，和 <code translate="no">--print</code> 用的是同一种绑定，所以工具在编辑器的文件夹里运行。</li>
 </ul>
 
 <h2 id="non-goals">不做</h2>

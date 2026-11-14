@@ -104,6 +104,8 @@ class SessionsOperations:
             updated_at=updated_at,
             **extra,
         )
+        from ..branch_config import sync_active_config
+        sync_active_config(idx.meta, session_id)
         self._persist_meta(session_log, idx)
 
         # Write registry entry.
@@ -156,7 +158,7 @@ class SessionsOperations:
             with self._lock:
                 self._sessions.pop(session_id, None)
             target.parent.mkdir(parents=True, exist_ok=True)
-            current.rename(target)
+            shared.move_session_folder(current, target)
 
 
     def assign_project(self, session_id: str, project_id: str) -> None:
@@ -195,7 +197,15 @@ class SessionsOperations:
                 with self._lock:
                     self._sessions.pop(session_id, None)
                 target.parent.mkdir(parents=True, exist_ok=True)
-                current.rename(target)
+                try:
+                    shared.move_session_folder(current, target)
+                except shared.SessionFolderBusy as busy:
+                    # The binding above is what makes it the project's
+                    # conversation. Its folder stays where it is, as the
+                    # folder of one with turns does, and the location map
+                    # names it.
+                    shared._log.warning("session %s kept its folder: %s", session_id, busy)
+                    target = current
                 if project.is_default:
                     self._project_ids.pop(session_id, None)
                 else:
@@ -234,16 +244,35 @@ class SessionsOperations:
                 source = self._session_dir(session_id)
                 if not shared.session_looks_present(source):
                     raise ValueError(f"no such session: {session_id}")
-                if target.exists():
-                    raise ValueError(f"destination already exists: {target}")
-                with self._lock:
-                    self._sessions.pop(session_id, None)
-                target.parent.mkdir(parents=True, exist_ok=True)
-                source.rename(target)
-                recovery = source.parent / ".file-recovery" / session_id
-                if recovery.is_dir():
-                    (target.parent / ".file-recovery").mkdir(parents=True, exist_ok=True)
-                    recovery.rename(target.parent / ".file-recovery" / session_id)
+                # An earlier move that could neither finish nor undo left
+                # the folder at the destination with the binding on the
+                # old project. This call finishes that move.
+                resumed = source == target
+                if resumed:
+                    home = shared.target_dir_for_project(
+                        self.root_path, session_id,
+                        project_id=current.id if current is not None else None,
+                        is_default=bool(current.is_default) if current is not None else True,
+                    )
+                else:
+                    if target.exists():
+                        raise ValueError(f"destination already exists: {target}")
+                    with self._lock:
+                        self._sessions.pop(session_id, None)
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shared.move_session_folder(source, target)
+                    home = source
+                recovery = home.parent / ".file-recovery" / session_id
+                recovery_target = target.parent / ".file-recovery" / session_id
+                if recovery != recovery_target and recovery.is_dir():
+                    recovery_target.parent.mkdir(parents=True, exist_ok=True)
+                    try:
+                        self._move_recovery_tree(recovery, recovery_target)
+                    except OSError:
+                        if not resumed:
+                            # Both folders move or neither: put the conversation back.
+                            self._return_session_folder(session_id, target, source, recovery)
+                        raise
                 if project.is_default:
                     self._project_ids.pop(session_id, None)
                 else:
@@ -256,6 +285,41 @@ class SessionsOperations:
             history.append(current.id)
         self.update_session(session_id, project_id=project.id, project_history=history)
         return {"from_project_id": current.id if current else None, "project_id": project.id, "moved": True}
+
+
+    @staticmethod
+    def _move_recovery_tree(recovery: shared.Path, target: shared.Path) -> None:
+        """Rename a file-recovery tree beside its conversation.
+
+        Turns taken while the tree was stranded have started a tree at the
+        destination; the stranded turns then move in one by one beside them.
+        """
+        if not target.exists():
+            shared.move_session_folder(recovery, target)
+            return
+        for entry in sorted(recovery.iterdir()):
+            if not (target / entry.name).exists():
+                shared.move_session_folder(entry, target / entry.name)
+        try:
+            recovery.rmdir()
+        except OSError:
+            pass
+
+
+    def _return_session_folder(self, session_id: str, moved: shared.Path, home: shared.Path,
+                               recovery: shared.Path) -> None:
+        """Undo a conversation's move after its file-recovery tree stayed behind."""
+        try:
+            shared.move_session_folder(moved, home)
+        except OSError as error:
+            # It cannot go back either. Record where it is so it stays
+            # readable, and say where each half is.
+            self._record_location(session_id, moved)
+            raise shared.SessionFolderBusy(
+                f"the conversation is now at {moved}, but its file-recovery folder {recovery} is in use "
+                "by another program and stayed behind; close what has files in it open, then move the "
+                "conversation again"
+            ) from error
 
 
     def is_created(self, session_id: str) -> bool:
@@ -273,24 +337,46 @@ class SessionsOperations:
         return bool(shared.SessionLog(self._session_dir(session_id)).list_history())
 
 
+    def ensure_branch_config(self, session_id: str) -> shared.Optional[dict[str, shared.Any]]:
+        """Materialize legacy settings once before a client binds a branch write."""
+        pair = self._open(session_id)
+        if pair is None:
+            return None
+        session_log, idx = pair
+        from ..branch_config import sync_active_config
+        with self._head_file_lock(session_log):
+            meta = session_log.read_meta()
+            active = meta.get("active_branch_id")
+            if not active or "config" not in (meta.get("branch_refs") or {}).get(active, {}):
+                sync_active_config(meta, session_id)
+                with idx._persist_lock:
+                    with idx._lock:
+                        idx.meta = meta
+                        idx.head_id = meta.get("head_id")
+                    session_log.write_meta(meta)
+        return self.get_session(session_id)
+
+
     def update_session(self, session_id: str, **fields: shared.Any) -> None:
         pair = self._open(session_id, create_if_missing=True)
         if pair is None:
             return
         session_log, idx = pair
+        from ..branch_config import BRANCH_CONFIG_FIELDS, BRANCH_UNSET, check_branch, sync_active_config, advance_branch
+        expected_branch = fields.pop("expected_branch_id", BRANCH_UNSET)
         with self._head_file_lock(session_log):
-            # head_id needs special routing because it's also the index's
-            # ``head_id`` field.
-            if "head_id" in fields and fields["head_id"] is not None:
-                idx.set_head(fields.pop("head_id"))
-            # Drop Nones so we don't clobber existing fields with NULL.
+            meta = session_log.read_meta()
+            check_branch(meta, expected_branch)
             clean = {k: v for k, v in fields.items() if v is not None}
-            if clean:
-                idx.set_meta(**clean)
+            if "head_id" in clean:
+                advance_branch(meta, session_id, clean.pop("head_id"), idx.nodes_by_id)
+            meta.update(clean)
+            if any(key in clean for key in BRANCH_CONFIG_FIELDS):
+                sync_active_config(meta, session_id)
             with idx._persist_lock:
                 with idx._lock:
-                    meta = dict(idx.meta)
-                    meta["head_id"] = idx.head_id
+                    idx.meta = meta
+                    idx.head_id = meta.get("head_id")
                 session_log.write_meta(meta)
         # Sync registry.
         index_fields = {k: v for k, v in clean.items()
@@ -298,6 +384,46 @@ class SessionsOperations:
         if index_fields:
             self._update_index_entry(session_id, **index_fields)
             self._save_index()
+
+
+    def update_branch_config(
+        self,
+        session_id: str,
+        branch_id: shared.Optional[str],
+        values: dict[str, shared.Any],
+        **guards: shared.Any,
+    ) -> dict[str, shared.Any] | None:
+        """Write one branch's settings under the session meta lock.
+
+        ``branch_id`` names the branch whatever is selected; ``None`` is the
+        selected one. A ``None`` value puts that setting back to inherit.
+        Raises ``BranchConfigConflict`` (``branch_gone``) for a branch with
+        no record, or (``branch_changed``) when an ``expected_branch_id``
+        guard no longer names the selected branch. Returns the branch's
+        settings after the write.
+        """
+        # A draft's first setting (a model pick) creates its repo, as
+        # ``update_session`` does.
+        pair = self._open(session_id, create_if_missing=True)
+        if pair is None:
+            return None
+        session_log, idx = pair
+        from ..branch_config import BRANCH_UNSET, check_branch, config_for_branch, write_branch_config
+        with self._head_file_lock(session_log):
+            meta = session_log.read_meta()
+            check_branch(meta, guards.get("expected_branch_id", BRANCH_UNSET))
+            selected = write_branch_config(meta, session_id, branch_id, values)
+            with idx._persist_lock:
+                with idx._lock:
+                    idx.meta = meta
+                    idx.head_id = meta.get("head_id")
+                session_log.write_meta(meta)
+        if selected:
+            index_fields = {k: v for k, v in values.items() if k in self._INDEX_FIELDS and v is not None}
+            if index_fields:
+                self._update_index_entry(session_id, **index_fields)
+                self._save_index()
+        return config_for_branch(meta, meta.get("active_branch_id") if selected else branch_id)
 
 
     def compare_and_set_session_dict(
@@ -320,6 +446,7 @@ class SessionsOperations:
         session_id: str,
         field: str,
         update: shared.Callable[[dict[str, shared.Any]], dict[str, shared.Any] | None],
+        **guards: shared.Any,
     ) -> dict[str, shared.Any] | None:
         """Read and transform a dictionary under the session's write lock.
 
@@ -333,11 +460,26 @@ class SessionsOperations:
         with self._head_file_lock(session_log):
             with idx._persist_lock:
                 meta = session_log.read_meta()
-                current = meta.get(field)
+                from ..branch_config import (
+                    BRANCH_CONFIG_FIELDS, BRANCH_UNSET, check_branch, config_for_branch,
+                    sync_active_config, write_branch_config,
+                )
+                check_branch(meta, guards.get("expected_branch_id", BRANCH_UNSET))
+                # ``branch_id`` names the branch a branch setting belongs to,
+                # whatever is selected; omitted is the selected one.
+                branch_id = guards.get("branch_id")
+                named = (field in BRANCH_CONFIG_FIELDS and branch_id
+                         and branch_id != meta.get("active_branch_id"))
+                current = (config_for_branch(meta, branch_id) if named else meta).get(field)
                 value = update(current if isinstance(current, dict) else {})
                 if value is None:
                     return None
-                meta[field] = dict(value)
+                if named:
+                    write_branch_config(meta, session_id, branch_id, {field: dict(value)})
+                else:
+                    meta[field] = dict(value)
+                    if field in BRANCH_CONFIG_FIELDS:
+                        sync_active_config(meta, session_id)
                 with idx._lock:
                     idx.meta.clear()
                     idx.meta.update(meta)
@@ -368,6 +510,9 @@ class SessionsOperations:
                 if field not in meta or not when(meta):
                     return False
                 del meta[field]
+                from ..branch_config import BRANCH_CONFIG_FIELDS, sync_active_config
+                if field in BRANCH_CONFIG_FIELDS:
+                    sync_active_config(meta, session_id)
                 with idx._lock:
                     idx.meta.clear()
                     idx.meta.update(meta)

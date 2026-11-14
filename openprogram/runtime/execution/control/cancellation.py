@@ -229,28 +229,31 @@ class CancellationOperations:
         *,
         command_id: str,
         execution_id: str,
-        expected_version: int,
         actor: Mapping[str, Any],
         reason_code: str,
+        expected_version: int | None = None,
     ) -> ControlDispatch:
+        """Stop ``execution_id``, whichever state it moved to.
+
+        The one stop every surface takes. A stop names its execution, not
+        a version; ``expected_version`` is the version the caller last saw,
+        logged when it moved and never compared. The answer depends only on
+        the state: a running execution moves to ``cancelling`` and its
+        owner is told; one already ``cancelling`` returns the stop in force
+        and tells its owner if no earlier delivery reached it
+        (:meth:`deliver_pending_cancel`); one that has ended returns its
+        final state with ``already_terminal``. What the execution waits on
+        is the caller's to stop (``run_control.stop_with_descendants``).
+        """
         current = self.executions.get_execution(execution_id)
         if current is None:
             raise ExecutionConflict("not_found", f"execution not found: {execution_id}")
-        prepared_before_accept = False
-        terminal_candidate = (
-            current.status is ExecutionStatus.QUEUED
-            and current.current_attempt_id is None
-            and not self.effects.list_unresolved(execution_id)
-        )
-        if terminal_candidate and self._terminal_preparer is not None:
-            try:
-                prepared = self._terminal_preparer(current, command_id)
-                if prepared is False:
-                    raise RuntimeError("terminal dispatch barrier unavailable")
-            except Exception as exc:
-                self._record_terminal_recovery(current, command_id)
-                raise ProjectionRecoveryRequired(execution_id) from exc
-            prepared_before_accept = True
+        if expected_version is not None and expected_version != current.status_version:
+            _log.info(
+                "cancel.version_moved execution=%s seen=%s current=%s",
+                execution_id, expected_version, current.status_version,
+            )
+
         def close_waits(connection, _execution) -> None:
             from ..waits import DurableWaitStore
 
@@ -258,28 +261,66 @@ class CancellationOperations:
                 connection, execution_id
             )
 
-        try:
-            command, execution, duplicate = self.executions.accept_command_with_transition(
-                command_id=command_id,
-                execution_id=execution_id,
-                expected_version=expected_version,
-                kind=CommandKind.CANCEL,
-                target=ExecutionStatus.CANCELLING,
-                payload={"reason_code": reason_code},
-                actor=actor,
-                reason_code=reason_code,
-                supersede_kinds=_CANCEL_SUPERSEDES,
-                supersede_code="superseded_by_cancel",
-                after_transition=close_waits,
-            )
-        except Exception as exc:
-            if prepared_before_accept:
+        accepted = None
+        terminal_candidate = (
+            current.status is ExecutionStatus.QUEUED
+            and current.current_attempt_id is None
+            and not self.effects.list_unresolved(execution_id)
+            and self.executions.get_command(command_id) is None
+        )
+        if terminal_candidate and self._terminal_preparer is not None:
+            # A queued Job ends at once, so its dispatch is fenced first, for
+            # this exact snapshot. Should the snapshot move before the stop
+            # is written, the fence is handed to recovery, which settles it.
+            try:
+                prepared = self._terminal_preparer(current, command_id)
+                if prepared is False:
+                    raise RuntimeError("terminal dispatch barrier unavailable")
+            except Exception as exc:
                 self._record_terminal_recovery(current, command_id)
                 raise ProjectionRecoveryRequired(execution_id) from exc
-            raise
-        if duplicate:
+            try:
+                accepted = self.executions.accept_cancel(
+                    command_id=command_id, execution_id=execution_id,
+                    actor=actor, reason_code=reason_code,
+                    supersede_kinds=_CANCEL_SUPERSEDES,
+                    after_transition=close_waits,
+                    at_version=current.status_version,
+                )
+            except Exception as exc:
+                self._record_terminal_recovery(current, command_id)
+                raise ProjectionRecoveryRequired(execution_id) from exc
+        if accepted is None:
+            accepted = self.executions.accept_cancel(
+                command_id=command_id, execution_id=execution_id,
+                actor=actor, reason_code=reason_code,
+                supersede_kinds=_CANCEL_SUPERSEDES,
+                after_transition=close_waits,
+            )
+        command, execution, outcome = accepted
+        if outcome == "terminal":
             return ControlDispatch(
-                command=command, execution=execution, delivered=False
+                command=None, execution=execution, delivered=False,
+                issue_code="already_terminal",
+            )
+        if outcome == "replayed" and execution.status in TERMINAL_EXECUTION_STATUSES:
+            # The same stop again (an internal stop reuses its id), after
+            # the execution ended: this call ended nothing.
+            self.reconcile_terminal_cancel(execution)
+            return ControlDispatch(
+                command=command, execution=execution, delivered=False,
+                issue_code="already_terminal",
+            )
+        if outcome != "accepted":
+            # The stop in force reaches its current owner unless that owner
+            # already took it.
+            redelivered = await self.deliver_pending_cancel(
+                execution_id=execution_id,
+                attempt_id=execution.current_attempt_id,
+                generation=execution.owner_lease.get("generation"),
+            )
+            return redelivered or ControlDispatch(
+                command=command, execution=execution, delivered=False,
             )
         if execution.current_attempt_id is None:
             execution = self.executions.transition_execution(
@@ -325,10 +366,17 @@ class CancellationOperations:
         self,
         *,
         execution_id: str,
-        attempt_id: str,
-        generation: int,
+        attempt_id: str | None,
+        generation: int | None,
     ) -> ControlDispatch | None:
-        """Deliver a persisted cancel command to this exact local owner."""
+        """Deliver a persisted cancel command to this exact local owner.
+
+        Delivery happens once per owner: an owner that took the command
+        answers ``already_delivered`` without being called (its handle may
+        be released while its ending is still being written). A delivery
+        that did not reach it, and an owner that took over since (recovery
+        forgets the earlier delivery), get the command now.
+        """
         execution = self.executions.get_execution(execution_id)
         if execution is None:
             return None

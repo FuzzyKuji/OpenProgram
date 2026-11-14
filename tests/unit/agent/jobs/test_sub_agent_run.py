@@ -303,3 +303,17 @@ def test_a_sub_agent_inherits_its_parents_mode_and_rules(parent_store, fake_disp
         reset_turn_request(token)
     last = fake_dispatcher["calls"][-1]
     assert (last["permission_mode"], last["permission_rules"]) == ("ask", rules)
+
+
+def test_a_sub_agent_stopped_before_it_starts_reports_the_stop(parent_store, fake_dispatcher, monkeypatch):
+    """A stop that wins the race with the spawn's activation is a stop, not a crash."""
+    from openprogram.runtime.conversation.production_driver.shared import STOPPED_BEFORE_START
+    from openprogram.runtime.conversation.sub_agent_run import _execute_agent_turn
+    from tests.support.stop_before_start import stop_every_turn_before_it_starts
+
+    stopped = stop_every_turn_before_it_starts(monkeypatch)
+    out = _execute_agent_turn(session_id="p1", prompt="go", agent_id="main", branch_from="a1")
+
+    assert len(stopped) == 1
+    assert fake_dispatcher["calls"] == []
+    assert (out.failed, out.error, out.head_id) == (True, STOPPED_BEFORE_START, None)

@@ -7,7 +7,6 @@ import json
 import logging
 import os
 import sqlite3
-import threading
 import time
 import uuid
 from pathlib import Path
@@ -27,7 +26,7 @@ _FROZEN_SQL = (
     "'closed','unavailable','restoring','restore_failed','superseded'"
 )
 # A superseded Page has handed its associations to its successor; it is kept
-# this long only so a late write from the old connection is fenced, not misrouted.
+# this long only so a late write from the old connection is refused, not misrouted.
 SUPERSEDED_RETENTION_SECONDS = 24 * 3600
 
 
@@ -43,24 +42,6 @@ def _forget_old_superseded(db: sqlite3.Connection, now: float) -> None:
 def resource_db_path() -> Path:
     from openprogram.state.paths import get_state_dir
     return get_state_dir() / "session-resources.db"
-
-
-def writes_fenced(page_key: str) -> bool:
-    """Compatibility for older callers: pages have no independent write restriction."""
-    return False
-
-
-def last_input_seq(page_key: str) -> int:
-    return 0
-
-
-def fence_page_writes(page_key: str, *, input_seq: int | None = None) -> bool:
-    """Legacy no-op. Execution dispatch guards own pause and cancellation."""
-    return False
-
-
-def clear_page_write_fence(page_key: str) -> None:
-    return None
 
 
 class BrowserResourceStore:
@@ -89,15 +70,28 @@ class BrowserResourceStore:
             db.execute(
                 """CREATE TABLE IF NOT EXISTS browser_resource_control (
                 resource_id TEXT PRIMARY KEY, control_state TEXT NOT NULL,
-                pause_command_id TEXT, pause_execution_id TEXT,
-                last_input_seq INTEGER NOT NULL)"""
+                pause_command_id TEXT, pause_execution_id TEXT)"""
             )
+            if any(
+                column[1] == "last_input_seq"
+                for column in db.execute("PRAGMA table_info(browser_resource_control)")
+            ):
+                db.execute("ALTER TABLE browser_resource_control DROP COLUMN last_input_seq")
             db.execute(
                 """CREATE TABLE IF NOT EXISTS browser_tabs_opened (
                 window_id TEXT NOT NULL, tab_id TEXT NOT NULL,
                 conversation_session_id TEXT NOT NULL, opened_at REAL NOT NULL,
                 PRIMARY KEY (window_id, tab_id))"""
             )
+            if not any(column[1] == "opened_in" for column in db.execute("PRAGMA table_info(browser_tabs_opened)")):
+                # The run that opened the tab: a run that starts clean closes its own when it ends.
+                try:
+                    db.execute("ALTER TABLE browser_tabs_opened ADD COLUMN opened_in TEXT NOT NULL DEFAULT ''")
+                except sqlite3.OperationalError:
+                    # Another process starting at the same moment added it first.
+                    if not any(column[1] == "opened_in"
+                               for column in db.execute("PRAGMA table_info(browser_tabs_opened)")):
+                        raise
             db.execute(
                 "CREATE INDEX IF NOT EXISTS browser_assoc_conversation "
                 "ON browser_resource_associations(conversation_session_id)"
@@ -280,16 +274,33 @@ class BrowserResourceStore:
                 (resource_id,),
             ).fetchone() is None:
                 db.execute(
-                    "INSERT INTO browser_resource_control VALUES (?,?,?,?,?)",
-                    (resource_id, "idle" if live else "closed", None, None, 0),
+                    "INSERT INTO browser_resource_control VALUES (?,?,?,?)",
+                    (resource_id, "idle" if live else "closed", None, None),
                 )
         return assoc_id
 
-    def note_tab_opened(self, window_id: str, tab_id: str, conversation: str) -> None:
-        """Remember that a conversation's agent opened this tab, across restarts."""
+    def note_tab_opened(self, window_id: str, tab_id: str, conversation: str, execution: str = "") -> None:
+        """Remember that a conversation's agent opened this tab, and in which run, across restarts."""
         with self.connect() as db:
-            db.execute("INSERT OR REPLACE INTO browser_tabs_opened VALUES (?, ?, ?, ?)",
-                       (window_id, tab_id, conversation, time.time()))
+            db.execute("INSERT OR REPLACE INTO browser_tabs_opened "
+                       "(window_id, tab_id, conversation_session_id, opened_at, opened_in) VALUES (?, ?, ?, ?, ?)",
+                       (window_id, tab_id, conversation, time.time(), execution or ""))
+
+    def tabs_opened_in(self, execution: str) -> set[tuple[str, str]]:
+        """The tabs one run opened."""
+        if not execution:
+            return set()
+        with self.connect() as db:
+            rows = db.execute("SELECT window_id, tab_id FROM browser_tabs_opened WHERE opened_in=?",
+                              (execution,)).fetchall()
+        return {(row["window_id"], row["tab_id"]) for row in rows}
+
+    def opened_tab_times(self, conversation: str) -> dict[tuple[str, str], float]:
+        """When each of a conversation's tabs was opened."""
+        with self.connect() as db:
+            rows = db.execute("SELECT window_id, tab_id, opened_at FROM browser_tabs_opened "
+                              "WHERE conversation_session_id=?", (conversation,)).fetchall()
+        return {(row["window_id"], row["tab_id"]): float(row["opened_at"]) for row in rows}
 
     def tabs_opened_by(self, conversation: str) -> set[tuple[str, str]]:
         with self.connect() as db:
@@ -363,7 +374,6 @@ class BrowserResourceStore:
                 WHERE resource_id=? AND control_state != 'closed'""",
                 (resource_id,),
             )
-        clear_page_write_fence(resource_id)
 
     def mark_window_restorable(self, window_id: str, lifecycle: str) -> list[str]:
         if not window_id or lifecycle not in {"restoring", "restore_failed"}:
@@ -397,7 +407,6 @@ class BrowserResourceStore:
                 WHERE resource_id=?""",
                 (resource_id,),
             )
-        clear_page_write_fence(resource_id)
 
     def mark_restore_failed(self, resource_id: str) -> None:
         with self.connect() as db:
@@ -413,7 +422,6 @@ class BrowserResourceStore:
                 WHERE resource_id=?""",
                 (resource_id,),
             )
-        clear_page_write_fence(resource_id)
 
     def adopt_successor(
         self,
@@ -536,24 +544,12 @@ class BrowserResourceStore:
                     [(now, old["resource_id"]) for old in preds],
                 )
                 _forget_old_superseded(db, now)
-            existing_control = db.execute(
-                "SELECT last_input_seq FROM browser_resource_control WHERE resource_id=?",
+            db.execute(
+                """INSERT INTO browser_resource_control VALUES (?,'idle',NULL,NULL)
+                ON CONFLICT(resource_id) DO UPDATE SET control_state='idle',
+                pause_command_id=NULL, pause_execution_id=NULL""",
                 (successor_id,),
-            ).fetchone()
-            last_seq = int((existing_control["last_input_seq"] if existing_control else 0) or 0)
-            if existing_control is None:
-                db.execute(
-                    "INSERT INTO browser_resource_control VALUES (?,?,?,?,?)",
-                    (successor_id, "idle", None, None, last_seq),
-                )
-            else:
-                db.execute(
-                    """UPDATE browser_resource_control SET control_state='idle',
-                    pause_command_id=NULL, pause_execution_id=NULL,
-                    last_input_seq=? WHERE resource_id=?""",
-                    (last_seq, successor_id),
-                )
-        clear_page_write_fence(successor_id)
+            )
         return successor_id
 
     def mark_closed(self, resource_id: str) -> None:
@@ -569,7 +565,6 @@ class BrowserResourceStore:
                 WHERE resource_id=?""",
                 (resource_id,),
             )
-        clear_page_write_fence(resource_id)
 
     def bump_sequence(self, resource_id: str) -> int:
         with self.connect() as db:
@@ -586,7 +581,7 @@ class BrowserResourceStore:
 
     def set_control_state(
         self, resource_id: str, state: str, *, command_id: str | None = None,
-        execution_id: str | None = None, input_seq: int | None = None,
+        execution_id: str | None = None,
         bump: bool = True, clear_pause: bool = False,
     ) -> None:
         with self.connect() as db:
@@ -598,8 +593,8 @@ class BrowserResourceStore:
             pause_exec = None if clear_pause else execution_id
             if row is None:
                 db.execute(
-                    "INSERT INTO browser_resource_control VALUES (?,?,?,?,?)",
-                    (resource_id, state, pause_id, pause_exec, int(input_seq or 0)),
+                    "INSERT INTO browser_resource_control VALUES (?,?,?,?)",
+                    (resource_id, state, pause_id, pause_exec),
                 )
                 changed = True
             else:
@@ -607,19 +602,17 @@ class BrowserResourceStore:
                 if clear_pause:
                     db.execute(
                         """UPDATE browser_resource_control SET control_state=?,
-                        pause_command_id=NULL, pause_execution_id=NULL,
-                        last_input_seq=CASE WHEN ? IS NULL THEN last_input_seq ELSE ? END
+                        pause_command_id=NULL, pause_execution_id=NULL
                         WHERE resource_id=?""",
-                        (state, input_seq, int(input_seq or 0), resource_id),
+                        (state, resource_id),
                     )
                 else:
                     db.execute(
                         """UPDATE browser_resource_control SET control_state=?,
                         pause_command_id=COALESCE(?, pause_command_id),
-                        pause_execution_id=COALESCE(?, pause_execution_id),
-                        last_input_seq=CASE WHEN ? IS NULL THEN last_input_seq ELSE ? END
+                        pause_execution_id=COALESCE(?, pause_execution_id)
                         WHERE resource_id=?""",
-                        (state, command_id, execution_id, input_seq, int(input_seq or 0), resource_id),
+                        (state, command_id, execution_id, resource_id),
                     )
         if bump and changed:
             self.bump_sequence(resource_id)
@@ -800,7 +793,6 @@ def _projected_anchor(assoc, conversation_session_id, executions_by_id, parents,
 def _public_row(resource, assoc, control, conversation_session_id, branch_id, branch_name, execution=None):
     live = bool(resource.get("live"))
     lifecycle = resource.get("lifecycle") or "unavailable"
-    fenced = writes_fenced(resource["resource_id"])
     stored_state = control.get("control_state") or "idle"
     if lifecycle == "closed":
         control_state = "closed"
@@ -823,10 +815,7 @@ def _public_row(resource, assoc, control, conversation_session_id, branch_id, br
     elif stored_state in {"yielding", "stop_unconfirmed"}:
         control_state = stored_state
         status = "in_use"
-    elif fenced:
-        control_state = "yielding"
-        status = "in_use"
-    elif execution is not None and not _active_execution(execution) and not fenced:
+    elif execution is not None and not _active_execution(execution):
         control_state = "idle"
         status = "open"
     elif stored_state == "active":
@@ -1135,18 +1124,6 @@ def _current_attribution():
     }
 
 
-def attribute_operating_page(page_key: str) -> None:
-    """Retain the current invocation's association. Operating/active is set
-    only from an admitted act dispatch receipt. Does not publish native
-    window/tab or title/URL."""
-    if not page_key:
-        return
-    attribution = _current_attribution()
-    if not attribution.get("execution_id") and not attribution.get("session_id"):
-        return
-    BrowserResourceStore().retain(page_key=page_key, live=True, **attribution)
-
-
 def publish_bound_page(
     page_key: str,
     *,
@@ -1357,26 +1334,6 @@ def emit_browser_resource(row: Mapping[str, Any], *, page_key: str) -> None:
             _log.warning("browser.resource emit failed")
 
 
-_opened_pages_lock = threading.Lock()
-_opened_pages: dict[str, list[dict[str, Any]]] = {}
-
-
-def note_opened_page(opener_keys: list[str], page: Mapping[str, Any]) -> None:
-    """Remember a Page another Page opened, for that Page's next tool result."""
-    with _opened_pages_lock:
-        for key in opener_keys:
-            pending = _opened_pages.setdefault(key, [])
-            pending.append(dict(page))
-            del pending[:-8]
-
-
-def take_opened_pages(page_key: str) -> list[dict[str, Any]]:
-    if not page_key:
-        return []
-    with _opened_pages_lock:
-        return _opened_pages.pop(page_key, [])
-
-
 def adopt_popup_page(
     *, page_key: str, opener_keys: list[str], window_id: str, tab_id: str,
     title: str, target: str, connection_generation: int,
@@ -1423,7 +1380,7 @@ def project_page_resource_rows(page_key: str) -> list[dict[str, Any]]:
     if resource is None:
         return []
     control = {key: resource.get(key) for key in (
-        "control_state", "pause_command_id", "pause_execution_id", "last_input_seq",
+        "control_state", "pause_command_id", "pause_execution_id",
     )}
     rows = []
     for assoc in store.associations_for_page(page_key):
@@ -1499,17 +1456,10 @@ def _inflight_pause_command(resource: Mapping[str, Any] | None) -> str | None:
     return None
 
 
-def _page_admission_state(page_key: str) -> tuple[bool, bool]:
-    """Return (has_live_write_lease, has_inflight_primitive) for one Page."""
-    from openprogram.programs.applications.browser.web_use.runtime import get_registry
-    registry = get_registry()
-    with registry._lock:
-        session_id = registry._page_leases.get(page_key, "")
-        session = registry._sessions.get(session_id)
-        if session is None or session.closed or session.closing:
-            return False, False
-        inflight = int(getattr(session, "inflight_ops", 0) or 0) > 0
-        return True, inflight
+def _page_inflight(page_key: str) -> bool:
+    """Whether an agent's action is running on the Page now."""
+    from openprogram.programs.applications.browser import tabs
+    return tabs.acting_on(page_key)
 
 
 def _unresolved_effects(execution_id: str) -> tuple[bool, bool]:
@@ -1529,13 +1479,12 @@ def reconcile_resource_control(
     store: BrowserResourceStore | None = None,
     executions_by_id: Mapping[str, Any] | None = None,
 ) -> None:
-    """Persist GET/resume control_state from Runtime + lease/effect checks.
+    """Persist GET/resume control_state from Runtime and effect checks.
 
     Sequence bumps only when the stored state actually changes. Paused is
     stored only after Runtime paused and unresolved-effect lookup succeeds
     with an empty set. A terminal owner becomes idle only when there is no
-    live write lease, no inflight primitive, and no unresolved/unknown
-    effects. Failed effect lookup is never treated as a clean release.
+    action in flight and no unresolved/unknown effects. Failed effect lookup is never treated as a clean release.
     """
     if not resource_id:
         return
@@ -1548,12 +1497,11 @@ def reconcile_resource_control(
     }:
         return
     stored = resource.get("control_state") or "idle"
-    fenced = writes_fenced(resource_id)
     known = dict(executions_by_id or {})
     live_owners = []
     terminal = []
     missing_owner = False
-    for execution_id in _lease_execution_ids(resource_id):
+    for execution_id in _controlling_execution_ids(resource_id):
         execution = known.get(execution_id)
         if execution is None:
             try:
@@ -1570,12 +1518,11 @@ def reconcile_resource_control(
         else:
             terminal.append(execution)
     isolation_failed = False
-    live_lease = inflight = False
     try:
-        live_lease, inflight = _page_admission_state(resource_id)
+        inflight = _page_inflight(resource_id)
     except Exception:
         isolation_failed = True
-        live_lease = inflight = True
+        inflight = True
     unresolved = False
     effects_unknown = False
     for execution in (*live_owners, *terminal):
@@ -1587,14 +1534,12 @@ def reconcile_resource_control(
     runtime_paused = any(_status_value(item) == "paused" for item in live_owners)
     runtime_wait_open = any(_wait_open_paused(item) for item in live_owners)
     runtime_pausing = any(_status_value(item) == "pausing" for item in live_owners)
-    runtime_running = any(_status_value(item) == "running" for item in live_owners)
     target = stored
-    clear_fence = False
     clear_pause = False
     if runtime_wait_open:
         target = "waiting"
         clear_pause = True
-    elif runtime_pausing or (fenced and runtime_running):
+    elif runtime_pausing:
         target = "yielding"
     elif runtime_paused and not unresolved and not effects_unknown:
         target = "paused"
@@ -1602,55 +1547,37 @@ def reconcile_resource_control(
         target = "stop_unconfirmed"
     elif runtime_paused and unresolved:
         target = "yielding"
-    elif (unresolved or effects_unknown) and (
-        fenced or stored in {"yielding", "paused", "stop_unconfirmed"}
-    ):
+    elif (unresolved or effects_unknown) and stored in {
+        "yielding", "paused", "stop_unconfirmed",
+    }:
         target = "stop_unconfirmed"
-    elif missing_owner and (
-        fenced or stored in {"yielding", "paused", "stop_unconfirmed"}
-    ):
+    elif missing_owner and stored in {"yielding", "paused", "stop_unconfirmed"}:
         target = "stop_unconfirmed" if stored == "paused" else (
             stored if stored in {"yielding", "stop_unconfirmed"} else "yielding"
         )
     elif (
         not live_owners
-        and not live_lease
         and not inflight
         and not unresolved
         and not effects_unknown
         and not isolation_failed
         and not missing_owner
-        and (fenced or stored in {"yielding", "paused", "stop_unconfirmed", "active"})
+        and stored in {"yielding", "paused", "stop_unconfirmed", "active"}
     ):
         target = "idle"
-        clear_fence = True
         clear_pause = True
     if (
         target == stored
-        and not (clear_fence and fenced)
         and not (clear_pause and resource.get("pause_command_id"))
     ):
         return
     store.set_control_state(
         resource_id, target, clear_pause=clear_pause, bump=(target != stored),
     )
-    if clear_fence:
-        clear_page_write_fence(resource_id)
 
 
-def _lease_execution_ids(resource_id: str) -> list[str]:
+def _controlling_execution_ids(resource_id: str) -> list[str]:
     ids = []
-    try:
-        from openprogram.programs.applications.browser.web_use.runtime import get_registry
-        registry = get_registry()
-        with registry._lock:
-            for session in registry._sessions.values():
-                if session.page_key == resource_id and not session.closed and not session.closing:
-                    execution_id = (session.state or {}).get("execution_id")
-                    if execution_id:
-                        ids.append(str(execution_id))
-    except Exception:
-        _log.debug("browser lease registry lookup failed resource_id=%s", resource_id, exc_info=True)
     try:
         resource = BrowserResourceStore().get_resource(resource_id)
         controller = (resource or {}).get("pause_execution_id")
@@ -1710,7 +1637,7 @@ async def request_page_pause(
         command_id = pending
     executions = default_store()
     last = None
-    owner_ids = _lease_execution_ids(resource_id)
+    owner_ids = _controlling_execution_ids(resource_id)
     if not owner_ids:
         owner_ids = [
             assoc.get("execution_id") for assoc in store.associations_for_page(resource_id)
@@ -1755,7 +1682,7 @@ def page_keys_for_socket_tab(ws, window_id: str, tab_id: str) -> list[str]:
 
     Ownership is the registered desktop window on this socket. Unregistered
     or foreign sockets never consult persisted rows. Closed/unavailable
-    records do not grant a write lease.
+    records grant nothing.
     """
     from openprogram.host.resources import desktop_link
     live = desktop_link.socket_tab_page_keys(ws, window_id, tab_id)
@@ -1787,8 +1714,3 @@ def page_keys_for_socket_tab(ws, window_id: str, tab_id: str) -> list[str]:
         _log.debug("browser page key projection unavailable window_id=%s tab_id=%s",
                    window_id, tab_id, exc_info=True)
     return list(dict.fromkeys(key for key in keys if key))
-
-
-async def handle_human_page_input(*, ws, window_id: str, tab_id: str, input_seq: int, kind: str = "pointer") -> None:
-    """Ignore legacy desktop page-input messages; only task controls pause execution."""
-    return None

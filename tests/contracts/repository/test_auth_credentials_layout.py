@@ -34,7 +34,8 @@ def test_repository_does_not_import_the_removed_credential_files_package() -> No
         if relative == "tests/contracts/repository/test_auth_credentials_layout.py":
             continue
         path = ROOT / relative
-        if path.suffix != ".py":
+        # A tracked file deleted in the working tree has nothing left to import.
+        if path.suffix != ".py" or not path.is_file():
             continue
         text = path.read_text(encoding="utf-8")
         if (

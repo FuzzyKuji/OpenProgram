@@ -29,6 +29,8 @@ TIMING_ONLY = {"execution.updated", "execution.command.updated", "running_task",
 # Numbers this large are clock readings: timestamps and run sequence numbers.
 CLOCK_READING = 1_000_000_000
 GENERATED_ID = re.compile(r"(?<![0-9a-zA-Z])[0-9a-f]{12,32}(?![0-9a-zA-Z])")
+# How long a stopped call ran (``stop_reasons``): a clock reading too.
+STOPPED_AFTER = re.compile(r"(?<=\bafter )\d+\.\d+s\b")
 READ_REPLIES = {"session_loaded", "session_history_page"}
 # The parts of a read the client draws from; the graph's order is a race.
 READ_FIELDS = ("turns", "window", "head_id", "run_active")
@@ -54,17 +56,22 @@ def frame_kinds(timeline: list[dict]) -> set[tuple]:
 
 # Set by the machine or by earlier tests in the process, and read by no transcript code.
 UNRECORDED_FIELDS = {"clientRequestId", "client_request_id", "worker_id", "revision", "memory_policy"}
+# How long an agent ran (``agent_result`` usage on its attach card): a clock reading.
+ELAPSED_FIELDS = {"duration_s"}
 
 
 def _comparable(value, ids: dict[str, str]):
     """``value`` with clock readings and generated ids replaced by stable stand-ins."""
     if isinstance(value, dict):
         return {key: json.dumps(_comparable(json.loads(item), ids), sort_keys=True)
-                if key == "extra" and isinstance(item, str) and item else _comparable(item, ids)
+                if key == "extra" and isinstance(item, str) and item
+                else "<seconds>" if key in ELAPSED_FIELDS and isinstance(item, (int, float))
+                else _comparable(item, ids)
                 for key, item in value.items() if key not in UNRECORDED_FIELDS}
     if isinstance(value, list):
         return [_comparable(item, ids) for item in value]
     if isinstance(value, str):
+        value = STOPPED_AFTER.sub("<seconds>", value)
         return GENERATED_ID.sub(lambda match: ids.setdefault(match.group(0), f"<id {len(ids)}>"), value)
     if isinstance(value, (int, float)) and not isinstance(value, bool) and value > CLOCK_READING:
         return "<clock>"
@@ -207,3 +214,59 @@ def test_rows_write_to_a_real_store(tmp_path: Path) -> None:
         rows.turn("a")
         rows.finish()
         assert chat.sessions.get_session(chat.session_id)["head_id"] == "a_reply"
+
+
+def test_recording_is_independent_of_materialized_default_store_alias(tmp_path, monkeypatch):
+    """A prior fixture's lazy export must not redirect error folding elsewhere."""
+    import openprogram.state.store as public_store
+    from openprogram.state.store.session import session_store
+
+    stale = session_store.SessionStore(tmp_path / "earlier-fixture")
+    # This is the leftover state produced by patching the source default_store
+    # before its lazy public export, then undoing both in reverse order.
+    monkeypatch.setattr(public_store, "default_store", lambda: stale)
+    monkeypatch.setattr(session_store, "default_store", lambda: stale)
+    fresh_home = tmp_path / "recording"
+    fresh_home.mkdir()
+    fresh = json.loads(dump(record("provider_error", fresh_home)))
+    committed = json.loads((RECORDINGS / "provider_error.json").read_text())
+    assert stored_reads(fresh) == stored_reads(committed)
+    assert stale.get_messages(live_server.SESSION_ID) == []
+
+
+@pytest.mark.parametrize("event_type", ["tool_use", "tool_result"])
+def test_parked_recording_frames_match_version_three_socket(tmp_path, event_type):
+    import asyncio
+    from openprogram.interfaces.server.ws_delivery import QueuedWebSocket
+
+    payload = json.dumps({"type": "chat_response", "data": {
+        "type": "stream_event", "session_id": live_server.SESSION_ID,
+        "event": {"type": event_type, "name": "lookup"},
+    }})
+    marker = {"type": "read_finished", "data": {}}
+
+    async def queued_socket():
+        frames = []
+        socket = QueuedWebSocket(RecordingSocket(frames.append), asyncio.get_running_loop())
+        socket.start()
+        try:
+            await socket.send_text(payload)
+            end = socket.park_read(live_server.SESSION_ID)
+            await socket.send_text(payload)
+            end()
+            # A queued marker confirms all earlier delivery work completed.
+            await socket.send_text(json.dumps(marker))
+            return frames
+        finally:
+            await socket.stop()
+
+    production_frames = asyncio.run(queued_socket())
+    assert production_frames == [marker]
+    with live_chat(tmp_path) as chat:
+        chat.broadcast(payload)
+        end = chat.parking.begin(chat.session_id)
+        chat.broadcast(payload)
+        assert not chat.timeline
+        end()
+        chat.broadcast(json.dumps(marker))
+        assert [step["frame"] for step in chat.timeline] == production_frames

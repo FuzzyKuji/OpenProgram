@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 
 from openprogram.state.store.session.nodes import Call, Graph, ROLE_USER, ROLE_LLM, ROLE_CODE
-from openprogram.runtime.context.nodes import active_summary, render_context, summary_covers_ids
+from openprogram.runtime.context.nodes import active_summary_for_chain, render_context, summary_covers_ids
 from openprogram.runtime.context.persistence import (
     Persister,
     SUMMARY_NODE_NAME,
@@ -110,7 +110,7 @@ def test_only_the_newest_summary_substitutes():
     old = _summary(g, nodes[:2])
     new = _summary(g, nodes[:4])
 
-    assert active_summary(g).id == new.id
+    assert active_summary_for_chain(g, [n.id for n in nodes]).id == new.id
     ids = render_context(g, head_id=nodes[-1].id, frame_entry_seq=-1)
 
     assert new.id in ids

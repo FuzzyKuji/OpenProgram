@@ -13,7 +13,7 @@
 <tr><th scope="row"><code translate="no">auth/</code></th><td>Provider credential store</td></tr>
 <tr><th scope="row"><code translate="no">skills/</code>, <code translate="no">plugins/</code>, <code translate="no">mcp_servers.json</code></th><td>Installed skills and plugins, MCP servers</td></tr>
 <tr><th scope="row"><code translate="no">channels/</code></th><td>Chat channel state (Telegram, Discord, WeChat and others)</td></tr>
-<tr><th scope="row"><code translate="no">browser-states/</code>, <code translate="no">chrome-profile/</code></th><td>Browser tool login state, sidecar Chrome profile</td></tr>
+<tr><th scope="row"><code translate="no">browser-states/</code>, <code translate="no">chrome-profile/</code></th><td>Left by earlier versions; nothing reads them now and they can be deleted</td></tr>
 <tr><th scope="row"><code translate="no">worktrees/</code>, <code translate="no">shadow-git/</code></th><td>Git worktree state</td></tr>
 <tr><th scope="row"><code translate="no">logs/</code>, <code translate="no">worker.log</code>, <code translate="no">worker.pid</code>, <code translate="no">worker.port</code>, <code translate="no">worker.lock</code></th><td>Logs and worker runtime files</td></tr>
 <tr><th scope="row"><code translate="no">models/</code>, <code translate="no">cache/</code>, <code translate="no">tool_results/</code>, <code translate="no">usage.db</code></th><td>Model catalog cache, general cache, tool results, usage database</td></tr>
@@ -39,7 +39,7 @@
 <tr><th scope="row"><code translate="no">memory.backend</code></th><td><code translate="no">local</code>, or <code translate="no">none</code>: no prompt memory, recall, automatic writes, organizer or memory threads</td><td>local</td><td>next start</td></tr>
 <tr><th scope="row"><code translate="no">memory.writer.model</code></th><td><code translate="no">provider/model</code> for background writing; empty follows the default chat agent</td><td>empty</td><td>live</td></tr>
 <tr><th scope="row"><code translate="no">tools.disabled.&lt;name&gt;</code></th><td>Per-tool switch</td><td>all enabled</td><td>live</td></tr>
-<tr><th scope="row"><code translate="no">execution.prevent_idle_sleep</code></th><td>macOS: keep the system awake during agent execution</td><td>false</td><td>live</td></tr>
+<tr><th scope="row"><code translate="no">execution.prevent_idle_sleep</code></th><td>Keep the system awake during agent execution; Linux needs <code translate="no">systemd-inhibit</code></td><td>false</td><td>live</td></tr>
 </tbody>
 </table>
 <p class="note"><code translate="no">config list</code> also shows read-only <code translate="no">providers.&lt;name&gt;</code> rows; use <code translate="no">openprogram providers login</code> or the Providers page.</p>

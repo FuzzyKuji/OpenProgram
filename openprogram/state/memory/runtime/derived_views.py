@@ -190,8 +190,15 @@ def rebuild_derived_views(
     *,
     recent_limit: int = 50,
     creation_order: dict[str, int] | None = None,
+    first_seen: dict[str, str] | None = None,
 ) -> DerivedViews:
-    """Replace Timeline and Recent from Topic units and stable creation order."""
+    """Replace Timeline and Recent from Topic units and stable creation order.
+
+    Relations hold only paragraphs with an ``^id`` of memory's own; Recent
+    and Timeline hold every paragraph. A paragraph that cites nothing has
+    no event date, so Timeline files it under ``first_seen`` (the day
+    memory first read it) and says so: "recorded", not "happened".
+    """
     if recent_limit < 0:
         raise ValueError("recent_limit must be non-negative")
     memory_dir = Path(memory_dir)
@@ -212,6 +219,7 @@ def rebuild_derived_views(
     unit_ids = {unit.memory_id for unit in units}
     outbound = {
         unit.memory_id: sorted(set(unit.relation_targets)) for unit in units
+        if not unit.derived_id and not unit.outside
     }
     backlinks: dict[str, list[str]] = {}
     for source, targets in outbound.items():
@@ -246,6 +254,8 @@ def rebuild_derived_views(
                 grouped.setdefault(annotation.when, []).append((unit, annotation))
         elif unit.when is not None and is_valid_temporal_value(unit.when):
             grouped.setdefault(unit.when, []).append((unit, None))
+        elif not unit.source_refs and (first_seen or {}).get(unit.memory_id):
+            grouped.setdefault(first_seen[unit.memory_id], []).append((unit, None))
     for when, rows in grouped.items():
         path = timeline / Path(*when.split("-"))
         path = path.with_suffix(".md")
@@ -255,7 +265,8 @@ def rebuild_derived_views(
         for unit, annotation in sorted(
             rows,
             key=lambda item: (
-                (item[1].source_refs if item[1] else item[0].source_refs)[0],
+                ((item[1].source_refs if item[1] else item[0].source_refs)
+                 or ("",))[0],
                 item[0].memory_id,
             ),
         ):
@@ -273,15 +284,24 @@ def rebuild_derived_views(
             source_links.extend(
                 f"[{label}]({link})" for label, link in zip(labels, links)
             )
-            fragment = (
-                unit.memory_id
-                if unit.memory_id.startswith("mem_")
-                else f"^{unit.memory_id}"
-            )
+            if unit.derived_id:
+                # A derived ID is no anchor: the link names the file.
+                target = f"[Topic]({topic_link})"
+            else:
+                fragment = (
+                    unit.memory_id
+                    if unit.memory_id.startswith("mem_")
+                    else f"^{unit.memory_id}"
+                )
+                target = f"[Topic]({topic_link}#{fragment})"
+            if not refs:
+                # No event date stands behind it: the day memory recorded it.
+                blocks.extend(["", f"{unit.content} (recorded {when}) {target}"])
+                continue
             blocks.extend([
                 "",
                 f"{annotation.quote if annotation else unit.content} "
-                f"[Topic]({topic_link}#{fragment}) " + " ".join(source_links),
+                f"{target} " + " ".join(source_links),
             ])
         path.write_text("\n".join(blocks).rstrip() + "\n", encoding="utf-8")
 

@@ -4,7 +4,7 @@
 
 <dl class="pairs">
 <dt>Owner</dt><dd><code translate="no">authority_tier == "owner"</code> 且 <code translate="no">principal_id == owner_principal_id()</code>。有没有人在看不属于判断条件。</dd>
-<dt>可批准</dt><dd><code translate="no">can_approve(req)</code>：Owner、<code translate="no">speaker_kind == "owner"</code>、<code translate="no">interaction == "interactive"</code>、能力 <code translate="no">approval.request</code></dd>
+<dt>可批准</dt><dd><code translate="no">can_approve(req)</code>：Owner、<code translate="no">speaker_kind == "owner"</code>、<code translate="no">interaction == "interactive"</code>、能力 <code translate="no">approval.request</code>；或请求带 <code translate="no">asks_through</code> 的前台助手，在调用方的卡片上询问（<a href="../collaboration/agent-collaboration.zh.html#permissions">Agent 协作</a>）</dd>
 <dt>Bypass permissions</dt><dd>存储和传输值为 <code translate="no">bypass</code> 的模式；默认模式</dd>
 </dl>
 
@@ -27,8 +27,9 @@
 <tr><th scope="row">12. 其余</th><td>ask：<code translate="no">MODE_APPROVAL</code></td></tr>
 </tbody>
 </table>
-<p class="note">规则默认为空，合并全局、项目和对话（<code translate="no">permissions/rule.py</code>）；<code translate="no">deny</code> 优先于 <code translate="no">ask</code> 优先于 <code translate="no">allow</code>，来源顺序只影响同一行为内部。</p>
-<p>所有 ask 都经过 <code translate="no">_ask_or_nobody</code>：<code translate="no">can_approve(req)</code> 为假时结果是 <code translate="no">deny</code>，代码 <code translate="no">NO_ONE_TO_APPROVE</code>。不会为执行时必被拒绝的轮次发布卡片；<code translate="no">APPROVAL_LOCAL_OWNER_REQUIRED</code> 仍是恢复时的防御性断言。</p>
+<p>会话分支共享当前文件。切换分支不增加工作区对齐权限关卡；只有显式 Rewind 请求恢复文件。</p>
+<p class="note">规则默认为空，合并全局、项目和执行所属分支（<code translate="no">permissions/rule.py</code>）；<code translate="no">deny</code> 优先于 <code translate="no">ask</code> 优先于 <code translate="no">allow</code>，来源顺序只影响同一行为内部。</p>
+<p>所有 ask 都经过 <code translate="no">_ask_or_nobody</code>：<code translate="no">can_approve(req)</code> 为假时结果是 <code translate="no">deny</code>，代码 <code translate="no">NO_ONE_TO_APPROVE</code>；由其他 Agent 启动的助手则是 <code translate="no">HELPER_CANNOT_ASK</code>。不会为执行时必被拒绝的轮次发布卡片；<code translate="no">APPROVAL_LOCAL_OWNER_REQUIRED</code> 仍是恢复时的防御性断言。</p>
 
 <details>
 <summary>Decision 的字段</summary>
@@ -56,7 +57,7 @@
 </tbody>
 </table>
 <p>它放在包装层而非 agent 循环，因此也覆盖 Python 程序的内层工具和 MCP 服务器。</p>
-<p>轮次能否使用 Pages 由 <code translate="no">surface_grant_applies(name, req, args)</code> 单独回答。<code translate="no">list_pages</code> 的判定为 <code translate="no">allow</code> 且 <code translate="no">surface_grant_applies</code> 成立时，<code translate="no">runtime_attach.py</code> 捕获 Page 快照，所以 Bypass permissions 下启动的 Program 也能拿到 Pages。</p>
+<p>轮次能否使用 Pages 由 <code translate="no">surface_grant_applies(name, req, args)</code> 单独回答。浏览器目标的 <code translate="no">tabs</code> 动作判定为 <code translate="no">allow</code> 且 <code translate="no">surface_grant_applies</code> 成立时，<code translate="no">runtime_attach.py</code> 捕获 Page 快照，所以 Bypass permissions 下启动的 Program 也能拿到 Pages。</p>
 </details>
 
 <h2 id="modes">模式</h2>
@@ -104,8 +105,10 @@
 <tr><th scope="row"><code translate="no">IDENTITY_OUTSIDE_TEXT</code></th><td>identity</td><td><code translate="no">this work came from text the owner did not write</code></td><td>在报告或最终消息里说明想做什么，由 Owner 操作</td></tr>
 <tr><th scope="row"><code translate="no">IDENTITY_FRAMEWORK</code></th><td>identity</td><td><code translate="no">framework operations are the owner's</code></td><td>须由 Owner 发起这项工作</td></tr>
 <tr><th scope="row"><code translate="no">RULE_DENY</code></th><td>rule</td><td><code translate="no">your deny rule "&lt;rule&gt;" matches</code></td><td>全局、项目或对话的权限规则</td></tr>
+<tr><th scope="row"><code translate="no">HELPER_CANNOT_ASK</code></th><td>rule、mode 或 sandbox</td><td><code translate="no">this needs approval (&lt;rule or mode&gt;), and a sub-agent running in the background has no one to ask</code></td><td>助手不做这一步继续，并在最终回复里写明需要什么；由调用方去做或去问</td></tr>
 <tr><th scope="row"><code translate="no">NO_ONE_TO_APPROVE</code></th><td>rule、mode 或 sandbox</td><td><code translate="no">this needs approval (&lt;rule or mode&gt;) and this &lt;source&gt; turn has no one to approve it</code></td><td>取决于是什么要求审批。保留外发：把完整草稿写进最终消息或报告，所有者可在 Agent 的常驻标签页取消勾选。ask 规则：由所有者修改或移除指明的规则。离开沙箱：把底部模式设为 Bypass permissions，或关闭 Sandbox 开关。其他情况：把底部模式设为 Bypass permissions，或添加指明的 allow 规则</td></tr>
 <tr><th scope="row"><code translate="no">PLAN_MODE_DENY</code></th><td>mode</td><td><code translate="no">the conversation is in Plan mode, which only reads</code></td><td>消息框底部的模式选择器</td></tr>
+<tr><th scope="row"><code translate="no">TOOL_UNAVAILABLE</code></th><td>setting</td><td><code translate="no">&lt;why this turn cannot use it&gt;</code>. 不是审批：对话这个纪元的工具数组保留着、但这一轮用不了的工具（没有渠道、没人回答、memory 关闭、没有页面）。消息旁的一节列出它们，见缓存前缀设计</td><td>不用它，换别的办法</td></tr>
 <tr><th scope="row"><code translate="no">APPROVAL_DENIED</code></th><td>mode 或 rule</td><td><code translate="no">you declined it</code>，有附言时带上</td><td>再次询问，或更改模式</td></tr>
 <tr><th scope="row"><code translate="no">AUTO_CLASSIFIER_*</code>、<code translate="no">AUTO_HISTORY_UNAVAILABLE</code></th><td>mode</td><td><code translate="no">Auto review &lt;blocked / could not run&gt;: &lt;reason&gt;</code></td><td>模式选择器，或 allow 规则</td></tr>
 <tr><th scope="row"><code translate="no">SANDBOX_*</code> 及沙箱策略</th><td>sandbox</td><td><code translate="no">Sandbox is on and &lt;path or network&gt; is outside it</code></td><td>该对话的 Sandbox 开关，或沙箱设置</td></tr>

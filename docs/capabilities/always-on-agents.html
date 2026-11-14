@@ -116,17 +116,17 @@
 </ul>
 </details>
 <h2 id="hand-work-to-another-conversation">Hand work to another conversation</h2>
-<p>Conversations can work as a team, one owner per job. An always-on conversation's agent has a <code translate="no">handoff</code> tool that messages another of your conversations by title or ID, or by an Agent's name when that Agent has one other conversation; the other may use any Agent. Give each conversation a clear title and job, and tell the planning one which does what.</p>
+<p>Conversations can work as a team, one owner per job. An agent uses <code translate="no">send_message</code> to message another of your conversations by title or ID, or an Agent by name when that Agent has one conversation; the other may use any Agent. Give each conversation a clear title and job, and tell the planning one which does what.</p>
 <table class="stack fixed">
 <thead class="sr"><tr><th scope="col">Step</th><th scope="col">Behaviour</th></tr></thead>
 <tbody>
-<tr><th scope="row">Delivery</th><td>Arrives as the next turn, starting with 📨 and the sender's title. Waits for a running turn, up to ten minutes.</td></tr>
-<tr><th scope="row">Reply</th><td>When that turn really ends its answer returns as a new turn starting with ↩️, also after it stopped for your approval. If the turn failed or was stopped, the sender is told that instead, with the reason. If the other stayed busy or was archived meanwhile, the message comes back undelivered.</td></tr>
-<tr><th scope="row">Passed on</th><td>If the receiver hands the work to a third conversation, the first sender waits for the receiver's answer after the third has replied, not for its "I asked them".</td></tr>
-<tr><th scope="row">Chat apps</th><td>The answer to a 📨 goes only to the sender, not to the receiving conversation's chat app. The ↩️ turn's answer does go to the sender's chat app.</td></tr>
-<tr><th scope="row">Permissions</th><td>Each turn runs under its own conversation's Agent, mode and rules. In Manual, sending waits for approval; in Auto it is reviewed.</td></tr>
-<tr><th scope="row">Refused</th><td>Messaging itself; messaging a conversation waiting further up the chain; more than four hops in a chain, also through a Goal the chain started; more than 20 messages an hour from one conversation or in one chain; sub-agent, imported or archived conversations as sender or receiver</td></tr>
-<tr><th scope="row">Restart</th><td>Chains survive a service restart for a day: the hop count holds, and a message still waiting for a busy conversation is delivered once, a conversation working on a message still answers when it finishes, and if the restart ends that work, the sender is told</td></tr>
+<tr><th scope="row">Delivery</th><td>Arrives as the next turn, marked as a message from the sender's conversation rather than from you. Waits for a running turn to end; it never interrupts it.</td></tr>
+<tr><th scope="row">Reply</th><td>When that turn ends its answer returns to the sender as an automated notice, with how long it took and what it cost. If the turn failed or was stopped, the sender is told that instead, with the reason.</td></tr>
+<tr><th scope="row">Passed on</th><td>If the receiver messages a third conversation, each answer returns to whoever sent that message: the receiver gets the third's answer and can follow up.</td></tr>
+<tr><th scope="row">Address</th><td>A conversation's title or ID, an Agent's name, or a branch address from <code translate="no">list_agents</code>. An empty conversation takes the message as its first turn.</td></tr>
+<tr><th scope="row">Permissions</th><td>Each turn runs under its own conversation's Agent, mode and rules.</td></tr>
+<tr><th scope="row">Refused</th><td>Messaging its own running turn; more than four hops in a chain; more than 20 messages an hour from one conversation; archived conversations or branches as receiver</td></tr>
+<tr><th scope="row">Restart</th><td>A message is a tracked Job: one waiting for a busy conversation is delivered once after a service restart, and its answer still comes back</td></tr>
 </tbody>
 </table>
 <h2 id="in-the-conversations-activity-panel">In the Activity panel</h2>
@@ -150,7 +150,8 @@
 <tr><th scope="row">A copy of the Agent</th><td>A duplicated Agent starts with always-on off.</td></tr>
 <tr><th scope="row">Time limit</th><td>A check-in stops after 15 minutes, and the last wake says so. <strong>Wake now</strong> is the retry.</td></tr>
 <tr><th scope="row">Reports and restarts</th><td>A report waiting for a running turn is added after that turn. After a service restart, reports under an hour old are still added and their chat-app sends resumed, so a chat app may rarely get one twice; older ones stay in the Activity panel, and an unfinished send shows as cut off by a restart.</td></tr>
-<tr><th scope="row">Your browser</th><td>A check-in, scheduled run, automatic Goal turn, handoff or chat-app message, and anything it starts, never takes the browser page you have in front. It opens its own tab behind your work, or uses a page it names from the page list.</td></tr>
+<tr><th scope="row">Your browser</th><td>A check-in, scheduled run, automatic Goal turn, handoff or chat-app message, and anything it starts, never takes the browser page you have in front. It opens its own tab behind your work, or uses a page it names from the page list. With the App closed, its page opens in a background browser with no window: nothing appears on screen, and none of the App's sign-ins are there.</td></tr>
+<tr><th scope="row">Pages it opens</th><td>Pages a scheduled run or check-in opens close when it ends. A conversation keeps at most 8 pages its agents opened; opening another closes the one used longest ago.</td></tr>
 <tr><th scope="row">Learning</th><td>It learns through memory: set <strong>Read and write</strong> in the Agent's <strong>Memory</strong> tab so corrections are saved and used. The Always-on tab reminds you otherwise. Your replies to a report count; the report itself does not. A scheduled run counts only if you continue its branch.</td></tr>
 </tbody>
 </table>

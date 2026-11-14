@@ -76,7 +76,7 @@ def test_programs_is_the_one_command_group_for_programs():
     operation = parser.parse_args(["programs", "run", "example.calculator", "evaluate",
                                    "--input", '{"x": 1}', "--project", "p1"])
     assert (operation.name, operation.operation, operation.project) == ("example.calculator", "evaluate", "p1")
-    entry = parser.parse_args(["programs", "run", "web_use", "--arg", "text=hi"])
+    entry = parser.parse_args(["programs", "run", "page_tool", "--arg", "text=hi"])
     assert entry.operation is None and entry.arg == ["text=hi"]
     assert parser.parse_args(["programs", "disable", "example.pdf-editor"]).id == "example.pdf-editor"
     assert parser.parse_args(["programs", "status", "run-1"]).run_id == "run-1"

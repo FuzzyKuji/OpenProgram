@@ -20,7 +20,7 @@
 <table class="stack fixed">
 <thead class="sr"><tr><th scope="col">方面</th><th scope="col">规则</th></tr></thead>
 <tbody>
-<tr><th scope="row">默认</th><td>Standard。按会话和连接/模型保存。没见过的连接从 Standard 开始，换模型不会开启付费档位。</td></tr>
+<tr><th scope="row">默认</th><td>Standard。按对话分支保存，切换和发送时都会写入，并按连接/模型保存。没见过的连接从 Standard 开始，换模型不会开启付费档位。</td></tr>
 <tr><th scope="row">关闭</th><td>显式发送 Standard，覆盖 Agent 的 priority 默认值。省略字段会继承它。</td></tr>
 <tr><th scope="row">生效范围</th><td>下一次提交的轮次。排队消息保留自己的设置；运行中的请求不变。</td></tr>
 <tr><th scope="row">授权</th><td>后端按轮次实际的提供商和模型解析，派发前再校验。其他执行模型解析自己的能力。</td></tr>

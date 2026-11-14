@@ -25,18 +25,6 @@ def chat(tmp_path):
         store.close()
 
 
-def test_browser_helper_recursion_does_not_record_or_load_chat(chat, monkeypatch):
-    from openprogram.programs.applications.browser.web_use.controller import _bounded_field_context
-    before = set(chat.load().nodes)
-    def forbidden():
-        raise AssertionError('A pure helper read the chat DAG')
-    with monkeypatch.context() as patch:
-        patch.setattr(chat, 'load', forbidden)
-        result = _bounded_field_context({'ancestors': [{'name': 'x' * 600}] * 40}, [], 100000)
-    assert result
-    assert set(chat.load().nodes) == before
-
-
 @pytest.mark.parametrize('asynchronous', [False, True])
 def test_different_agent_has_independent_persistent_graph(chat, asynchronous):
     observations = []

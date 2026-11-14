@@ -11,7 +11,8 @@
  * the provider of the current model shows that model's name where the
  * others show a count.
  * Chat picks always pin the current conversation (`/api/model`), using
- * the draft `local_*` id when the backend has not acked yet.
+ * the draft `local_*` id when the backend has not acked yet, on the branch
+ * the pane shows (`pickBranchModel`), selected or not.
  *
  * Positioning / click-outside / portal are handled by the shadcn
  * <DropdownMenu> in `index.tsx`; this file renders its rows.
@@ -21,6 +22,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ChevronRight } from "lucide-react";
 
 import { useBoundChat } from "../bound-chat";
+import { pickBranchModel } from "@/lib/agents/model-pick";
 import { api } from "@/lib/net/api";
 import { updatePendingAgentModel } from "@/lib/agents/start-conversation";
 import { useTranslation } from "@/lib/i18n";
@@ -84,20 +86,7 @@ export function AgentSelector({
         newSession(sid);
       }
       if (await updatePendingAgentModel(sid, { provider, id: model })) return;
-      await api.switchModel(provider, model, sid);
-      // Only this conversation's model changes: the other split pane keeps
-      // its own, and the global (focused) slot follows only for the focused
-      // conversation. The fetch brings the new model's effort levels.
-      const [{ useSessionStore }, { loadSessionAgentSettings }] = await Promise.all([
-        import("@/lib/session-store"), import("@/lib/runtime-bridge/providers"),
-      ]);
-      const store = useSessionStore.getState();
-      const own = store.agentSettingsBySession[sid];
-      store.setSessionAgentSettings(sid, { ...own, chat: { provider, model } });
-      if (sid === (store.activeChatKey ?? store.currentSessionId)) {
-        store.setAgentSettings({ chat: { provider, model } });
-      }
-      void loadSessionAgentSettings(sid);
+      await pickBranchModel(sid, provider, model);
     } catch (e) {
       showToast(t("agent.switch_failed") + String(e), { tone: "error" });
     }

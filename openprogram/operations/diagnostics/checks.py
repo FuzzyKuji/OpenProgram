@@ -149,6 +149,47 @@ def _check_backend_port() -> tuple[bool, str, str]:
     return False, f"worker on :{port}", "not running — `openprogram worker run`"
 
 
+def _check_command_shell() -> tuple[bool, str, str]:
+    """The shell commands run in, the promises it keeps, and one real command.
+
+    The command goes through the command tool's own backend, sandbox
+    included, and must bring back UTF-8 text and its exit code 3.
+    """
+    from openprogram.host._platform.command_shell import resolve_shell
+    from openprogram.host.backend.local import LocalBackend
+
+    profile = resolve_shell()
+    name = f"{profile.name} {profile.edition}" if profile.edition else profile.name
+    parts = [f"{name} ({profile.path})"]
+    if profile.sandboxed and profile.host is not None:
+        host = profile.host
+        host_name = f"{host.name} {host.edition}" if host.edition else host.name
+        parts.append(f"sandboxed; outside the sandbox {host_name} ({host.path})")
+    else:
+        parts.append("not sandboxed")
+        try:
+            from openprogram.host import sandbox
+            reason = sandbox.unavailable_reason() if sandbox.resolve_policy() is not None else None
+        except Exception:  # noqa: BLE001 - the row still reports the shell
+            reason = None
+        if reason:
+            parts.append(f"the sandbox is on but cannot run here: {reason}")
+    if profile.override_unused:
+        parts.append(f"the named bash {profile.override_unused} is not a file and is not used "
+                     "(OPENPROGRAM_GIT_BASH_PATH or shell.windows_bash_path)")
+    parts.append(", ".join(f"{key}={value}" for key, value in profile.promises.items()))
+    source = ("Write-Output '你好'; exit 3" if profile.is_powershell
+              else "echo '你好'; exit 3")
+    result = LocalBackend().run(source, timeout=20)
+    ok = result.exit_code == 3 and result.stdout.strip() == "你好"
+    if ok:
+        parts.append("round trip: UTF-8 text and exit code 3 came back")
+    else:
+        got = (result.stdout or result.stderr or "").strip()[:120]
+        parts.append(f"round trip failed: exit {result.exit_code}, output {got!r}")
+    return ok, "command shell", "; ".join(parts)
+
+
 def _human(n: int) -> str:
     for unit in ("B", "KB", "MB", "GB"):
         if n < 1024:
@@ -317,4 +358,15 @@ def run_checks() -> list[dict]:
     )
     from openprogram.host.system_access import doctor_rows
     results.extend(doctor_rows())
+    # Last, after every row that existed before it, so existing ids keep
+    # their order. Not in CHECKS: the self-update probe requires every CHECKS id from the
+    # worker it verifies, and a worker from before this row has none. Advice,
+    # like the system access rows: a failed round trip shows as INFO with its
+    # reason and gates neither an upgrade nor a self-update.
+    try:
+        ok, label, detail = _check_command_shell()
+    except Exception as e:  # never let a buggy check kill /doctor
+        ok, label, detail = False, "command shell", f"{type(e).__name__}: {e}"
+    results.append({"id": "command_shell", "ok": True, "label": label, "detail": detail,
+                    "optional": True, "status": "granted" if ok else "failed"})
     return results

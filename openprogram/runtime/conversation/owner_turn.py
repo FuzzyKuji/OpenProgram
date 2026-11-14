@@ -70,28 +70,20 @@ def start_owner_turn(
     import asyncio
     import threading
     from openprogram.runtime.permissions.authority import local_owner_authority
-    from openprogram.runtime.agent.turn_request import TurnRequest
     from openprogram.runtime.conversation.production_driver import CanonicalAgentAdapter
-    from openprogram.runtime.conversation.session_config import (
-        load_session_run_config, permission_from_config, project_defaults,
-    )
+    from openprogram.runtime.conversation.turn_input import build_turn_request
     from openprogram.runtime.events import emit_ws_frame
-    from openprogram.runtime.permissions.rule import load_merged_rules
     from openprogram.runtime.conversation.run_control import run_slot
     msg_id = msg_id or uuid.uuid4().hex
     if not run_slot.reserve(session_id, msg_id):
         raise run_slot.RunSlotBusy(session_id)
     try:
-        config = load_session_run_config(session_id)
         authority = local_owner_authority()
-        permission_mode = permission_from_config(config, default=project_defaults(session_id).get("permission_mode"))
-        request = TurnRequest(
-            session_id=session_id, user_text=text, agent_id=agent_id, source="web",
-            user_msg_id=msg_id, permission_mode=permission_mode,
-            tools_override=tools, thinking_effort=config.thinking_effort,
-            permission_rules=load_merged_rules(session_id),
-            additional_working_dirs=config.additional_working_dirs,
-            quiet_finish=quiet_finish, automation=automation, **authority,
+        request = build_turn_request(
+            session_id, text, agent_id=agent_id, source="web", msg_id=msg_id,
+            authority=authority,
+            run_config=("thinking_effort", "additional_working_dirs"),
+            tools_override=tools, quiet_finish=quiet_finish, automation=automation,
         )
         adapter = CanonicalAgentAdapter(event_sink=emit_ws_frame)
         admission = adapter.admit(request, trusted_actor=authority, user_message_id=msg_id,
@@ -104,7 +96,9 @@ def start_owner_turn(
     def activate():
         result = None
         try:
-            _active, result = asyncio.run(adapter.activate(admission))
+            activated = asyncio.run(adapter.activate(admission))
+            # ``None``: a stop reached the turn before it ran; no result.
+            result = activated[1] if activated is not None else None
         except Exception:
             adapter.fail_admission(admission, reason_code=reason_code)
         finally:

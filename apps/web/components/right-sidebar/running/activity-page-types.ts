@@ -18,7 +18,7 @@ export type ActivityPageTarget =
   | { kind: "work"; workId: string };
 
 export interface ActivityScope {
-  key: string; head: string | null; name: string; active: boolean;
+  branchId?: string; key: string; head: string | null; name: string; active: boolean;
   color: string | null; updatedAt: number | null; members: Set<string> | null;
 }
 export interface ActivityWaitDecision {
@@ -29,6 +29,10 @@ export interface ActivityWaitDecision {
 }
 
 /** Built once per render by RunningPanel from the code level 1 already has. */
+/** A swipe that drags the page aside: how far it has been pulled, then the
+ *  lift, with the speed it was moving at in px a second. */
+export interface PagePull { move: (distance: number) => void; end: (distance: number, speed: number) => void }
+
 export interface ActivityPanelContext {
   sessionId: string;
   text: Translate;
@@ -55,6 +59,8 @@ export interface ActivityPanelContext {
   copiedKey: string | null;
   /** Back to level 1, restoring its scroll and focus. */
   close: () => void;
+  /** The page follows a swipe towards the overview, when it has one under it. */
+  pull?: PagePull;
 }
 
 export interface ActivityPageProps<K extends ActivityPageTarget["kind"]> {

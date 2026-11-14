@@ -24,6 +24,7 @@ import sys
 import uuid
 
 from . import catalog_store
+from openprogram.host._platform.filesystem import replace_file
 
 ID = re.compile(r"[a-z][a-z0-9._-]{0,95}\Z")
 ICON = re.compile(r"[a-z][a-z0-9-]{0,39}\Z")
@@ -75,14 +76,14 @@ def write_project_file(project: str | Path, relative: str, content: str | bytes)
     temporary = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")
     try:
         temporary.write_bytes(content)
-        os.replace(temporary, target)
+        replace_file(temporary, target)
     finally:
         temporary.unlink(missing_ok=True)
     return {"path": target.relative_to(root).as_posix(), "bytes": len(content)}
 
 
 def manifest(root: Path) -> dict:
-    raw = json.loads((root / "application.json").read_text())
+    raw = json.loads((root / "application.json").read_text(encoding="utf-8"))
     if not isinstance(raw, dict) or not ID.fullmatch(str(raw.get("id", ""))):
         raise ValueError("invalid application id")
     for key in ("title", "version"):
@@ -227,7 +228,7 @@ def source_root(row: dict) -> Path:
     found = [p for p in candidates if (p / "application.json").is_file()]
     for root in found:
         try:
-            if json.loads((root / "application.json").read_text()).get("id") == row["application"].get("id"):
+            if json.loads((root / "application.json").read_text(encoding="utf-8")).get("id") == row["application"].get("id"):
                 return root
         except (OSError, ValueError, AttributeError):
             continue
@@ -340,7 +341,7 @@ def base_interpreter() -> str:
     from openprogram.operations.self_update.github_release.detect import managed_runtime_root
     runtime = managed_runtime_root()
     if runtime is not None:
-        runtime_manifest = json.loads((runtime / "runtime-manifest.json").read_text())
+        runtime_manifest = json.loads((runtime / "runtime-manifest.json").read_text(encoding="utf-8"))
         return str((runtime / runtime_manifest["python"]).resolve())
     base = Path(sys.base_prefix)
     candidate = base / "python.exe" if os.name == "nt" else base / "bin" / f"python{sys.version_info[0]}.{sys.version_info[1]}"
@@ -359,6 +360,20 @@ def environment_key(definition: dict) -> str:
 
 def python_path(key: str) -> Path:
     return home() / "environments" / key / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+
+
+def write_host_path_file(location: Path, paths: list[str]) -> Path:
+    """Tell an application environment where the host's packages are.
+
+    The reader of a ``.pth`` file is the interpreter's ``site`` module, not
+    this product. Python 3.11 decodes it in the locale encoding only; later
+    versions try UTF-8 and then the locale. The locale encoding is the one
+    every supported version reads, so a host path with a non-ASCII user name
+    survives on a GBK or cp1252 Windows.
+    """
+    target = location / "openprogram-host.pth"
+    target.write_text("\n".join(paths) + "\n", encoding="locale")
+    return target
 
 
 def ensure_environment(definition: dict) -> Path:
@@ -387,7 +402,7 @@ def ensure_environment(definition: dict) -> Path:
     if os.name == "nt":
         sites = [environment / "Lib" / "site-packages"]
     for location in sites:
-        (location / "openprogram-host.pth").write_text("\n".join(site.getsitepackages()) + "\n")
+        write_host_path_file(location, site.getsitepackages())
     dependencies = definition["backend"].get("dependencies", [])
     if dependencies:
         try:
@@ -395,7 +410,7 @@ def ensure_environment(definition: dict) -> Path:
                            check=True, capture_output=True, timeout=300)
         except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
             raise ValueError("application dependency installation failed") from exc
-    ready.write_text(key)
+    ready.write_text(key, encoding="utf-8")
     return executable
 
 

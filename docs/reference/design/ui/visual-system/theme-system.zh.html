@@ -80,6 +80,7 @@
 <tbody>
 <tr><th scope="row">桌面端依据</th><td>主界面保存的完整有效 <code translate="no">theme-prefs.json</code>。只有文件缺失或 mode、style 无效时才做旧浏览器存储迁移。直接扫描浏览器数据库找不出最新记录，不得覆盖它，也不得恢复已清除的强调色。</td></tr>
 <tr><th scope="row">加载后</th><td>以网页自己的 localStorage 为准，并同步桌面缓存</td></tr>
+<tr><th scope="row">“自动”跟随什么</th><td>桌面 App 里是主进程读到的系统设置（<code translate="no">theme.systemDark</code>，变化时推送）。附着到页面的调试器可以覆盖 <code translate="no">prefers-color-scheme</code>，Playwright 会把它接管的每个页面强制成浅色，所以 App 不读它。浏览器里用媒体查询。</td></tr>
 <tr><th scope="row">事件日志</th><td>桌面 userData 下的 <code translate="no">theme-events.json</code>，最多 64 条：消息发送、首屏初始化、设置变更、系统配色事件、跨窗口同步、HTML 属性变化</td></tr>
 <tr><th scope="row">日志内容</th><td>时间戳、固定事件名、主题枚举、系统明暗。不含聊天内容、URL、CSS 和用户路径。写入失败不影响渲染。</td></tr>
 <tr><th scope="row">局限</th><td>日志用于定位来源，不代表未知触发源已修复</td></tr>

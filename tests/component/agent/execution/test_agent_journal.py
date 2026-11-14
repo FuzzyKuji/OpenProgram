@@ -137,3 +137,19 @@ def test_the_manifest_points_at_the_journal_and_holds_no_messages():
     assert refs["agent_journal"] == journal.pointer()
     assert refs["agent_position"]["current_decision"]["provider_action_id"] == "p1"
     assert "working" not in str(refs) and kind and frontier
+
+
+def test_a_resumed_tool_result_keeps_its_details():
+    from openprogram.models.providers.types import ToolResultMessage
+
+    sessions = MemorySessions()
+    journal = _journal(sessions)
+    journal.record_decision(_decision(("c1", "tool_search")), action_id="p1", turn=TURN)
+    loads = {"loads": [{"name": "t", "definition": {"name": "t", "description": "", "parameters": {}}}]}
+    message = ToolResultMessage.model_validate({**_result("c1", "tool_search"), "details": loads})
+    journal.record_tool_result("c1", message.model_dump(mode="json"), is_error=False,
+                               outcome="completed", repeat_failures={})
+
+    state = load_journal(SESSION, journal.pointer(), sessions=sessions)
+    restored = [ToolResultMessage.model_validate(item) for item in state.tool_results()]
+    assert restored[0].details == loads

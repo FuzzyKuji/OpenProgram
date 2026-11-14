@@ -15,6 +15,7 @@ import threading
 from typing import Any, Iterator, Mapping
 
 from openprogram.state.store.session.session_lock import registry_file_lock
+from openprogram.host._platform.filesystem import O_BINARY, replace_file
 
 _log = logging.getLogger(__name__)
 
@@ -109,7 +110,7 @@ class RecordLog:
     def _append(self, lines: list[dict[str, Any]]) -> None:
         data = self._encode(lines)
         try:
-            descriptor = os.open(self.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+            descriptor = os.open(self.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | O_BINARY, 0o600)
             try:
                 _write_all(descriptor, data)
                 self._file_id = os.fstat(descriptor).st_ino
@@ -127,13 +128,13 @@ class RecordLog:
     def _rewrite(self) -> None:
         data = self._encode([{"k": key, "r": record} for key, record in self.records.items()])
         temporary = self.path.with_name(f"{self.path.name}.{os.getpid()}.tmp")
-        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | O_BINARY, 0o600)
         try:
             _write_all(descriptor, data)
             file_id = os.fstat(descriptor).st_ino
         finally:
             os.close(descriptor)
-        os.replace(temporary, self.path)
+        replace_file(temporary, self.path)
         self._file_id = file_id
         self._offset = len(data)
         self._lines = len(self.records)

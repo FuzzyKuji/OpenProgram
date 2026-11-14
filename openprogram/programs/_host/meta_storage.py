@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from openprogram.state.paths import get_active_profile, get_state_dir
+from openprogram.host._platform.filesystem import replace_file
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +70,7 @@ def save_meta(filename: str, data: dict[str, Any]) -> None:
     try:
         temporary.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
         os.chmod(temporary, 0o600)
-        os.replace(temporary, path)
+        replace_file(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
 

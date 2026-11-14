@@ -24,6 +24,14 @@ def test_tool_runtime_uses_chat_model(tmp_path, monkeypatch, selection):
     monkeypatch.setattr("openprogram.state.store.default_store", lambda: db)
     profile = {"model": "chat-provider/profile-model"}
     monkeypatch.setattr(dispatcher, "_load_agent_profile", lambda _id: profile)
+    # The first config read in a fresh test home adopts the newest
+    # conversation's model once (last_used._adopt_existing_install), which
+    # reads a session pin through the same function; keep that one-time
+    # migration out of the reads this test counts.
+    monkeypatch.setattr(
+        "openprogram.models.providers.catalog.last_used._adopt_existing_install",
+        lambda: None,
+    )
     reads = []
 
     def session_choice(*args):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 from pathlib import Path
 import shutil
 import subprocess
@@ -40,7 +41,7 @@ def test_windows_installer_exposes_the_isolated_cli_on_user_path() -> None:
 
     assert 'Join-Path $env:LOCALAPPDATA "OpenProgram\\bin"' in installer
     assert 'Join-Path $binDir "openprogram.cmd"' in installer
-    assert '-m openprogram %*' in installer
+    assert '"$quotedPython" -X utf8 -m openprogram %*' in installer
     assert '$environmentKey.SetValue("Path", $updated, $kind)' in installer
     assert '& $PY -m openprogram programs install $source' in installer
 
@@ -57,7 +58,7 @@ def test_windows_release_installer_replaces_stale_launchers_atomically() -> None
     assert 'Remove-PowerShellLaunchers $Directory' in installer
     assert 'if (-not (Test-Path -LiteralPath $LauncherCmd' not in launcher_section
     assert "ConvertTo-CmdBatchLiteral $PythonBin" in launcher_section
-    assert '"$CmdPython" -I -B -m openprogram %*' in launcher_section
+    assert '"$CmdPython" -I -B -X utf8 -m openprogram %*' in launcher_section
     assert "powershell.exe -NoLogo" not in launcher_section
 
 
@@ -90,6 +91,49 @@ def test_desktop_upgrade_preparation_is_path_scoped_and_long_path_aware() -> Non
     assert "customCheckAppRunning" not in installer
 
 
+def test_uninstalling_the_app_stops_the_worker_and_its_logon_task_and_keeps_user_data() -> None:
+    build = ROOT / "apps" / "desktop" / "build"
+    installer = (build / "installer.nsh").read_text(encoding="utf-8")
+    helper = (build / "remove-background.ps1").read_text(encoding="utf-8")
+
+    hook = installer[installer.index("!macro customUnInstall"):]
+    hook = hook[: hook.index("!macroend")]
+    # An upgrade runs the old uninstaller too; that must leave the worker alone.
+    assert hook.index("${ifNot} ${isUpdated}") < hook.index("remove-background.ps1")
+    assert '-File "$PLUGINSDIR\\remove-background.ps1" -InstallRoot "$INSTDIR"' in hook
+    assert "Quit" not in hook and "Abort" not in hook, "a stuck worker must not block the uninstall"
+
+    assert 'Join-Path $env:USERPROFILE ".openprogram"' in helper
+    assert '"bin\\openprogram.cmd"' in helper and "worker stop" in helper
+    assert "Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false" in helper
+    assert "$Arguments.IndexOf($TaskScript" in helper, "only the task this state directory installed"
+    # The one name the worker service gives its task and its launcher.
+    from openprogram.operations.worker.services import windows as service
+
+    assert f'$TaskName = "{service.TASK_NAME}"' in helper
+    assert f'$TaskScriptName = "{service.SCRIPT_NAME}"' in helper
+    # Nothing but the generated task launcher is deleted: no conversation, setting or version.
+    removals = [line.strip() for line in helper.splitlines()
+                if "Remove-Item" in line and not line.lstrip().startswith("#")]
+    assert removals == ["Remove-Item -LiteralPath $TaskScript -Force -ErrorAction SilentlyContinue"]
+    assert "-Recurse" not in helper and "[IO.Directory]::Delete" not in helper and "rmdir" not in helper.lower()
+    assert '$Process.Name -ne "OpenProgram.exe"' in helper
+    # An uninstaller run in place is a program under the install folder, and
+    # the helper's parent: it is never among the processes the helper ends.
+    listing = helper[helper.index("function Get-BackgroundProcess"):]
+    listing = listing[: listing.index("\n}")]
+    assert "-not $OwnChain.Contains([int]$Process.ProcessId)" in listing
+    chain = helper[helper.index("function Get-OwnProcessChain"):helper.index("function Get-BackgroundProcess")]
+    assert "$Current = [int]$PID" in chain and "ParentProcessId" in chain
+    assert "$OwnChain = Get-OwnProcessChain" in chain
+    assert chain.index("} catch {") < chain.index("$Roots = @($Store)"), (
+        "without the chain only the version store is searched"
+    )
+    # electron-builder's own switch covers the Electron profile only, and stays off.
+    package = json.loads((ROOT / "apps" / "desktop" / "package.json").read_text(encoding="utf-8"))
+    assert package["build"]["nsis"]["deleteAppDataOnUninstall"] is False
+
+
 def test_windows_product_runtime_uses_short_python_root_without_bytecode() -> None:
     builder = (
         ROOT / "scripts" / "release" / "build-product-runtime.ps1"
@@ -101,6 +145,37 @@ def test_windows_product_runtime_uses_short_python_root_without_bytecode() -> No
     assert '$_.Extension -in ".pyc", ".pyo"' in builder
     assert 'Invoke-NativeOutput $PythonBin -I -B' in builder
     assert 'Invoke-Native $PythonBin -I -B $Verifier' in builder
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows installer contract")
+def test_uninstall_helper_spares_the_uninstaller_that_runs_it_in_place(tmp_path: Path) -> None:
+    """`Uninstall OpenProgram.exe /S _?=<folder>` runs from the install folder."""
+
+    install = tmp_path / "OpenProgram"
+    install.mkdir()
+    (install / "OpenProgram.exe").write_bytes(b"marker")
+    state = tmp_path / "state"
+    state.mkdir()
+    command = shutil.which("cmd.exe")
+    powershell = shutil.which("powershell.exe")
+    assert command and powershell
+    # Stands for the uninstaller: a program in the install folder that starts
+    # the helper and waits for it.
+    uninstaller = install / "Uninstall OpenProgram.exe"
+    shutil.copy2(command, uninstaller)
+    helper = ROOT / "apps" / "desktop" / "build" / "remove-background.ps1"
+
+    done = subprocess.run(
+        [str(uninstaller), "/d", "/c", powershell, "-NoLogo", "-NoProfile", "-NonInteractive",
+         "-ExecutionPolicy", "Bypass", "-File", str(helper),
+         "-InstallRoot", str(install), "-StateDir", str(state)],
+        stdin=subprocess.DEVNULL, capture_output=True, timeout=120,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+
+    output = done.stdout.decode("ascii", "replace") + done.stderr.decode("ascii", "replace")
+    assert done.returncode == 0, output
+    assert "ended 0 process(es)" in output
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows installer contract")
@@ -211,3 +286,29 @@ def test_windows_release_installer_names_a_release_without_windows_packages() ->
     assert '-match "HTTP 404"' in download[:600]
     assert "has no Windows $Arch package" in download[:900]
     assert "install.html#development-checkout" in download[:900]
+
+
+def test_the_last_uninstall_offers_to_delete_the_version_store_unticked() -> None:
+    build = ROOT / "apps" / "desktop" / "build"
+    installer = (build / "installer.nsh").read_text(encoding="utf-8")
+    helper = (build / "runtime-users.ps1").read_text(encoding="utf-8")
+
+    install = installer[installer.index("!macro customInstall"):]
+    install = install[: install.index("!macroend")]
+    assert '-File "$PLUGINSDIR\\runtime-users.ps1" -Action add -InstallRoot "$INSTDIR"' in install
+
+    hook = installer[installer.index("!macro customUnInstall"):]
+    hook = hook[: hook.index("!macroend")]
+    # Only a real uninstall, after the worker that runs from the store stopped.
+    assert hook.index("${ifNot} ${isUpdated}") < hook.index("remove-background.ps1") < hook.index("-Action remove")
+    # Default No; a silent uninstall keeps the store.
+    assert "MB_YESNO|MB_DEFBUTTON2" in hook and "/SD IDNO IDNO keep_runtime" in hook
+    assert hook.index("IDNO keep_runtime") < hook.index("-Action delete") < hook.index("keep_runtime:")
+    assert "Quit" not in hook and "Abort" not in hook
+
+    # The helper deletes the store folder and nothing else.
+    removals = [line.strip() for line in helper.splitlines()
+                if "Remove-Item" in line and not line.lstrip().startswith("#")]
+    assert len(removals) == 1 and "Remove-Item -LiteralPath $Store -Recurse" in removals[0]
+    assert '$Store = Join-Path ([IO.Path]::GetFullPath($StateDir)) "runtime"' in helper
+    assert 'Get-InstallId "app" $InstallRoot' in helper

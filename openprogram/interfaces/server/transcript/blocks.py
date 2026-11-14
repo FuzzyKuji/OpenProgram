@@ -71,11 +71,15 @@ def project_blocks(row_id: str, stored: list) -> tuple[list[dict], list[dict], s
         elif kind == "tool":
             call_id = block.get("tool_call_id") or f"{row_id}_t{index}"
             tool = block.get("tool") or "?"
+            full_output = block.get("full_output") if isinstance(block.get("full_output"), dict) else None
             drawn: dict = _known({
                 "index": index, "type": "tool", "tool": tool, "tool_call_id": call_id,
                 "input": block.get("input") or "", "result": _result(block),
                 "truncated": block.get("truncated") is True, "total_bytes": block.get("total_bytes"),
-                "message_id": block.get("message_id"), "node_id": block.get("node_id"),
+                "full_output": full_output,
+                # A bounded result's card reads its whole output by these.
+                "message_id": block.get("message_id") or (row_id if full_output else None),
+                "node_id": block.get("node_id") or (call_id if full_output else None),
                 "is_error": bool(block.get("is_error")), "outcome": block.get("outcome"),
             })
             if not block.get("tool_call_id"):

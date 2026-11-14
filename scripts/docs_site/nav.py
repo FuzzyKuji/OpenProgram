@@ -364,6 +364,7 @@ TAB_SECTIONS: dict[str, list[tuple[str, str, list[str]]]] = {
             "reference/design/runtime/codex-capability-adoption.html",
             "reference/design/runtime/execution/agent-call-flow.html",
             "reference/design/runtime/execution/control.html",
+            "reference/design/runtime/execution/branch-settings.html",
             "reference/design/runtime/execution/agent-action-lifecycle.html",
             "reference/design/runtime/execution/agent-worktree.html",
             "reference/design/runtime/execution/command-sessions.html",
@@ -431,6 +432,7 @@ TAB_SECTIONS: dict[str, list[tuple[str, str, list[str]]]] = {
             "reference/design/function/program-model.html",
             "reference/design/function/agentic-program.html",
             "reference/design/function/calling-unification.html",
+            "reference/design/function/deferred-tools.html",
             "reference/design/function/tool-guides.html",
             "reference/design/function/calling/code-call.html",
             "reference/design/runtime/programs/application-runtime.html",
@@ -452,6 +454,7 @@ TAB_SECTIONS: dict[str, list[tuple[str, str, list[str]]]] = {
             "reference/design/context/README.html",
             "reference/design/context/overview.html",
             "reference/design/context/composition.html",
+            "reference/design/context/cache-prefix.html",
             "reference/design/context/compaction.html",
             "reference/design/context/compaction-diagram.html",
             "reference/design/context/occupancy-status.html",
@@ -565,6 +568,7 @@ TAB_SECTIONS: dict[str, list[tuple[str, str, list[str]]]] = {
         ]),
         ('UI · Workspace and sidebar', '界面 · 工作区与侧栏', [
             "reference/design/ui/workspace/integrated-terminal.html",
+            "reference/design/ui/workspace/pane-recording.html",
             "reference/design/ui/sidebar/project-order.html",
             "reference/design/ui/workspace/project-location.html",
             "reference/design/ui/visual-system/file-type-icons.html",
@@ -578,6 +582,7 @@ TAB_SECTIONS: dict[str, list[tuple[str, str, list[str]]]] = {
             "reference/design/cli/README.html",
             "reference/design/cli/config-write-safety.html",
             "reference/design/cli/drop-run-command.html",
+            "reference/design/cli/headless-print.html",
             "reference/design/cli/naming.html",
             "reference/design/cli/ports.html",
             "reference/design/cli/redesign.html",
@@ -620,6 +625,7 @@ TAB_SECTIONS: dict[str, list[tuple[str, str, list[str]]]] = {
             "reference/design/providers/reliability/llm-fault-tolerance.html",
             "reference/design/providers/reliability/request-repair.html",
             "reference/design/providers/codex-transport.html",
+            "reference/design/providers/provider-quota.html",
             "reference/design/providers/record-replay.html",
             "reference/design/providers/responses-reasoning-replay.html",
         ]),
@@ -634,7 +640,6 @@ TAB_SECTIONS: dict[str, list[tuple[str, str, list[str]]]] = {
             "reference/design/integrations/mcp-server.html",
             "reference/design/integrations/skills-and-plugins.html",
             "reference/design/integrations/plugin-runtime.html",
-            "reference/design/integrations/web-use.html",
             "reference/design/integrations/computer-and-browser-use.html",
             "reference/design/integrations/computer-use-approval.html",
             "reference/design/integrations/computer-use-app-target.html",
@@ -669,10 +674,12 @@ TAB_SECTIONS: dict[str, list[tuple[str, str, list[str]]]] = {
             "reference/design/distribution/github-publishing.html",
             "reference/design/distribution/developer-id.html",
             "reference/design/distribution/windows-support.html",
+            "reference/design/distribution/windows-command-shell.html",
         ]),
         ('Engineering · Testing and errors', '工程 · 测试与错误处理', [
             "reference/design/testing/test-system.html",
             "reference/design/testing/windows-ci.html",
+            "reference/design/testing/harbor-benchmark-adapter.html",
             "reference/design/error-handling.html",
         ]),
         ('Engineering · Documentation and website', '工程 · 文档与网站', [
@@ -906,9 +913,8 @@ PAGE_ORDER: dict[str, int] = {
     "reference/design/distribution/github-publishing.html": 1036.7,
     "reference/design/distribution/implementation-plan.html": 1037,
     "reference/design/distribution/windows-support.html": 1038,
-    # Integrations: keep the current Web Use and MCP server HTML designs
-    # together after the alphabetical integration notes.
-    "reference/design/integrations/web-use.html": 1039,
+    "reference/design/distribution/windows-command-shell.html": 1038.5,
+    # Integrations: the MCP server design follows the alphabetical integration notes.
     "reference/design/integrations/mcp-server.html": 1040,
     "reference/design/integrations/nooa.html": 1041,
 

@@ -7,9 +7,9 @@
 <table class="stack" id="choose">
 <thead><tr><th scope="col">Your computer</th><th scope="col">App</th><th scope="col">Terminal and server</th></tr></thead>
 <tbody>
-<tr><th scope="row">macOS 13 or later</th><td><a href="https://github.com/FuzzyKuji/OpenProgram/releases/download/v1.0.0/OpenProgram-1.0.0-mac-arm64.dmg">Apple Silicon DMG</a> · <a href="https://github.com/FuzzyKuji/OpenProgram/releases/download/v1.0.0/OpenProgram-1.0.0-mac-x64.dmg">Intel DMG</a></td><td><code translate="no">curl -fsSL https://openprogram.io/install | sh</code></td></tr>
-<tr><th scope="row">Linux with glibc 2.35 or later<span class="arg">Ubuntu 22.04, Debian 12 or newer</span></th><td>From v1.1.0: <a href="#linux">deb or AppImage</a></td><td><code translate="no">curl -fsSL https://openprogram.io/install | sh</code></td></tr>
-<tr><th scope="row">Windows 10 or 11, x64</th><td>From v1.1.0: <a href="#windows">installer</a></td><td>From v1.1.0: <code translate="no">irm https://openprogram.io/install.ps1 | iex</code><br>Until then: <a href="#development-checkout">source checkout</a></td></tr>
+<tr><th scope="row">macOS 13 or later</th><td><a href="https://github.com/FuzzyKuji/OpenProgram/releases/download/v1.1.0/OpenProgram-1.1.0-mac-arm64.dmg">Apple Silicon DMG</a> · <a href="https://github.com/FuzzyKuji/OpenProgram/releases/download/v1.1.0/OpenProgram-1.1.0-mac-x64.dmg">Intel DMG</a></td><td><code translate="no">curl -fsSL https://openprogram.io/install | sh</code></td></tr>
+<tr><th scope="row">Linux with glibc 2.35 or later<span class="arg">Ubuntu 22.04, Debian 12 or newer</span></th><td><a href="#linux">deb or AppImage</a></td><td><code translate="no">curl -fsSL https://openprogram.io/install | sh</code></td></tr>
+<tr><th scope="row">Windows 10 or 11, x64</th><td>From v1.2.0: <a href="#windows">installer</a></td><td>From v1.2.0: <code translate="no">irm https://openprogram.io/install.ps1 | iex</code><br>Until then: <a href="#development-checkout">source checkout</a></td></tr>
 </tbody>
 </table>
 <p class="note">If <code translate="no">openprogram.io</code> does not answer, the same scripts come straight from GitHub:</p>
@@ -27,11 +27,11 @@ irm https://raw.githubusercontent.com/FuzzyKuji/OpenProgram/main/docs/_static_ro
 
 <h2 id="releases">What each release offers</h2>
 <table class="stack" id="release-support">
-<thead><tr><th scope="col"></th><th scope="col">v1.0.0, latest published</th><th scope="col">v1.1.0, next release</th></tr></thead>
+<thead><tr><th scope="col"></th><th scope="col">v1.1.0, latest published</th><th scope="col">v1.2.0, next release</th></tr></thead>
 <tbody>
-<tr><th scope="row">macOS</th><td data-label="v1.0.0, latest published">App, signed and notarized. Terminal install.</td><td data-label="v1.1.0, next release">Same, with Git included.</td></tr>
-<tr><th scope="row">Linux</th><td data-label="v1.0.0, latest published">Terminal install only, x86_64 and arm64.</td><td data-label="v1.1.0, next release">Adds the App: deb and AppImage, x86_64 and arm64.</td></tr>
-<tr><th scope="row">Windows</th><td data-label="v1.0.0, latest published">No prebuilt files. The PowerShell command stops and says so; only a source checkout works.</td><td data-label="v1.1.0, next release">Adds the App and the terminal install, x64. Windows on Arm comes later.</td></tr>
+<tr><th scope="row">macOS</th><td data-label="v1.1.0, latest published">App, signed and notarized. Terminal install. Git included.</td><td data-label="v1.2.0, next release">Same.</td></tr>
+<tr><th scope="row">Linux</th><td data-label="v1.1.0, latest published">App as deb and AppImage, and the terminal install; x86_64 and arm64.</td><td data-label="v1.2.0, next release">Same.</td></tr>
+<tr><th scope="row">Windows</th><td data-label="v1.1.0, latest published">No App. The x64 terminal archive is on the <a href="download.html#v1-1-0">Download</a> page.</td><td data-label="v1.2.0, next release">Adds the App, x64. Windows on Arm comes later.</td></tr>
 </tbody>
 </table>
 <p class="note">A package missing from a release is named under "Not in this release" in its notes on <a href="https://github.com/FuzzyKuji/OpenProgram/releases">GitHub Releases</a>. <a href="download.html">Every file</a>.</p>
@@ -74,7 +74,7 @@ APPIMAGE_EXTRACT_AND_RUN=1 ./OpenProgram-X.Y.Z-linux-x86_64.AppImage</code></pre
 
 <h2 id="windows">Windows</h2>
 <ol>
-<li>From v1.1.0, download <code translate="no">OpenProgram-X.Y.Z-win-x64.exe</code> from <a href="https://github.com/FuzzyKuji/OpenProgram/releases/latest">the latest release</a>.</li>
+<li>From v1.2.0, download <code translate="no">OpenProgram-X.Y.Z-win-x64.exe</code> from <a href="https://github.com/FuzzyKuji/OpenProgram/releases/latest">the latest release</a>.</li>
 <li>Run it. It installs for your account and needs no administrator.</li>
 </ol>
 <table class="stack fixed">
@@ -95,7 +95,7 @@ APPIMAGE_EXTRACT_AND_RUN=1 ./OpenProgram-X.Y.Z-linux-x86_64.AppImage</code></pre
 <tr><th scope="row">Command Prompt</th><td><code translate="no">set HTTPS_PROXY=http://proxy.example:8080</code></td></tr>
 </tbody>
 </table>
-<p class="note">Add <code translate="no">NO_PROXY</code> for hosts that skip the proxy. Both are read by the installers and <code translate="no">openprogram upgrade</code>. From v1.1.0 the App's update check follows the system proxy settings.</p>
+<p class="note">Add <code translate="no">NO_PROXY</code> for hosts that skip the proxy. Both are read by the installers and <code translate="no">openprogram upgrade</code>. From v1.2.0 the App's update check follows the system proxy settings.</p>
 
 <h2 id="advanced">Advanced</h2>
 
@@ -165,7 +165,7 @@ APPIMAGE_EXTRACT_AND_RUN=1 ./OpenProgram-X.Y.Z-linux-x86_64.AppImage</code></pre
 </details>
 
 <h2 id="development-checkout">Development checkout</h2>
-<p>For contributors, and for Windows until v1.1.0. It does not define the <code translate="no">stable</code> channel.</p>
+<p>For contributors, and for Windows until v1.2.0. It does not define the <code translate="no">stable</code> channel.</p>
 <table class="stack fixed">
 <thead class="sr"><tr><th scope="col">Platform</th><th scope="col">Command</th></tr></thead>
 <tbody>

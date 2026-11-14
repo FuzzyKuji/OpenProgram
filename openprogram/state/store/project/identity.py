@@ -9,6 +9,7 @@ import tempfile
 import threading
 import uuid
 from pathlib import Path
+from openprogram.host._platform.filesystem import replace_file
 
 _PREFIX = "marker:"
 _marker_lock = threading.RLock()
@@ -68,7 +69,7 @@ def capture_directory_identity(path: str | Path, *, replace: bool = False) -> di
                     output.write("\n")
                     output.flush()
                     os.fsync(output.fileno())
-                os.replace(temporary, marker)
+                replace_file(temporary, marker)
             finally:
                 Path(temporary).unlink(missing_ok=True)
     return {"directory_identity": token, "native_bookmark": "", "volume_id": ""}

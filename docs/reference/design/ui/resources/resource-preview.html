@@ -59,7 +59,7 @@
 <thead class="sr"><tr><th scope="col">Aspect</th><th scope="col">Rule</th></tr></thead>
 <tbody>
 <tr><th scope="row">Agent Page's popup</th><td>Loads in the background, registers under the opener's conversation, branch and execution (<code translate="no">webtab_popup</code>)</td></tr>
-<tr><th scope="row">Telling the Agent</th><td>Named once in the opener's next observe or act result as <code translate="no">opened_pages</code>; reached through <code translate="no">list_pages</code></td></tr>
+<tr><th scope="row">Telling the Agent</th><td>Listed in the result of the action that opened it; the Agent operates it by its tab id</td></tr>
 <tr><th scope="row">Following</th><td>Switches only when an operation targets it</td></tr>
 <tr><th scope="row">User Page's popup</th><td>Opens in front and is not adopted</td></tr>
 <tr><th scope="row">Desktop</th><td>Builds the popup's Page on the WebContents Chromium created, so <code translate="no">window.opener</code> keeps working</td></tr>
@@ -73,11 +73,9 @@
 <tbody>
 <tr><th scope="row">Exclusive surfaces</th><td>A Page shows as the live tab or the chat preview, never both: one native <code translate="no">WebContentsView</code> cannot occupy two rectangles. No screenshot beside or over the Page, no dimming, no blocking layer.</td></tr>
 <tr><th scope="row">Preview image</th><td>Read-only: never forwards clicks, keys or scrolling. Never cropped or zoomed to enlarge it.</td></tr>
-<tr><th scope="row">Requests yielding</th><td>Pointer down in the real page, page-operating keys and input, scrolling, user navigation</td></tr>
-<tr><th scope="row">Does not</th><td>Viewing, focus (including Tab focus moves and modifier keys), hover, read-only preview controls. Hover-induced page changes still invalidate old observations.</td></tr>
-<tr><th scope="row">On human input</th><td>Later Agent dispatch closes in that input scope and queued old-frame actions die. The human's click is never copied or replayed.</td></tr>
-<tr><th scope="row">Scope</th><td>Page; native window only when independent input is verified, otherwise its process or host input domain; host input domain for the desktop; guest for a VM</td></tr>
-<tr><th scope="row">Not claimed</th><td>Zero overlap: dispatched operations may not be retractable, and late results are recorded and observed again. Human changes are not undone and the Agent does not resume by itself.</td></tr>
+<tr><th scope="row">Human use</th><td>Clicking, typing, scrolling and navigating in the real page reach the page directly and do not pause the Agent. Only the task's Pause and Stop do.</td></tr>
+<tr><th scope="row">Old observations</th><td>A page the human changed, hover included, invalidates the Agent's earlier observation; it observes again before acting.</td></tr>
+<tr><th scope="row">Not claimed</th><td>Zero overlap: dispatched operations may not be retractable, and late results are recorded and observed again. Human changes are not undone.</td></tr>
 </tbody>
 </table>
 
@@ -198,7 +196,7 @@
 <table class="stack fixed">
 <thead class="sr"><tr><th scope="col">Part</th><th scope="col">Status</th></tr></thead>
 <tbody>
-<tr><th scope="row">In place</th><td>Type grouping, click-to-preview, Preview in conversation, Auto and Fixed preview, closing semantics, exclusive surfaces, human-input fencing, native window frames, edge cues, Show actions, receipt history</td></tr>
+<tr><th scope="row">In place</th><td>Type grouping, click-to-preview, Preview in conversation, Auto and Fixed preview, closing semantics, exclusive surfaces, native window frames, edge cues, Show actions, receipt history</td></tr>
 <tr><th scope="row">Planned: joint display</th><td>A webpage tab and its small chat preview shown together, in sync on one Page</td></tr>
 <tr><th scope="row">Planned: adapters</th><td>Native application and VM control, each advertised only after real-target acceptance; zero-overlap automatic takeover</td></tr>
 <tr><th scope="row">Planned: learning</th><td>Demonstration recording, trace review</td></tr>

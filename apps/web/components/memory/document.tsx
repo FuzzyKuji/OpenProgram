@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { EditorPanel } from "./parts";
 import { Button } from "@/components/ui/button";
 import { memoryDraft } from "./data/autosave";
@@ -7,12 +7,16 @@ import { UnifiedDiff } from "@/components/chat/messages/turn-files/unified-diff"
 import { useTranslation } from "@/lib/i18n";
 import styles from "./memory-page.module.css";
 import { useMemoryUrl } from "./data/api";
+import type { TopicOrigins } from "./markdown/origin-marks";
 
 interface Revision { revision: string; timestamp: string; message: string }
-export function MemoryDocument({ path, url, title, badge, meta, onDelete, onPreviewClick, onSaved }: {
+export function MemoryDocument({ path, url, title, badge, meta, onDelete, onPreviewClick, onSaved, onRemovedChange }: {
   path: string; url: string; title: string; badge?: React.ReactNode; meta: string[];
-  onDelete?: () => void | Promise<void>; onPreviewClick?: (e: React.MouseEvent) => void;
+  /** ``removed``: a save already removed the file, so nothing is left to delete on the server. */
+  onDelete?: (target: { removed: boolean }) => void | Promise<void>; onPreviewClick?: (e: React.MouseEvent) => void;
   onSaved?: () => void;
+  /** A save removed the file (headings only) or brought it back. */
+  onRemovedChange?: () => void;
 }) {
   const { text, locale } = useTranslation();
   const api = useMemoryUrl();
@@ -27,6 +31,17 @@ export function MemoryDocument({ path, url, title, badge, meta, onDelete, onPrev
   const [busy, setBusy] = useState(false);
   const [restoring, setRestoring] = useState(false);
   const [latest, setLatest] = useState<string | null>(null);
+  const [origins, setOrigins] = useState<TopicOrigins | null>(null);
+  // Where the saved file and its paragraphs came from, read again after
+  // every save, since a save makes a person's paragraphs the file's own.
+  useEffect(() => {
+    let active = true;
+    fetch(url)
+      .then(async response => (response.ok ? response.json() : null))
+      .then(data => { if (active) setOrigins(data && (data.origin || data.paragraphs) ? { origin: data.origin, paragraphs: data.paragraphs } : null); })
+      .catch(() => { if (active) setOrigins(null); });
+    return () => { active = false; };
+  }, [url, state.base]);
   useEffect(() => {
     const listener = () => setState(draft.state);
     draft.listeners.add(listener);
@@ -48,6 +63,12 @@ export function MemoryDocument({ path, url, title, badge, meta, onDelete, onPrev
   useEffect(() => {
     if (state.loaded && !state.saving && state.content === state.base) onSaved?.();
   }, [state.base, state.saving, state.loaded, onSaved, state.content]);
+  const removed = useRef(state.removed);
+  useEffect(() => {
+    if (removed.current === state.removed) return;
+    removed.current = state.removed;
+    onRemovedChange?.();
+  }, [state.removed, onRemovedChange]);
   useEffect(() => {
     if (mode !== "history") return;
     let active = true;
@@ -116,7 +137,7 @@ export function MemoryDocument({ path, url, title, badge, meta, onDelete, onPrev
     {state.warning && <div role="alert" className={styles.editorNotice}>{state.warning}</div>}
   </>;
   return <>
-    <EditorPanel title={title} badge={badge} meta={meta}
+    <EditorPanel title={title} badge={badge} meta={meta} origins={origins}
       state={{ content: state.content, viewMode: mode }}
       onChange={content => draft.edit(content)} onViewMode={setMode} readOnly={restoring || state.restoring}
       onKeyDown={event => {
@@ -124,7 +145,7 @@ export function MemoryDocument({ path, url, title, badge, meta, onDelete, onPrev
         if (event.key.toLowerCase() === "z") { event.preventDefault(); if (event.shiftKey) draft.redo(); else draft.undo(); }
         else if (event.key.toLowerCase() === "y") { event.preventDefault(); draft.redo(); }
       }}
-      onDelete={state.loaded && !state.saving && state.content === state.base && !restoring ? onDelete : undefined}
+      onDelete={onDelete && state.loaded && !state.saving && state.content === state.base && !restoring ? () => onDelete({ removed: state.removed }) : undefined}
       onPreviewClick={onPreviewClick} tools={tools} notices={notices} loading={!state.loaded}
       detail={mode === "history" ? <div className={`${styles.historyPanel} flex flex-1 min-h-0 overflow-hidden`}>
         <div className={styles.revisionList}>

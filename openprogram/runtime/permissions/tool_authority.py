@@ -27,7 +27,6 @@ _WRITE_TOOLS = {
 _PROCESS_TOOLS = {
     "bash", "exec", "shell", "execute_code", "write_stdin", "agent",
 }
-_BROWSER_CONTROL_TOOLS = {"web_use"}
 _NETWORK_TOOLS = {
     "send_message", "send_file", "web_search", "list_mcp_resources",
     "read_mcp_resource", "list_mcp_prompts", "get_mcp_prompt",
@@ -38,7 +37,7 @@ _CHAT_REPLY_TOOLS = {"chat_send"}
 _REPLY_LOCAL_TOOLS = {
     "todo_create", "todo_update", "todo_list", "open_work", "enter_plan_mode",
     "exit_plan_mode", "clarify", "skill", "help", "tool_search", "job_output",
-    "job_stop",
+    "job_stop", "close_agent",
 }
 
 
@@ -71,8 +70,6 @@ def capability_for_tool(tool_name: str, args: Mapping[str, Any] | None = None) -
         return "fs.write"
     if name in _PROCESS_TOOLS:
         return "process.exec"
-    if name in _BROWSER_CONTROL_TOOLS:
-        return "browser.control"
     if name == "computer_use_agent":
         # Built-in browser Pages are browser control; application windows, a
         # VM and code reach further and stay with the owner.

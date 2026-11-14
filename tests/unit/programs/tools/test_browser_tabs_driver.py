@@ -18,7 +18,8 @@ def driver(monkeypatch):
     value = tabs.Driver()
     listed = {"surfaces": [_surface("a"), _surface("b", visible=True, focused=True)]}
     monkeypatch.setattr(surface_context, "current", lambda: None)
-    monkeypatch.setattr(surface_context, "capture_pages_for_listing", lambda _context=None: listed)
+    monkeypatch.setattr(surface_context, "capture_pages_for_listing", lambda _context=None, wait=True: listed)
+    monkeypatch.setattr(value, "_app_may_come_back", lambda: True)
     value.listed = listed
     yield value
     value._owner.shutdown()
@@ -290,8 +291,114 @@ def _png(width, height, colour=(200, 10, 10), spot=None):
             + chunk(b"IDAT", zlib.compress(b"".join(rows))) + chunk(b"IEND", b""))
 
 
-def test_coordinates_stop_working_once_the_page_moved_or_changed_at_the_point(driver, monkeypatch):
+def _filtered_png(width, height, size, pixel, filters):
+    """A PNG whose row ``y`` uses PNG filter ``filters[y % len(filters)]``; ``pixel(x, y)`` gives its bytes."""
+    import struct
+    import zlib
+
+    def paeth(a, b, c):
+        estimate = a + b - c
+        near = (abs(estimate - a), abs(estimate - b), abs(estimate - c))
+        return a if near[0] <= near[1] and near[0] <= near[2] else b if near[1] <= near[2] else c
+
+    above, packed = bytes(width * size), bytearray()
+    for y in range(height):
+        line = b"".join(bytes(pixel(x, y)) for x in range(width))
+        kind = filters[y % len(filters)]
+        packed.append(kind)
+        for index, value in enumerate(line):
+            a = line[index - size] if index >= size else 0
+            b, c = above[index], above[index - size] if index >= size else 0
+            packed.append((value - (0, a, b, (a + b) >> 1, paeth(a, b, c))[kind]) & 255)
+        above = line
+
+    def chunk(kind, data):
+        return struct.pack("!I", len(data)) + kind + data + struct.pack("!I", zlib.crc32(kind + data) & 0xffffffff)
+    body = zlib.compress(bytes(packed))
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack("!IIBBBBB", width, height, 8, {3: 2, 4: 6}[size], 0, 0, 0))
+            + chunk(b"IDAT", body[:len(body) // 2]) + chunk(b"IDAT", body[len(body) // 2:]) + chunk(b"IEND", b""))
+
+
+@pytest.mark.parametrize("size", [3, 4])
+@pytest.mark.parametrize("filters", [(0,), (1,), (2,), (3,), (4,), (4, 3, 2, 1, 0)])
+def test_a_screenshot_is_read_without_core_graphics(size, filters):
+    """Windows and Linux have no Core Graphics; the square is decoded from the PNG itself."""
+    def pixel(x, y):
+        return ((x * 7 + y * 13) & 255, (x * x + y) & 255, (x ^ y * 5) & 255, 255)[:size]
+
+    image = _filtered_png(40, 30, size, pixel, filters)
+    square = tabs._png_pixels_around(image, (20.0, 12.0), 6)
+    assert square == b"".join(bytes((*pixel(x, y)[:3], 255)) for y in range(6, 18) for x in range(14, 26))
+    # Clamped at the image's edges, and empty when the point is outside it.
+    corner = tabs._png_pixels_around(image, (1.0, 29.0), 6)
+    assert corner == b"".join(bytes((*pixel(x, y)[:3], 255)) for y in range(23, 30) for x in range(0, 7))
+    assert tabs._png_pixels_around(image, (400.0, 12.0), 6) == b""
+
+
+def _noise_png(width, height, kind):
+    """An RGBA PNG whose every row carries filter ``kind`` over fixed noise: the slowest input to undo."""
+    import random
+    import struct
+    import zlib
+    noise = random.Random(7)
+    rows = b"".join(bytes([kind]) + noise.randbytes(width * 4) for _ in range(height))
+
+    def chunk(name, data):
+        return struct.pack("!I", len(data)) + name + data + struct.pack("!I", zlib.crc32(name + data) & 0xffffffff)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack("!IIBBBBB", width, height, 8, 6, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(rows, 1)) + chunk(b"IEND", b""))
+
+
+def test_only_the_bytes_left_of_the_square_are_undone(monkeypatch):
+    """A filter reads left and up only, so nothing right of the square is worth the worker's time."""
+    image = _filtered_png(200, 60, 4, lambda x, y: ((x * 7 + y * 13) & 255, (x * x + y) & 255, (x ^ y * 5) & 255, 255),
+                          (4, 3, 2, 1, 0))
+    whole = tabs._png_pixels_around(image, (30.0, 40.0), 8)
+    lengths, undo = [], tabs._unfilter
+    monkeypatch.setattr(tabs, "_unfilter", lambda kind, line, above, size: (lengths.append(len(line)),
+                                                                           undo(kind, line, above, size))[1])
+    assert tabs._png_pixels_around(image, (30.0, 40.0), 8) == whole
+    assert len(lengths) == 48 and set(lengths) == {38 * 4}
+
+
+def test_a_row_added_to_the_one_above_wraps_each_byte_on_its_own():
+    """Up is one addition over the whole row; a byte that overflows must not carry into its neighbour."""
+    line, above = bytes([255, 255, 128, 128, 0, 1, 200, 127]), bytes([255, 1, 128, 127, 0, 255, 100, 1])
+    assert tabs._unfilter(2, line, above, 4) == bytes((a + b) & 255 for a, b in zip(line, above))
+
+
+def test_a_click_near_the_left_edge_of_a_large_screenshot_is_checked_quickly(monkeypatch):
+    import time
+    monkeypatch.setattr(tabs, "_quartz_pixels_around", lambda png, point, radius: None)
+    image = _noise_png(1280, 800, 4)
+    began = time.perf_counter()
+    assert tabs._same_around(image, image, (100.0, 780.0), 32)
+    assert time.perf_counter() - began < 1.5
+
+
+def test_an_unreadable_screenshot_gives_no_pixels():
+    import struct
+    assert tabs._png_pixels_around(b"not a png", (1.0, 1.0), 4) == b""
+    assert tabs._png_pixels_around(_png(20, 20)[:45], (10.0, 10.0), 4) == b""
+    palette = _png(20, 20).replace(struct.pack("!IIBBBBB", 20, 20, 8, 2, 0, 0, 0),
+                                   struct.pack("!IIBBBBB", 20, 20, 8, 3, 0, 0, 0))
+    assert tabs._png_pixels_around(palette, (10.0, 10.0), 4) == b""
+
+
+def test_both_readers_see_the_same_square():
     pytest.importorskip("Quartz")
+    image = _filtered_png(40, 30, 4, lambda x, y: ((x * 7 + y * 13) & 255, (x * x + y) & 255, (x ^ y * 5) & 255, 255),
+                          (4, 3, 2, 1, 0))
+    assert tabs._quartz_pixels_around(image, (20.0, 12.0), 6) == tabs._png_pixels_around(image, (20.0, 12.0), 6)
+
+
+@pytest.mark.parametrize("reader", ["core graphics", "portable"])
+def test_coordinates_stop_working_once_the_page_moved_or_changed_at_the_point(driver, monkeypatch, reader):
+    if reader == "core graphics":
+        pytest.importorskip("Quartz")
+    else:
+        # What Windows and Linux run: PyObjC is not there.
+        monkeypatch.setattr(tabs, "_quartz_pixels_around", lambda png, point, radius: None)
     tab = tabs.Tab(id="t1", window_id="main", tab_id="a")
     seen = _png(200, 120)
     with pytest.raises(tabs.BrowserError) as missing:
@@ -338,6 +445,36 @@ def test_a_failing_script_says_what_the_page_threw(driver, monkeypatch):
     assert failed.value.reason_code == "script_error"
     assert str(failed.value) == "the script failed: SyntaxError: Unexpected token ';'"
     assert tab.last_write(), "the script may have changed the page before it failed"
+
+
+def test_a_script_on_an_element_runs_on_its_locator(driver, monkeypatch):
+    ran = []
+
+    class _Located:
+        def count(self):
+            return 1
+
+        def evaluate(self, script, *args):
+            ran.append(("element", script))
+            return "v"
+
+    class _Scripted(_Page):
+        def locator(self, selector):
+            ran.append(selector)
+            return _Located()
+
+        def evaluate(self, script, *args):
+            ran.append(("page", script))
+            return 2
+
+    tab = tabs.Tab(id="t1", window_id="main", tab_id="a", target_id="tg")
+    tab.roles["e3"] = ("textbox", "Name")
+    monkeypatch.setattr(driver, "_page", lambda tab: _Scripted())
+    driver._watches["tg"] = tabs._Watch()
+    monkeypatch.setattr("openprogram.programs.applications.browser.privacy.password_values", lambda page: [])
+    assert driver._operate(tab, "evaluate", {"ref": "e3", "script": "(el) => el.value"})["result"] == "v"
+    assert driver._operate(tab, "evaluate", {"script": "1 + 1"})["result"] == "2"
+    assert [item if isinstance(item, str) else item[0] for item in ran] == ["aria-ref=e3", "element", "page"]
 
 
 def test_a_list_of_actions_holds_its_tab_until_it_ends(driver, monkeypatch):
@@ -668,3 +805,197 @@ def test_a_tab_dragged_to_another_window_stays_the_conversations(driver, opened_
     driver.listed["surfaces"] = [_surface("a", window_id="second", binding_id="b2"), _surface("b")]
     driver._refresh()
     assert opened_store.tabs_opened_by("s1") == {("second", "a")}
+
+
+def test_a_tab_the_agent_opened_is_recorded_as_its_conversations(driver, opened_store, monkeypatch):
+    from openprogram.runtime.conversation import surface_context
+    monkeypatch.setattr(driver, "_operate", lambda tab, action, args: {"ok": True, "tab": tab.id})
+    monkeypatch.setattr(surface_context, "open_page", lambda url, background=True: {
+        "ok": True, "surfaces": [_surface("n", agent_owned=True)]})
+    driver.run("open", {"url": "https://x.test/new"}, "s1")
+    # A tab the App already had, which the open only borrowed, is not the conversation's to close.
+    monkeypatch.setattr(surface_context, "open_page", lambda url, background=True: {
+        "ok": True, "surfaces": [_surface("a", agent_owned=False)]})
+    driver.run("open", {"url": "https://x.test/"}, "s1")
+    assert opened_store.tabs_opened_by("s1") == {("main", "n")}
+
+
+class _OwnPage:
+    url, closed = "https://x.test/own", False
+
+    def is_closed(self):
+        return self.closed
+
+    def opener(self):
+        return None
+
+    def title(self):
+        return "Own"
+
+    def close(self):
+        self.closed = True
+
+
+def test_with_no_app_window_the_tab_opens_in_the_drivers_own_browser(driver, opened_store, monkeypatch):
+    from openprogram.runtime.conversation import surface_context
+    page = _OwnPage()
+
+    def own_open(url):
+        driver._own_pages["o1"] = page
+        return driver._own_surface("o1", page)
+    monkeypatch.setattr(surface_context, "open_page", lambda url, background=True: {
+        "ok": False, "reason_code": "desktop_unavailable", "error": "no App"})
+    monkeypatch.setattr(driver, "_own_open", own_open)
+    monkeypatch.setattr(driver, "_operate", lambda tab, action, args: {"ok": True, "tab": tab.id})
+    opened = driver.run("open", {"url": "https://x.test/own"}, "s1")
+    assert opened["ok"] and "background browser" in opened["note"]
+    assert opened_store.tabs_opened_by("s1") == {(tabs.OWN_WINDOW, "o1")}
+    # It is listed beside the App's tabs, and a later action goes to it without the App.
+    assert opened["tab"] in [row["tab"] for row in driver._refresh() for row in [row.row()]]
+    assert driver._tab(None, "s1").window_id == tabs.OWN_WINDOW
+    # Closed (here by the page itself), it leaves the list.
+    page.closed = True
+    assert opened["tab"] not in [tab.id for tab in driver._refresh()]
+
+
+def test_a_listing_with_no_app_is_the_drivers_own_tabs_and_no_failure(driver, monkeypatch):
+    from openprogram.host.resources import background_browser
+    from openprogram.runtime.conversation import surface_context
+
+    def no_app(_context=None, wait=True):
+        raise surface_context.DesktopUnavailableError("no App")
+    monkeypatch.setattr(surface_context, "capture_pages_for_listing", no_app)
+    monkeypatch.setattr(background_browser, "available", lambda: True)
+    monkeypatch.setattr(driver, "_app_may_come_back", lambda: False)
+    assert driver._refresh() == []
+    # Where no browser can be started either, the listing says the App is what is missing.
+    monkeypatch.setattr(background_browser, "available", lambda: False)
+    with pytest.raises(tabs.BrowserError) as missing:
+        driver._refresh()
+    assert missing.value.reason_code == "app_unavailable"
+    # So does a listing of an App that is running and does not answer.
+    monkeypatch.setattr(background_browser, "available", lambda: True)
+    monkeypatch.setattr(driver, "_app_may_come_back", lambda: True)
+    with pytest.raises(tabs.BrowserError):
+        driver._refresh()
+
+
+def test_a_listing_does_not_wait_for_an_app_that_is_not_running(driver, monkeypatch):
+    from openprogram.runtime.conversation import surface_context
+    waits = []
+    monkeypatch.setattr(surface_context, "capture_pages_for_listing",
+                        lambda _context=None, wait=True: waits.append(wait) or {"surfaces": []})
+    monkeypatch.setattr(driver, "_app_may_come_back", lambda: False)
+    driver._refresh()
+    assert waits == [False]
+
+
+def test_letting_go_of_the_app_keeps_the_drivers_own_browser_running(driver):
+    stopped = []
+    driver._playwright = type("P", (), {"stop": lambda self: stopped.append("playwright")})()
+    driver._browser = type("B", (), {"close": lambda self: stopped.append("app")})()
+    driver._own = object()
+    driver._watches.update({"T1": tabs._Watch(), "own:o1": tabs._Watch()})
+    driver._disconnect()
+    assert stopped == ["app"] and driver._playwright is not None and list(driver._watches) == ["own:o1"]
+    driver._own = None
+    driver._disconnect()
+    assert stopped == ["app", "playwright"] and driver._playwright is None
+
+
+def _open_one_more(driver, monkeypatch, tab_id="n"):
+    from openprogram.runtime.conversation import surface_context
+    monkeypatch.setattr(driver, "_operate", lambda tab, action, args: {"ok": True, "tab": tab.id})
+
+    def open_page(url, background=True):
+        driver.listed["surfaces"].append(_surface(tab_id, agent_owned=True))
+        return {"ok": True, "surfaces": [_surface(tab_id, agent_owned=True)]}
+    monkeypatch.setattr(surface_context, "open_page", open_page)
+
+
+@pytest.fixture
+def closing(driver, monkeypatch):
+    """Bindings the App was asked to close; a closed tab leaves the listing."""
+    from openprogram.host.resources import desktop_link
+    closed = []
+
+    def close(binding):
+        closed.append(binding)
+        driver.listed["surfaces"] = [row for row in driver.listed["surfaces"] if row.get("binding_id") != binding]
+        return {"ok": True}
+    monkeypatch.setattr(desktop_link, "request_close_tab", close)
+    monkeypatch.setattr(tabs, "driver", lambda: driver)
+    return closed
+
+
+def test_one_more_tab_than_a_conversation_keeps_closes_its_least_recently_used(
+        driver, opened_store, closing, monkeypatch):
+    """A monitor that opens a page on every wake and never closes one holds the limit, not hundreds."""
+    monkeypatch.setattr(tabs, "TABS_PER_CONVERSATION", 2)
+    driver.listed["surfaces"] = [_surface("a", focused=False, visible=False), _surface("b", focused=False, visible=False)]
+    opened_store.note_tab_opened("main", "a", "s1")
+    opened_store.note_tab_opened("main", "b", "s1")
+    opened_store.note_tab_opened("offline", "x", "s1")   # in a window that is not there now: not counted
+    driver._refresh()
+    driver._use(driver._find(A), "s1")   # a was used after b was opened, so b goes first
+    _open_one_more(driver, monkeypatch)
+    result = driver.run("open", {"url": "https://x.test/new"}, "s1")
+    assert closing == ["bb"]
+    assert "closed 1 tab(s)" in result["note"]
+    assert opened_store.tabs_opened_by("s1") == {("main", "a"), ("main", "n"), ("offline", "x")}
+
+
+def test_the_limit_leaves_the_tab_in_front_of_the_user_and_never_fails_the_open(
+        driver, opened_store, closing, monkeypatch):
+    monkeypatch.setattr(tabs, "TABS_PER_CONVERSATION", 1)
+    driver.listed["surfaces"] = [_surface("a", focused=True, visible=True)]
+    opened_store.note_tab_opened("main", "a", "s1")
+    _open_one_more(driver, monkeypatch)
+    result = driver.run("open", {"url": "https://x.test/new"}, "s1")
+    # The only older tab is the one the user is on: nothing closes, and the page still opened.
+    assert closing == [] and result["ok"] and "note" not in result
+    # A listing that fails leaves the open as it was.
+    monkeypatch.setattr(tabs, "TABS_PER_CONVERSATION", 0)
+    real = driver._refresh
+    monkeypatch.setattr(driver, "_refresh", lambda **kwargs: (_ for _ in ()).throw(tabs.BrowserError("app_unavailable", "x")))
+    assert driver._keep_within_limit(driver._find("t1") or tabs.Tab(id="t9", window_id="main", tab_id="n"), "s1") == 0
+    monkeypatch.setattr(driver, "_refresh", real)
+
+
+def test_a_tab_of_the_users_the_driver_had_not_listed_is_not_taken_for_one_the_action_opened(
+        driver, opened_store, monkeypatch):
+    from openprogram.runtime.execution import run_control
+    monkeypatch.setattr(run_control, "get_current_session_id", lambda: "s1")
+    tab = driver._tab(A, "s1")
+    with driver._lock:
+        driver._tabs.pop(("main", "b"), None)   # the user's tab b, not listed by this driver yet
+    driver.listed["surfaces"].append(_surface("p", opener_tab_id="a", title="Popup"))
+    opened = driver._opened(tab)
+    assert [row["title"] for row in opened] == ["Popup"]
+    assert opened_store.tabs_opened_by("s1") == {("main", "p")}
+
+
+def test_a_run_that_ends_closes_the_tabs_it_opened_and_no_others(driver, opened_store, closing):
+    opened_store.note_tab_opened("main", "a", "s1", "exec_run")
+    opened_store.note_tab_opened("main", "b", "s1")
+    opened_store.note_tab_opened("main", "gone", "s1", "exec_run")
+    assert tabs.close_run_tabs("exec_run") == 1
+    assert closing == ["ba"]
+    assert opened_store.tabs_opened_by("s1") == {("main", "b")}
+    assert tabs.close_run_tabs("") == 0
+
+
+@pytest.mark.parametrize("source, speaker, named", [
+    ("scheduler", "runtime/scheduler", True), ("web", "runtime/always_on", True), ("web", "user", False)])
+def test_only_a_run_that_ends_with_its_answer_is_named_on_the_tab(
+        driver, opened_store, monkeypatch, source, speaker, named):
+    from openprogram.runtime.agent.turn_request import TurnRequest, reset_turn_request, set_turn_request
+    from openprogram.runtime.execution import run_control
+    monkeypatch.setattr(run_control, "get_current_execution_id", lambda: "exec_7")
+    _open_one_more(driver, monkeypatch)
+    token = set_turn_request(TurnRequest("s1", "", "main", source, speaker_id=speaker))
+    try:
+        driver.run("open", {"url": "https://x.test/new"}, "s1")
+    finally:
+        reset_turn_request(token)
+    assert opened_store.tabs_opened_in("exec_7") == ({("main", "n")} if named else set())

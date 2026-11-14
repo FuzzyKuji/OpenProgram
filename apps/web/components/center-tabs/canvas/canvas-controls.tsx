@@ -1,4 +1,5 @@
 "use client";
+import { isMacPlatform } from "@/lib/shortcut-keys";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, Equal, FileText, Globe, LayoutGrid, Maximize2, MessageSquare, Minus, SquareDashed, Undo2, X, Save } from "lucide-react";
 import { useCenterTabs, type CenterTab } from "@/lib/tabs/center-tabs-store";
@@ -193,7 +194,7 @@ export function CanvasControls({ layout, targetId }: { layout: CanvasLayout; tar
     s.ungroupTab(tabId); s.setActive(tabId);
   };
   useEffect(() => {
-    const mac = /Mac/.test(navigator.platform);
+    const mac = isMacPlatform();
     const key = (e: KeyboardEvent) => {
       if (!(e.metaKey || e.ctrlKey)) return;
       // ⌃⌥ + arrows / F / R: macOS tiling shortcuts (Fn⌃ belongs to the system).
@@ -227,10 +228,13 @@ export function CanvasControls({ layout, targetId }: { layout: CanvasLayout; tar
   const titleOf = (tab: CenterTab | undefined) => tab ? labelOf(tab, t, text) || text("Untitled","未命名") : text("Empty pane","空格");
   const menuPane = menu ? all.find(p => p.id === menu.paneId) : undefined;
   const menuZoomed = !!menuPane && layout.zoomedPaneId === menuPane.id;
+  // The ⌃⌥ tiling keys exist on macOS only (the key handler below), so the
+  // hint names them only there.
+  const tilingKeys = isMacPlatform();
   const describe = (en: string, zh: string, keys?: string) => ({
     "aria-label": text(en, zh),
-    onPointerEnter: () => setHint(keys ? `${text(en, zh)}  ${keys}` : text(en, zh)),
-    onFocus: () => setHint(keys ? `${text(en, zh)}  ${keys}` : text(en, zh)),
+    onPointerEnter: () => setHint(keys && tilingKeys ? `${text(en, zh)}  ${keys}` : text(en, zh)),
+    onFocus: () => setHint(keys && tilingKeys ? `${text(en, zh)}  ${keys}` : text(en, zh)),
   });
   /** The tiling menu, unfolded from the grip it belongs to (macOS green button). */
   const drawer = (paneId: string, closing: boolean) => <div className={styles.drawerWrap} data-folding={closing || undefined} aria-hidden={closing || undefined}><div role="menu" className={styles.drawer} data-native-view-occluder="true"
@@ -250,9 +254,9 @@ export function CanvasControls({ layout, targetId }: { layout: CanvasLayout; tar
       {ARRANGE.map(a => <button key={a.id} type="button" role="menuitem" className={styles.tile} {...describe(a.en, a.zh, a.keys)}
         onClick={() => { arrange(a.id, paneId); closeMenu(); }}><Glyph cells={a.cells} /></button>)}
     </div>
-    <div className={styles.hint} aria-live="polite">{hint || (all.length > 1 ? text("Hold Option for quarters", "按住 Option 显示四分之一") : "")}</div>
+    <div className={styles.hint} aria-live="polite">{hint || (all.length > 1 ? text(`Hold ${tilingKeys ? "Option" : "Alt"} for quarters`, `按住 ${tilingKeys ? "Option" : "Alt"} 显示四分之一`) : "")}</div>
     <div className={cn(MENU_SEPARATOR, "-mx-[5px]")} />
-    <button type="button" role="menuitem" className={MENU_ITEM} onClick={() => { if (!restore()) setHint(text("No earlier layout", "没有更早的布局")); else closeMenu(); }}><Undo2 aria-hidden />{text("Return to previous layout", "还原上次布局")}<span className={cn(SHORTCUT, "ms-auto ps-3")}>⌃⌥R</span></button>
+    <button type="button" role="menuitem" className={MENU_ITEM} onClick={() => { if (!restore()) setHint(text("No earlier layout", "没有更早的布局")); else closeMenu(); }}><Undo2 aria-hidden />{text("Return to previous layout", "还原上次布局")}{tilingKeys ? <span className={cn(SHORTCUT, "ms-auto ps-3")}>⌃⌥R</span> : null}</button>
     <button type="button" role="menuitem" className={MENU_ITEM} onClick={() => { captureCanvasTransition(); remember(); update({ ...layout, root: equalize(layout.root) }); closeMenu(); }}><Equal aria-hidden />{text("Equalize sizes", "均分大小")}</button>
     <button type="button" role="menuitem" className={MENU_ITEM} aria-expanded={more} onClick={() => setMore(!more)}><LayoutGrid aria-hidden />{text("More layouts", "更多布局")}<span className={cn(SHORTCUT, "ms-auto inline-flex items-center ps-3 [&>svg]:size-[14px]")}>{more ? <ChevronDown aria-hidden /> : <ChevronRight aria-hidden />}</span></button>
     {more && <div className="p-[2px_0_2px_8px]">

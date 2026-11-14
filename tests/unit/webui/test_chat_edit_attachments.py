@@ -44,13 +44,17 @@ def test_edit_persists_then_dispatches_images_only(monkeypatch, tmp_path):
             captured.append(request)
             return SimpleNamespace(execution_id='exec', status_version=0)
     monkeypatch.setattr(server, '_sessions', {'s': conv})
-    monkeypatch.setattr(server, '_is_run_active', lambda sid: False)
-    monkeypatch.setattr(server, '_try_reserve_run', lambda *a: True)
+    monkeypatch.setattr(server, '_is_selected_run_active', lambda sid: False)
+    monkeypatch.setattr(server, 'reserve_operation', lambda *a, **kw: None)
     monkeypatch.setattr(server, '_activate_run_reservation', lambda *a: True)
     monkeypatch.setattr(server, '_emit_running_task_event', lambda *a, **kw: None)
     monkeypatch.setattr(server, '_save_session', lambda *a: None)
     monkeypatch.setattr(server, '_append_msg', lambda c, m, **_kw: c['messages'].append(m))
-    monkeypatch.setattr(db, 'default_db', lambda: SimpleNamespace(get_messages=lambda sid: [user]))
+    # The edited message's pictures are kept in the session folder, so later
+    # requests send them again (store.session.media).
+    session_dir = tmp_path / 'session'
+    monkeypatch.setattr(db, 'default_db', lambda: SimpleNamespace(
+        get_messages=lambda sid: [user], _session_dir=lambda sid: session_dir))
     monkeypatch.setattr(driver, 'CanonicalAgentAdapter', Adapter)
     monkeypatch.setattr(config, 'load_session_run_config', lambda sid: SessionRunConfig())
     monkeypatch.setattr(config, 'project_defaults', lambda sid: {})
@@ -66,4 +70,5 @@ def test_edit_persists_then_dispatches_images_only(monkeypatch, tmp_path):
     assert 'a.txt' in captured[0].user_text
     assert json.dumps(str(tmp_path))[1:-1] in captured[0].user_text, captured[0].user_text
     assert conv['messages'][-1]['content'] == captured[0].user_text
+    assert len(conv['messages'][-1]['media']) == 1
     assert user['content'] == 'original'

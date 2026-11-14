@@ -90,9 +90,9 @@ test("a picker row is one line of names and prose, cut at 80", () => {
   assert.equal(logic.pickerLabel("y".repeat(90), []), `${"y".repeat(80)}…`);
 });
 
-test("a mark whose anchor is not shown goes last unless a pending mark is there", () => {
+test("an offscreen rewind anchor is not moved to the latest message", () => {
   const stray = [{ edge_id: "e3", variant: "forward", anchor_head_id: "gone", at: 1 }];
-  assert.deepEqual(logic.placeMarks(stray, ["u1"], false).tail.map(m => m.edge_id), ["e3"]);
+  assert.deepEqual(logic.placeMarks(stray, ["u1"], false).tail.map(m => m.edge_id), []);
   assert.deepEqual(logic.placeMarks([...stray, { edge_id: "p", variant: "pending" }], ["u1"], false).tail.map(m => m.edge_id), ["p"]);
   assert.deepEqual(logic.placeMarks([...stray, { edge_id: "p", variant: "pending" }], ["u1"], true).tail, []);
 });
@@ -125,4 +125,22 @@ test("Fork ends at this message's last reply, retry needs the last prompt", () =
   assert.equal(logic.forkTipId(order, byId, "u2"), "u2");
   assert.equal(logic.isLastPrompt(order, byId, "u1"), false);
   assert.equal(logic.isLastPrompt(order, byId, "u2"), true);
+});
+
+test('file conflicts offer explicit conversation-only rewind with a reason', () => {
+  const outcome = logic.planOutcome({ status: 'blocked', error_code: 'file_conflict', code_available: false, code_unavailable_reason: 'conflict' }, 10, text);
+  assert.deepEqual(outcome, { kind: 'dialog', preview: { kind: 'no_code', reason: 'conflict' } });
+  assert.match(logic.noCodeLine('conflict', text), /No files will be changed/);
+});
+
+test("a rewind that restores files names the branch in its way", () => {
+  assert.equal(
+    logic.blockingText({ branch_name: "nightly", reason_code: "wait_open" }, text),
+    "Branch “nightly” is waiting for an approval. Rewinding files now could undo its work; stop it, then rewind.",
+  );
+  assert.equal(
+    logic.blockingText({}, text),
+    "Another branch is running. Rewinding files now could undo its work; stop it, then rewind.",
+  );
+  assert.match(logic.blockingText({ selected: true }, text), /^A turn on this branch is paused/);
 });

@@ -338,14 +338,38 @@ async def handle_review_file_diff(ws, cmd: dict) -> None:
     }, default=str))
 
 
+def _turn_branch_blocker(session_id: str, turn_id: str) -> dict | None:
+    """The running branch whose line holds this turn, if any. A turn on a
+    common ancestor belongs to every branch below it; a turn on any other
+    branch does not block its file history."""
+    from openprogram.interfaces.server import server
+    return server.running_branch_among(session_id, server.branches_through(session_id, [turn_id]))
+
+
+def _hold_turn_branches(session_id: str, turn_id: str, direction: str = "revert",
+                        idempotency_key: str | None = None) -> tuple[dict | None, list[str]]:
+    """Hold the branches whose line holds this turn while its files change.
+
+    A repeat with the idempotency key of the revert or reapply holding them
+    waits for it; the store then returns that one's outcome."""
+    import uuid as _uuid
+    from openprogram.interfaces.server import server
+    key = (f"turn-closure:{direction}:{turn_id}:{idempotency_key}"
+           if isinstance(idempotency_key, str) and idempotency_key else None)
+    return server.reserve_branches_operation(
+        session_id, server.branches_through(session_id, [turn_id]), "branch",
+        f"turn-files-{_uuid.uuid4().hex}", key=key)
+
+
 async def handle_turn_history_state(ws, cmd: dict) -> None:
     session_id = (cmd.get("session_id") or "").strip()
     turn_id = (cmd.get("assistant_msg_id") or "").strip()
     from openprogram.interfaces.server import server as server
     if not session_id or not turn_id:
         result = {"status": "error", "action": None, "error": "session_id and assistant_msg_id are required"}
-    elif server._is_run_active(session_id):
-        result = {"status": "blocked", "action": None, "reason": "run_active", "error": "run_active"}
+    elif (blocker := await _run(lambda: _turn_branch_blocker(session_id, turn_id))) is not None:
+        result = {"status": "blocked", "action": None, "reason": "run_active", "error": "run_active",
+                  "blocking": blocker}
     else:
         result = await _run(lambda: _history_eligibility(session_id, turn_id))
     result = _stable_file_result(result)
@@ -368,14 +392,21 @@ async def handle_revert_turn(ws, cmd: dict) -> None:
     session_id = (cmd.get("session_id") or "").strip()
     msg_id = (cmd.get("msg_id") or "").strip()
     from openprogram.interfaces.server import server as server
-    if session_id and server._is_run_active(session_id):
-        result = {"status": "blocked", "restored_paths": [], "conflicts": [], "unavailable": [], "error": "run_active"}
+    refusal, owners = (await _run(lambda: _hold_turn_branches(
+        session_id, msg_id, "revert", cmd.get("idempotency_key") or None))
+                       if session_id else (None, []))
+    if refusal is not None:
+        result = {"status": "blocked", "restored_paths": [], "conflicts": [], "unavailable": [],
+                  "error": "run_active", "blocking": refusal.get("blocking")}
     else:
         from openprogram.runtime.conversation.revert import revert_turn
-        result = await _run(lambda: revert_turn(
-            session_id, msg_id,
-            idempotency_key=(cmd.get("idempotency_key") or None),
-        ))
+        try:
+            result = await _run(lambda: revert_turn(
+                session_id, msg_id,
+                idempotency_key=(cmd.get("idempotency_key") or None),
+            ))
+        finally:
+            await _run(lambda: server.release_branches_operation(session_id, owners))
     result = _stable_file_result(result)
     await ws.send_text(json.dumps({
         "type": "revert_turn_result",
@@ -400,14 +431,21 @@ async def handle_reapply_turn(ws, cmd: dict) -> None:
     session_id = (cmd.get("session_id") or "").strip()
     msg_id = (cmd.get("msg_id") or "").strip()
     from openprogram.interfaces.server import server as server
-    if session_id and server._is_run_active(session_id):
-        result = {"status": "blocked", "restored_paths": [], "conflicts": [], "unavailable": [], "error": "run_active"}
+    refusal, owners = (await _run(lambda: _hold_turn_branches(
+        session_id, msg_id, "reapply", cmd.get("idempotency_key") or None))
+                       if session_id else (None, []))
+    if refusal is not None:
+        result = {"status": "blocked", "restored_paths": [], "conflicts": [], "unavailable": [],
+                  "error": "run_active", "blocking": refusal.get("blocking")}
     else:
         from openprogram.runtime.conversation.revert import reapply_turn
-        result = await _run(lambda: reapply_turn(
-            session_id, msg_id,
-            idempotency_key=(cmd.get("idempotency_key") or None),
-        ))
+        try:
+            result = await _run(lambda: reapply_turn(
+                session_id, msg_id,
+                idempotency_key=(cmd.get("idempotency_key") or None),
+            ))
+        finally:
+            await _run(lambda: server.release_branches_operation(session_id, owners))
     result = _stable_file_result(result)
     await ws.send_text(json.dumps({
         "type": "reapply_turn_result",

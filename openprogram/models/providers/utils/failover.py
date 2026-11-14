@@ -251,7 +251,7 @@ def stream_with_failover(
     unchanged (no model switch). With an empty ``fallback_models`` this still
     works but never actually switches, so it's safe as a transparent wrapper.
     """
-    from .event_stream import AssistantMessageEventStream
+    from .event_stream import AssistantMessageEventStream, close_stream
 
     out = AssistantMessageEventStream()
     candidates = [model] + list(fallback_models)
@@ -263,6 +263,7 @@ def stream_with_failover(
         for idx, cand in enumerate(candidates):
             committed = False
             is_last = idx == len(candidates) - 1
+            inner = None
             try:
                 inner = base_stream_fn(cand, context, options)
                 async for ev in inner:
@@ -275,6 +276,10 @@ def stream_with_failover(
                         started_forwarded = True
                     elif etype in _CONTENT_EVENT_TYPES:
                         committed = True
+                    elif etype == "retry" and getattr(ev, "restart", False):
+                        # The candidate re-sends its request and the consumer
+                        # drops what it streamed: nothing is committed again.
+                        committed = False
                     elif etype == "done" and skipped:
                         message = getattr(ev, "message", None)
                         if message is not None and hasattr(message, "failover"):
@@ -287,6 +292,11 @@ def stream_with_failover(
                 return
             except BaseException as exc:  # noqa: BLE001
                 last_exc = exc
+                if isinstance(exc, asyncio.CancelledError):
+                    # A stop: the candidate's provider request ends with it.
+                    out.fail(exc)
+                    await close_stream(inner, timeout=0.5)
+                    raise
                 # Switch models only when nothing streamed yet, the failure is
                 # failover-worthy, and another candidate remains.
                 if committed or is_last or not should_failover(exc):
@@ -309,7 +319,9 @@ def stream_with_failover(
         if last_exc is not None:
             out.fail(last_exc)
 
-    asyncio.ensure_future(_run())
+    # Owned by the stream: a consumer that stops reading cancels this task
+    # through ``close_stream``, and the task closes the live candidate's.
+    out.attach_producer(asyncio.ensure_future(_run()))
     return out
 
 

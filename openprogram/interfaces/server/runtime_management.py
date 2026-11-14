@@ -521,7 +521,7 @@ def _get_session_runtime(session_id: str, msg_id: str = None):
     return rt
 
 
-def _resolve_session_provider_model(conv: dict | None) -> tuple[str | None, str | None]:
+def _resolve_session_provider_model(conv: dict | None, *, snapshot: bool = False) -> tuple[str | None, str | None]:
     """Pick (provider, model) for a conversation.
 
     Resolution order:
@@ -545,7 +545,7 @@ def _resolve_session_provider_model(conv: dict | None) -> tuple[str | None, str 
         return None, None
 
     session_id = conv.get("id") if conv else None
-    if session_id:
+    if session_id and not snapshot:
         from openprogram.runtime.conversation.session_model import read_session_chat_model
         provider, model = read_session_chat_model(session_id)
         if provider:
@@ -667,6 +667,16 @@ def _switch_runtime(provider: str, session_id: str = None, msg_id: str = None):
         }))
 
         return rt
+
+
+def _provider_info_from_snapshot(row: dict) -> dict:
+    """Resolve a captured branch's effective model without consulting its live selection."""
+    provider, model = _resolve_session_provider_model(row, snapshot=True)
+    return {
+        "provider": provider, "model": model,
+        "type": ("CLI" if provider in _CLI_PROVIDERS else "API") if provider else None,
+        "runtime": None, "session_id": None,
+    }
 
 
 def _get_provider_info(session_id: str = None) -> dict:

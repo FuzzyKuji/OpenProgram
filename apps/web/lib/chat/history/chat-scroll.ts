@@ -470,6 +470,19 @@ export function subscribeTakeLatest(listener: TakeLatestListener): () => void {
   };
 }
 
+/** How far the composer's mask starts below its top edge while its rows
+ *  are tucked behind the input box (use-tuck-backdrop.ts writes it on the
+ *  composer root and fires COMPOSER_TUCK_SHIFT_EVENT on each change). */
+export const COMPOSER_TUCK_SHIFT_VAR = "--composer-tuck-shift";
+export const COMPOSER_TUCK_SHIFT_EVENT = "composer-tuck-shift";
+
+/** The part of the composer that covers the transcript: its box less the
+ *  strip a tucked row leaves empty above the input. */
+export function visibleComposerHeight(root: HTMLElement): number {
+  const shift = parseFloat(root.style?.getPropertyValue(COMPOSER_TUCK_SHIFT_VAR) ?? "");
+  return Math.max(0, root.offsetHeight - (Number.isFinite(shift) ? shift : 0));
+}
+
 /** Main overlay is `--main-composer-height`. Peer overlay is the composer root. */
 export function readComposerOverlay(
   area: HTMLElement | null,
@@ -480,7 +493,7 @@ export function readComposerOverlay(
       ? composerRoot
       : composerRoot.firstElementChild;
     const h = node && typeof (node as HTMLElement).offsetHeight === "number"
-      ? (node as HTMLElement).offsetHeight
+      ? visibleComposerHeight(node as HTMLElement)
       : 0;
     return Number.isFinite(h) && h > 0 ? h : 0;
   }
@@ -489,7 +502,7 @@ export function readComposerOverlay(
       ".peer-session-composer-host > *",
     );
     if (peer instanceof HTMLElement) {
-      const h = peer.offsetHeight;
+      const h = visibleComposerHeight(peer);
       if (Number.isFinite(h) && h > 0) return h;
     }
   }

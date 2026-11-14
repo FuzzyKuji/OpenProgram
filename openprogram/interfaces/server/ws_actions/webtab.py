@@ -75,12 +75,34 @@ def _validated_png_data_url(value: Any) -> str | None:
     return value if raw.startswith(b"\x89PNG\r\n\x1a\n") else None
 
 
+def _recording_fields(cmd: dict) -> dict:
+    """What a window reports of a pane video recording: scalars only, bounded."""
+    fields: dict[str, Any] = {}
+    recording = cmd.get("recording")
+    if isinstance(recording, dict):
+        fields["recording"] = {
+            str(key)[:32]: (value[:4096] if isinstance(value, str) else value)
+            for key, value in list(recording.items())[:16]
+            if isinstance(value, (str, int, float, bool))
+        }
+    panes = cmd.get("panes")
+    if isinstance(panes, list):
+        fields["panes"] = [
+            {key: (pane[key][:512] if isinstance(pane[key], str) else pane[key])
+             for key in ("id", "kind", "title", "width", "height")
+             if isinstance(pane.get(key), (str, int, float)) and not isinstance(pane.get(key), bool)}
+            for pane in panes[:64] if isinstance(pane, dict)
+        ]
+    return fields
+
+
 def _payload(command: dict, req_id: str) -> str:
     from openprogram.runtime.execution.run_control import get_current_session_id
 
     session_id = get_current_session_id()
     if (session_id and "session_id" not in command
-            and command.get("op") in {"open", "active", "list", "resolve", "activate", "screenshot", "preview", "close"}):
+            and command.get("op") in {"open", "active", "list", "resolve", "activate", "screenshot", "preview", "close",
+                                      "record_panes", "record_start", "record_stop"}):
         command = {**command, "session_id": session_id}
     return json.dumps({
         "type": "webtab.command",
@@ -844,6 +866,7 @@ async def handle_webtab_result(ws, cmd: dict):
             **({"tab_entries": tab_entries}
                if isinstance(cmd.get("tab_entries"), list) else {}),
             **({"pages": pages} if isinstance(cmd.get("pages"), list) else {}),
+            **_recording_fields(cmd),
         }
     ev.set()
 
@@ -1082,35 +1105,6 @@ def close_page_resource(resource_id: str) -> list[dict[str, Any]]:
         emit_browser_resource(row, page_key=resource_id)
     return rows
 
-_HUMAN_INPUT_KINDS = frozenset({"pointer", "key", "scroll", "navigate"})
-
-
-async def handle_webtab_human_input(ws, cmd: dict):
-    """Fence later Agent writes for the exact Page of this renderer tab."""
-    window_id = cmd.get("window_id")
-    tab_id = cmd.get("tab_id")
-    sequence = cmd.get("sequence")
-    if sequence is None:
-        sequence = cmd.get("input_seq")
-    kind = cmd.get("kind")
-    if (
-        not isinstance(window_id, str) or not window_id
-        or not isinstance(tab_id, str) or not tab_id
-        or type(sequence) is not int or sequence < 1
-        or kind not in _HUMAN_INPUT_KINDS
-    ):
-        return
-    from openprogram.runtime.execution.control.submission import trusted_runtime_actor
-    if trusted_runtime_actor(getattr(ws, "scope", None), surface="ws") is None:
-        return
-    pages = _pages()
-    if pages is None:
-        return
-    await pages.handle_human_page_input(
-        ws=ws, window_id=window_id, tab_id=tab_id, input_seq=sequence, kind=kind,
-    )
-
-
 def _adopt_popup(ws, window_id: str, tab_id: str, opener_tab_id: str,
                  target_id: str, title: str, url: str) -> None:
     pages = _pages()
@@ -1119,7 +1113,6 @@ def _adopt_popup(ws, window_id: str, tab_id: str, opener_tab_id: str,
     BrowserResourceStore = pages.BrowserResourceStore
     adopt_popup_page = pages.adopt_popup_page
     emit_browser_resource = pages.emit_browser_resource
-    note_opened_page = pages.note_opened_page
     page_keys_for_socket_tab = pages.page_keys_for_socket_tab
     generation = _connection_revision_of(ws)
     if generation is None:
@@ -1141,9 +1134,6 @@ def _adopt_popup(ws, window_id: str, tab_id: str, opener_tab_id: str,
     )
     if not rows:
         return
-    note_opened_page(opener_keys, {
-        "window_id": window_id, "tab_id": tab_id, "url": url, "title": title,
-    })
     for row in rows:
         emit_browser_resource(row, page_key=page_key)
 
@@ -1179,7 +1169,6 @@ async def handle_webtab_popup(ws, cmd: dict):
 ACTIONS = {
     "webtab_register": handle_webtab_register,
     "webtab_result": handle_webtab_result,
-    "webtab_human_input": handle_webtab_human_input,
     "webtab_closed": handle_webtab_closed,
     "webtab_popup": handle_webtab_popup,
 }

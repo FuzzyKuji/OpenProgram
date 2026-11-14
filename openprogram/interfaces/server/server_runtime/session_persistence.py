@@ -11,7 +11,12 @@ _log = logging.getLogger(__name__)
 
 
 def reply_row_id(task: dict) -> str | None:
-    """The reply row a running task writes: the server mints it from the turn's message id."""
+    """The reply row a running task writes: the server mints it from the turn's message id.
+
+    ``None`` for an operation that writes no reply (/compact, a rewind)."""
+    from .run_slots import is_reply
+    if not is_reply(task):
+        return None
     msg_id = task.get("msg_id")
     return task.get("reply_id") or (f"{msg_id}_reply" if msg_id else None)
 
@@ -68,6 +73,7 @@ def _set_active_head(
     *,
     expected_head_id: object = state._HEAD_UNSET,
     meta_update: state.Optional[dict] = None,
+    branch_id: state.Optional[str] = None,
 ) -> bool:
     """Switch the conversation's active branch leaf.
 
@@ -88,30 +94,58 @@ def _set_active_head(
     try:
         from openprogram.runtime.context.session_db import default_db
         db = default_db()
+        from openprogram.state.store.session.rewind_view import checkout_meta
+        from openprogram.runtime.conversation.rewind_marks import forget_read_baselines
+        from openprogram.state.store.session.branch_config import snapshot
+        source_session = db.get_session(session_id) or {}
+        source = source_session.get("head_id")
+        update = checkout_meta(db, session_id, head_id, branch_id)
         if expected_head_id is state._HEAD_UNSET:
-            db.set_head(session_id, head_id)
-        elif not db.compare_and_set_head(
-            session_id,
-            expected_head_id,  # type: ignore[arg-type]
-            head_id,
-            meta_update=meta_update,
+            expected_head_id = source
+        # The CAS compares against the fields as stored, so the expectation
+        # is read in that form too: ``get_session`` reports a missing
+        # ``agent_id`` as ``""``, which never equals the stored absence.
+        disk_meta = db.read_disk_meta(session_id) or {}
+        if not db.compare_and_set_head(
+            session_id, expected_head_id, head_id,
+            expected_meta={"active_branch_id": disk_meta.get("active_branch_id"), **snapshot(disk_meta)},
+            meta_update={**update, **(meta_update or {})},
         ):
             return False
+        if update:
+            forget_read_baselines(session_id)
     except Exception as e:
         state._log(f"_set_active_head: SessionDB write failed for {session_id}: {e}")
         return False
-    branch = None
-    if db is not None:
+    from openprogram.state.store.session.branch_config import BRANCH_CONFIG_FIELDS
+    old_runtime = None
+    with state._sessions_lock:
+        # Another checkout or setting write may have committed since our CAS.
+        # Read after acquiring the mirror lock so an older operation cannot
+        # replace a newer operation's displayed selection or configuration.
+        selected = db.get_session(session_id) or {}
+        selected_head = selected.get("head_id")
+        branch = None
         try:
-            branch = db.get_branch(session_id) or []
+            branch = db.get_branch(session_id, selected_head) or []
         except Exception as e:
             state._log(f"_set_active_head: get_branch failed for {session_id}: {e}")
-    with state._sessions_lock:
         conv = state._sessions.get(session_id)
         if conv is not None:
-            conv["head_id"] = head_id
+            if update:
+                old_runtime = conv.pop("runtime", None)
+            for key in BRANCH_CONFIG_FIELDS:
+                conv[key] = selected.get(key)
+            conv["provider_name"] = selected.get("provider_override")
+            conv["active_branch_id"] = selected.get("active_branch_id")
+            conv["head_id"] = selected_head
             if branch is not None:
                 conv["messages"] = branch
+    if old_runtime is not None and hasattr(old_runtime, "close"):
+        try:
+            old_runtime.close()
+        except Exception:
+            state._log("_set_active_head: previous runtime could not be closed")
     state._invalidate_messages(session_id)
     return True
 
@@ -139,17 +173,28 @@ def _emit_running_task_event(
     Emits a ``running_task`` envelope if a task is active, or a
     ``running_task_clear`` envelope otherwise. A clear names the
     finished turn so a newer reservation (or a just-sent placeholder)
-    is not idled by a late frame. Callers should invoke this
-    immediately after mutating ``_running_tasks`` (still under the
-    lock is fine — the actual socket send is queued).
+    is not idled by a late frame. When the slot already belongs to
+    another owner, the frame is still that clear: the end of one turn
+    never announces the next owner, whose own admission does. Callers
+    should invoke this immediately after mutating ``_running_tasks``
+    (still under the lock is fine — the actual socket send is queued).
     """
     try:
         run_seq = state._next_run_seq()
         with state._running_tasks_lock:
             task = state._running_tasks.get(session_id)
             task = dict(task) if task else None
-        task = state._canonical_foreground_task(session_id) or task
+        if cleared_msg_id and task and task.get("msg_id") != cleared_msg_id:
+            task = None
+        else:
+            slot = task
+            task = state._canonical_foreground_task(session_id) or task
+            if slot and task is not slot and slot.get("msg_id") == task.get("msg_id"):
+                task = {**task, **{key: slot[key] for key in ("op_id", "op_kind", "op_version")
+                                   if key in slot}}
         if task:
+            from .session_lifecycle import operation_identity
+            identity = operation_identity(task)
             payload = {
                 "type": "running_task",
                 "data": {
@@ -160,8 +205,11 @@ def _emit_running_task_event(
                     "started_at": task.get("started_at"),
                     "display_params": task.get("display_params", ""),
                     "execution_id": task.get("execution_id"),
-                    "status_version": task.get("status_version"),
+                    "status_version": identity.get("status_version", task.get("status_version")),
+                    "op_kind": identity["op_kind"],
+                    **({"op_id": identity["op_id"]} if identity.get("op_id") else {}),
                     "run_seq": run_seq,
+                    **({"branch_id": task["branch_id"]} if task.get("branch_id") else {}),
                 },
             }
             # A turn paused at a question or approval stays the running
@@ -184,6 +232,95 @@ def _emit_running_task_event(
         # Broadcast is best-effort; never let it kill the turn.
         _log.warning(
             "running-task state not broadcast for session %s", session_id, exc_info=True)
+
+
+def branch_wait_state(task: dict) -> str | None:
+    """``approval`` when the branch's turn waits for a permission or system
+    access answer, ``input`` when it waits for an answer to a question,
+    else ``None`` (it is running)."""
+    reason = task.get("reason_code")
+    if reason == "system_access_required":
+        return "approval"
+    if reason != "wait_open":
+        return None
+    kind = None
+    execution_id = task.get("execution_id")
+    if execution_id:
+        try:
+            from openprogram.runtime.execution import default_store
+            from openprogram.runtime.execution.waits import DurableWaitStore
+            waits = DurableWaitStore(default_store()).list_open(execution_id=execution_id)
+            kind = waits[0].kind if waits else None
+        except Exception:  # noqa: BLE001 - shown as waiting for an approval
+            kind = None
+    # ask / form / ask_many wait for words from the person; approval,
+    # confirm and system_access wait for a yes or no.
+    return "input" if kind in {"ask", "form", "ask_many"} else "approval"
+
+
+def _branch_name(session_id: str, branch_id: str) -> str | None:
+    try:
+        from .session_lifecycle import _branch_names
+        names, _selected = _branch_names(session_id)
+        return names.get(branch_id)
+    except Exception:  # noqa: BLE001 - the badge falls back to a generic name
+        return None
+
+
+def _emit_branch_running_task_event(
+    session_id: str,
+    branch_id: str,
+    *,
+    cleared_execution_id: str | None = None,
+    cleared_msg_id: str | None = None,
+) -> None:
+    """Broadcast the run state of one branch that is not selected.
+
+    ``branch_running_task`` while the branch has a turn, else
+    ``branch_running_task_clear`` naming the turn that ended. Clients that
+    know only ``running_task`` ignore both, so their per-conversation state
+    keeps describing the selected branch.
+    """
+    try:
+        run_seq = state._next_run_seq()
+        task = next((item for item in state._side_branch_tasks(session_id)
+                     if item.get("branch_id") == branch_id), None)
+        if task is not None:
+            from .session_lifecycle import operation_identity
+            identity = operation_identity(task)
+            data = {
+                "session_id": session_id,
+                "branch_id": branch_id,
+                "msg_id": task.get("msg_id"),
+                "reply_id": reply_row_id(task),
+                "func_name": task.get("func_name"),
+                "started_at": task.get("started_at"),
+                "execution_id": task.get("execution_id"),
+                "status_version": identity.get("status_version", task.get("status_version")),
+                "op_kind": identity["op_kind"],
+                **({"op_id": identity["op_id"]} if identity.get("op_id") else {}),
+                "run_seq": run_seq,
+            }
+            if task.get("status"):
+                data["status"] = task.get("status")
+                data["reason_code"] = task.get("reason_code")
+            # What a pane showing another branch draws for this one: its
+            # name, and whether it waits on the person.
+            data["wait_state"] = branch_wait_state(task)
+            name = _branch_name(session_id, branch_id)
+            if name:
+                data["branch_name"] = name
+            payload = {"type": "branch_running_task", "data": data}
+        else:
+            data = {"session_id": session_id, "branch_id": branch_id, "run_seq": run_seq}
+            if cleared_execution_id:
+                data["execution_id"] = cleared_execution_id
+            if cleared_msg_id:
+                data["msg_id"] = cleared_msg_id
+            payload = {"type": "branch_running_task_clear", "data": data}
+        state._broadcast(state.json.dumps(payload, default=str))
+    except Exception:
+        _log.warning("branch run state not broadcast for session %s", session_id, exc_info=True)
 
 
 @contextmanager
